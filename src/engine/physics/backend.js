@@ -32,7 +32,8 @@
 //   applyTorque(id, v)      a twist during the next step only
 //   setMass(id, mass)  setFriction(id, f)  setRestitution(id, r)
 //   setDamping(id, linear, angular)
-//   lockRotation(id, x, y, z)   true stops turning about that world axis
+//   lockRotation(id, x, y, z)   true stops turning about that world axis,
+//                               by any cause (setAngularVelocity included)
 //   step(dt)                advance the simulation by dt seconds
 //   contacts(id) -> [id]    bodies touching this one after the last step
 //   dispose()               release everything

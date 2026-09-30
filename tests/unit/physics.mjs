@@ -148,6 +148,40 @@ End Function
   assert(host.output === '1 1 1 3.0\n', JSON.stringify(host.output));
 });
 
+test('BodyLockRotation locks world axes, whatever turns the body', async () =>
+{
+  // Both cubes are turned 90 degrees in yaw and have pitch (world X)
+  // locked: a torque about world X does nothing, one about world Z turns
+  // the second; a speed set about world X is dropped too.
+  const { host } = await run(`
+PhysicsGravity 0, 0, 0
+Global a, b
+a = CreateCube()
+TurnEntity a, 0, 90, 0
+EntityBody a
+BodyDamping a, 0, 0
+BodyLockRotation a, 1, 0, 0
+b = CreateCube()
+PositionEntity b, 10, 0, 0
+TurnEntity b, 0, 90, 0
+EntityBody b
+BodyDamping b, 0, 0
+BodyLockRotation b, 1, 0, 0
+Function Update()
+  If FrameCount() = 1
+    ApplyTorque a, 3000, 0, 0
+    ApplyTorque b, 0, 0, 3000
+  EndIf
+  If FrameCount() = 10 Then SetAngularVelocity a, 90, 0, 0
+  If FrameCount() = 31
+    Print Int(BodyPitchSpeed(a)) + " " + (Abs(BodyRollSpeed(b)) > 10) + " " + EntityPitch(a)
+    End
+  EndIf
+End Function
+`);
+  assert(host.output === '0 1 0.0\n', JSON.stringify(host.output));
+});
+
 test('the same program gives the same motion every time', async () =>
 {
   const source = `

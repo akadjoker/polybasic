@@ -5802,7 +5802,7 @@ var RapierBackend = class _RapierBackend extends PhysicsBackend {
     if (type === "dynamic") colliderDesc.setMass(desc.mass);
     const collider = this.world.createCollider(colliderDesc, body);
     const id = this.nextId++;
-    this.bodies.set(id, { body, collider, type });
+    this.bodies.set(id, { body, collider, type, locked: [false, false, false] });
     this.byCollider.set(collider.handle, id);
     return id;
   }
@@ -5835,7 +5835,8 @@ var RapierBackend = class _RapierBackend extends PhysicsBackend {
     return arr(this.bodies.get(id).body.linvel());
   }
   setAngularVelocity(id, w2) {
-    this.bodies.get(id).body.setAngvel(vec(w2), true);
+    const b2 = this.bodies.get(id);
+    b2.body.setAngvel(vec(w2.map((v2, i2) => b2.locked[i2] ? 0 : v2)), true);
   }
   angularVelocity(id) {
     return arr(this.bodies.get(id).body.angvel());
@@ -5867,7 +5868,9 @@ var RapierBackend = class _RapierBackend extends PhysicsBackend {
     body.setAngularDamping(angular);
   }
   lockRotation(id, x2, y2, z2) {
-    this.bodies.get(id).body.setEnabledRotations(!x2, !y2, !z2, true);
+    const b2 = this.bodies.get(id);
+    b2.locked = [x2, y2, z2];
+    b2.body.setEnabledRotations(!x2, !y2, !z2, true);
   }
   step(dt) {
     this.world.timestep = dt;
