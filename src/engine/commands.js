@@ -15,6 +15,7 @@ import {
   createCube, createSphere, createCylinder, createCone, createPlane, createTorus
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
+import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
@@ -59,10 +60,10 @@ export const ENGINE_COMMANDS = [
   'EntityOrder(entity, order)',
 
   // Textures
-  'LoadTexture%(file$)',
-  'CreateTexture%(width, height, r = 255, g = 255, b = 255)',
+  'LoadTexture%(file$, flags = 1)',
+  'CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = 1)',
   'CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)',
-  'TexturePixel(texture, x, y, r, g, b)',
+  'TexturePixel(texture, x, y, r, g, b, a = 255)',
   'ScaleTexture(texture, u#, v#)',
   'TextureLoaded%(texture)',
   'FreeTexture(texture)',
@@ -138,12 +139,27 @@ export const ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   FX_NOSHADOWCAST: 0x20000,
   FX_NOSHADOWRECV: 0x40000,
+  TEX_COLOR,
+  TEX_ALPHA,
+  TEX_MASKED,
+  TEX_MIPMAP,
+  TEX_CLAMPU,
+  TEX_CLAMPV,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
 
+
+// Blitz3D texture flags a program may pass: colour, alpha, masked,
+// mipmapped, clamped; 256 and 512 (video memory, high colour) mean nothing
+// here and are ignored. Sphere and cube maps are not supported.
+function textureFlags(flags, command)
+{
+  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  return flags;
+}
 
 export function createEngineCommands(engine)
 {
@@ -293,17 +309,17 @@ export function createEngineCommands(engine)
     },
 
     // -------------------------------------------------------- textures
-    loadtexture(file)
+    loadtexture(file, flags)
     {
-      return engine.loadTexture(file).handle;
+      return engine.loadTexture(file).setFlags(textureFlags(flags, 'LoadTexture')).handle;
     },
-    createtexture(width, height, r, g, b)
+    createtexture(width, height, r, g, b, flags)
     {
       if (width < 1 || height < 1 || width > 4096 || height > 4096)
       {
         throw runtimeError(`CreateTexture size must be 1 to 4096, not ${width} x ${height}`);
       }
-      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).handle;
+      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).setFlags(textureFlags(flags, 'CreateTexture')).handle;
     },
     createcheckertexture(size, cells, r1, g1, b1, r2, g2, b2)
     {
@@ -312,11 +328,11 @@ export function createEngineCommands(engine)
       t.checker(Math.max(1, cells), [byte(r1), byte(g1), byte(b1)], [byte(r2), byte(g2), byte(b2)]);
       return t.handle;
     },
-    texturepixel(tex, x, y, r, g, b)
+    texturepixel(tex, x, y, r, g, b, a)
     {
       const t = texture(tex);
       if (!t.pixels) throw runtimeError('TexturePixel only works on textures made with CreateTexture');
-      t.setPixel(x, y, byte(r), byte(g), byte(b));
+      t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
     scaletexture(tex, u, v)
     {

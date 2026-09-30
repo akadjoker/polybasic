@@ -118,13 +118,26 @@ leaves the original alone.
 
 | Command | What it does |
 |---------|--------------|
-| `LoadTexture%(file$)` | Starts loading a PNG or JPG and returns its handle at once. Nothing waits, but files started in the main body are in before the first `Update`. One loaded later shows the plain colour until its image arrives, usually a frame or two. The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
+| `LoadTexture%(file$, flags = TEX_COLOR)` | Starts loading a PNG or JPG and returns its handle at once. Nothing waits, but files started in the main body are in before the first `Update`. One loaded later shows the plain colour until its image arrives, usually a frame or two. The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
 | `TextureLoaded%(texture)` | 1 once the image is in. |
-| `CreateTexture%(width, height, r = 255, g = 255, b = 255)` | A texture filled with one colour, to paint on. |
+| `CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = TEX_COLOR)` | A texture filled with one colour, to paint on. |
 | `CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)` | A square checkerboard of `cells` x `cells` squares. |
-| `TexturePixel texture, x, y, r, g, b` | Paints one pixel of a created texture; (0, 0) is the top-left. |
+| `TexturePixel texture, x, y, r, g, b, a = 255` | Paints one pixel of a created texture; (0, 0) is the top-left. `a` is how solid it is (0 to 255), for textures with `TEX_ALPHA` or `TEX_MASKED`. |
 | `ScaleTexture texture, u#, v#` | Repeats the texture `u` times across and `v` times down. |
 | `FreeTexture texture` | Releases it. |
+
+**Texture flags** are Blitz3D's, added up:
+
+| Flag | Value | What it does |
+|------|-------|--------------|
+| `TEX_COLOR` | 1 | An ordinary texture (the default). |
+| `TEX_ALPHA` | 2 | The image's alpha (or `TexturePixel`'s `a`) blends the texture with what is behind it: glass, smoke. |
+| `TEX_MASKED` | 4 | Black pixels, and pixels less than half solid, are not drawn at all: leaves, fences, cut-out shapes. Their shadows are cut out too. |
+| `TEX_MIPMAP` | 8 | Accepted; textures are always mipmapped here. |
+| `TEX_CLAMPU` `TEX_CLAMPV` | 16 32 | The texture does not repeat across (U) or down (V): its edge pixels carry on. |
+
+Flags 256 and 512 (video memory, high colour) are accepted and mean
+nothing here; sphere and cube maps (64, 128) are not supported.
 
 ## Moving and turning
 
@@ -467,6 +480,7 @@ the top-left; text stays sharp at any page size.
 | `LIGHT_DIRECTIONAL` `LIGHT_POINT` | 1 2 |
 | `FX_FULLBRIGHT` `FX_FLAT` `FX_TWOSIDED` | 1 4 16 |
 | `FX_NOSHADOWCAST` `FX_NOSHADOWRECV` | 131072 262144 |
+| `TEX_COLOR` `TEX_ALPHA` `TEX_MASKED` `TEX_MIPMAP` `TEX_CLAMPU` `TEX_CLAMPV` | 1 2 4 8 16 32 |
 | `PICK_NONE` `PICK_SPHERE` `PICK_POLYGON` `PICK_BOX` | 0 1 2 3 |
 | `COLLIDE_SPHERE` `COLLIDE_POLYGON` `COLLIDE_BOX` | 1 2 3 |
 | `RESPONSE_STOP` `RESPONSE_SLIDE` `RESPONSE_SLIDE_NO_DOWNHILL` | 1 2 3 |

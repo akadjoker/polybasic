@@ -39,6 +39,8 @@ import { Mat4, Vec3, Quat } from '../src/engine/math/index.js';
 import { World } from '../src/engine/scene/world.js';
 import { makeWav } from './unit/audio.mjs';
 import { projectPage } from '../web/export.js';
+import { crc32 } from '../web/zip.js';
+import { deflateSync } from 'node:zlib';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Screenshots of every run go to tests/output (not committed); the ones in
@@ -124,6 +126,34 @@ async function openPage(browser, url, viewport = { width: 1000, height: 750 })
 // their ratio is the balance even while the sound fades), and `pitch`, the
 // strongest frequency in Hz (the median of the readings). `where` is
 // 'playground' or 'page' (an exported page).
+// A PNG file of a size x size black and white checker.
+function checkerPng(size)
+{
+  const chunk = (type, data) =>
+  {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, 'latin1');
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header.set([8, 2, 0, 0, 0], 8);       // 8 bits, RGB
+  const rows = Buffer.alloc(size * (1 + size * 3));
+  for (let y = 0; y < size; y++)
+  {
+    for (let x = 0; x < size; x++)
+    {
+      const v = (x + y) % 2 === 0 ? 0 : 255;
+      rows.fill(v, y * (1 + size * 3) + 1 + x * 3, y * (1 + size * 3) + 4 + x * 3);
+    }
+  }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+}
+
 // Each reading covers the last 8192 samples (about 170 ms): wait this long
 // after a change before measuring what came after it.
 const SETTLE_MS = 250;
@@ -1148,6 +1178,87 @@ End Function
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('texture flags: masked leaves out black pixels, alpha blends with what is behind', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A camera looking straight down at a textured square, over red.
+    const scene = (texture) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 255, 0, 0
+PositionEntity cam, 0, 6, 0
+RotateEntity cam, 90, 0, 0
+square = CreatePlane()
+ScaleEntity square, 3, 1, 3
+EntityFX square, FX_FULLBRIGHT
+${texture}
+EntityTexture square, tex
+Function Update()
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    const checker = (flags) => `tex = CreateTexture(8, 8, 255, 255, 255, ${flags})
+For y = 0 To 7 : For x = 0 To 7
+  If (x + y) Mod 2 = 0 Then TexturePixel tex, x, y, 0, 0, 0
+Next : Next`;
+    const half = (flags) => `tex = CreateTexture(4, 4, 255, 255, 255, ${flags})
+For y = 0 To 3 : For x = 0 To 3 : TexturePixel tex, x, y, 255, 255, 255, 128 : Next : Next`;
+    // How many pixels are black, white, red (the background) and pink (white
+    // half over red).
+    const count = async (texture) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(texture));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { black: 0, dark: 0, white: 0, red: 0, pink: 0 };
+        for (let i = 0; i < d.length; i += 4)
+        {
+          const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+          if (r < 60 && g < 60 && b < 60) n.dark++;
+          if (r < 20 && g < 20 && b < 20) n.black++;
+          else if (r > 235 && g > 235 && b > 235) n.white++;
+          else if (r > 235 && g < 20 && b < 20) n.red++;
+          else if (r > 235 && g > 100 && g < 215 && Math.abs(g - b) < 12) n.pink++;
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+    };
+    const plain = await count(checker('TEX_COLOR'));
+    const masked = await count(checker('TEX_MASKED'));
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'texture-masked.png') });
+    // The same checker as a loaded PNG file.
+    const png = `data:image/png;base64,${checkerPng(8).toString('base64')}`;
+    const loadedPlain = await count(`tex = LoadTexture("${png}")`);
+    const loadedMasked = await count(`tex = LoadTexture("${png}", TEX_MASKED)`);
+    const alpha = await count(half('TEX_ALPHA'));
+    const opaque = await count(half('TEX_COLOR'));
+    const text = JSON.stringify({ plain, masked, loadedPlain, loadedMasked, alpha, opaque }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    // A loaded image is smoothed (its black squares shade to grey), and all
+    // of it is drawn; masked, its black squares are holes, with no dark rim
+    // around them.
+    assert(Math.abs(loadedPlain.red - plain.red) < 0.01, `a loaded texture is not drawn whole: ${text}`);
+    assert(loadedMasked.red > loadedPlain.red + 0.1 && loadedMasked.dark < 0.005, `a loaded masked texture: ${text}`);
+    assert(plain.black > 0.1 && plain.white > 0.1, `the checker is not drawn: ${text}`);
+    assert(masked.black < 0.005 && masked.white > 0.1 && masked.red > plain.red + 0.1, `masked black pixels still drawn: ${text}`);
+    assert(alpha.pink > 0.2 && alpha.white < 0.01, `alpha does not blend: ${text}`);
+    assert(opaque.white > 0.2 && opaque.pink < 0.01, `without TEX_ALPHA the texture is not solid: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
   });
 
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>

@@ -3554,6 +3554,14 @@ var Material = class _Material {
 
 // src/engine/scene/texture.js
 var nextTextureId = 1;
+var TEX_COLOR = 1;
+var TEX_ALPHA = 2;
+var TEX_MASKED = 4;
+var TEX_MIPMAP = 8;
+var TEX_CLAMPU = 16;
+var TEX_CLAMPV = 32;
+var TEX_SPHEREMAP = 64;
+var TEX_CUBEMAP = 128;
 var Texture = class {
   constructor(width = 0, height = 0) {
     this.id = nextTextureId++;
@@ -3570,6 +3578,21 @@ var Texture = class {
     this.wrapU = "repeat";
     this.wrapV = "repeat";
     this.nearest = this.pixels !== null;
+    this.flags = TEX_COLOR;
+  }
+  // Sets the Blitz3D texture flags (TEX_* above).
+  setFlags(flags) {
+    this.flags = flags;
+    this.wrapU = flags & TEX_CLAMPU ? "clamp" : "repeat";
+    this.wrapV = flags & TEX_CLAMPV ? "clamp" : "repeat";
+    this.version++;
+    return this;
+  }
+  get alpha() {
+    return (this.flags & TEX_ALPHA) !== 0;
+  }
+  get masked() {
+    return (this.flags & TEX_MASKED) !== 0;
   }
   fill(r, g, b, a = 255) {
     const p = this.pixels;
@@ -6680,10 +6703,10 @@ var ENGINE_COMMANDS = [
   "EntityTexture(entity, texture)",
   "EntityOrder(entity, order)",
   // Textures
-  "LoadTexture%(file$)",
-  "CreateTexture%(width, height, r = 255, g = 255, b = 255)",
+  "LoadTexture%(file$, flags = 1)",
+  "CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = 1)",
   "CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)",
-  "TexturePixel(texture, x, y, r, g, b)",
+  "TexturePixel(texture, x, y, r, g, b, a = 255)",
   "ScaleTexture(texture, u#, v#)",
   "TextureLoaded%(texture)",
   "FreeTexture(texture)",
@@ -6753,11 +6776,21 @@ var ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   FX_NOSHADOWCAST: 131072,
   FX_NOSHADOWRECV: 262144,
+  TEX_COLOR,
+  TEX_ALPHA,
+  TEX_MASKED,
+  TEX_MIPMAP,
+  TEX_CLAMPU,
+  TEX_CLAMPV,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
+function textureFlags(flags, command) {
+  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  return flags;
+}
 function createEngineCommands(engine) {
   const world = engine.world;
   const { entity, parentOf, texture, ofKind } = handleHelpers(world);
@@ -6872,14 +6905,14 @@ function createEngineCommands(engine) {
       entity(handle).order = order;
     },
     // -------------------------------------------------------- textures
-    loadtexture(file) {
-      return engine.loadTexture(file).handle;
+    loadtexture(file, flags) {
+      return engine.loadTexture(file).setFlags(textureFlags(flags, "LoadTexture")).handle;
     },
-    createtexture(width, height, r, g, b) {
+    createtexture(width, height, r, g, b, flags) {
       if (width < 1 || height < 1 || width > 4096 || height > 4096) {
         throw runtimeError(`CreateTexture size must be 1 to 4096, not ${width} x ${height}`);
       }
-      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).handle;
+      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).setFlags(textureFlags(flags, "CreateTexture")).handle;
     },
     createcheckertexture(size, cells, r1, g1, b1, r2, g2, b2) {
       if (size < 1 || size > 4096) throw runtimeError(`CreateCheckerTexture size must be 1 to 4096, not ${size}`);
@@ -6887,10 +6920,10 @@ function createEngineCommands(engine) {
       t.checker(Math.max(1, cells), [byte(r1), byte(g1), byte(b1)], [byte(r2), byte(g2), byte(b2)]);
       return t.handle;
     },
-    texturepixel(tex, x, y, r, g, b) {
+    texturepixel(tex, x, y, r, g, b, a) {
       const t = texture(tex);
       if (!t.pixels) throw runtimeError("TexturePixel only works on textures made with CreateTexture");
-      t.setPixel(x, y, byte(r), byte(g), byte(b));
+      t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
     scaletexture(tex, u, v) {
       const t = texture(tex);
@@ -35232,6 +35265,35 @@ function mirrorInto(target, world) {
   for (const i of MIRRORED) e[i] = -e[i];
   return target;
 }
+function imagePixels(image) {
+  if (!image) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  return new Uint8Array(ctx.getImageData(0, 0, image.width, image.height).data.buffer);
+}
+function bleedEdges(pixels, width, height) {
+  const source = pixels.slice();
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (source[i + 3] !== 0) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const j = (ny * width + nx) * 4;
+        if (source[j + 3] === 0) continue;
+        pixels[i] = source[j];
+        pixels[i + 1] = source[j + 1];
+        pixels[i + 2] = source[j + 2];
+        break;
+      }
+    }
+  }
+}
 function srgb(color, rgb) {
   return color.setRGB(rgb[0], rgb[1], rgb[2], SRGBColorSpace);
 }
@@ -35371,13 +35433,15 @@ var ThreeBackend = class extends RenderBackend {
     const known = this.materials.get(m.id);
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
-    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1;
+    const flags = tex ? m.texture : null;
+    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1 || flags !== null && flags.alpha;
+    const cut = m.alphaMode === "mask" ? m.alphaCutoff : flags !== null && flags.masked ? 0.5 : 0;
     const options = {
       color: srgb(new Color(), m.color),
       map: tex,
       transparent: blend,
       opacity: m.alphaMode === "opaque" ? 1 : m.alpha,
-      alphaTest: m.alphaMode === "mask" ? m.alphaCutoff : 0,
+      alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? DoubleSide : FrontSide
     };
@@ -35403,10 +35467,18 @@ var ThreeBackend = class extends RenderBackend {
     }
     if (known) known.texture.dispose();
     let texture;
-    if (t.image) texture = new Texture2(t.image);
+    if (t.masked) {
+      const pixels = t.pixels ? new Uint8Array(t.pixels) : imagePixels(t.image);
+      if (!pixels) return null;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] === 0 && pixels[i + 1] === 0 && pixels[i + 2] === 0) pixels[i + 3] = 0;
+      }
+      bleedEdges(pixels, t.width, t.height);
+      texture = new DataTexture(pixels, t.width, t.height, RGBAFormat);
+    } else if (t.image) texture = new Texture2(t.image);
     else if (t.pixels) texture = new DataTexture(new Uint8Array(t.pixels), t.width, t.height, RGBAFormat);
     else return null;
-    if (t.nearest) texture.magFilter = NearestFilter;
+    texture.magFilter = t.nearest ? NearestFilter : LinearFilter;
     texture.flipY = false;
     texture.colorSpace = SRGBColorSpace;
     texture.wrapS = WRAP[t.wrapU] || RepeatWrapping;

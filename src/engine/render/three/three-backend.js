@@ -23,6 +23,46 @@ function mirrorInto(target, world)
   return target;
 }
 
+// The RGBA bytes of an image, top row first.
+function imagePixels(image)
+{
+  if (!image) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  return new Uint8Array(ctx.getImageData(0, 0, image.width, image.height).data.buffer);
+}
+
+// Pixels that are not drawn (alpha 0) take the colour of a drawn
+// neighbour: smoothing between a leaf and the black around it then gives
+// leaf colour, not a dark rim.
+function bleedEdges(pixels, width, height)
+{
+  const source = pixels.slice();
+  for (let y = 0; y < height; y++)
+  {
+    for (let x = 0; x < width; x++)
+    {
+      const i = (y * width + x) * 4;
+      if (source[i + 3] !== 0) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+      {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const j = (ny * width + nx) * 4;
+        if (source[j + 3] === 0) continue;
+        pixels[i] = source[j];
+        pixels[i + 1] = source[j + 1];
+        pixels[i + 2] = source[j + 2];
+        break;
+      }
+    }
+  }
+}
+
 function srgb(color, rgb)
 {
   return color.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
@@ -205,14 +245,17 @@ export class ThreeBackend extends RenderBackend
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
 
-    // Built-in shapes go by `alpha`; model materials say how alpha is used.
-    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1;
+    // Built-in shapes go by `alpha` and their texture's flags (TEX_ALPHA
+    // blends, TEX_MASKED cuts out); model materials say how alpha is used.
+    const flags = tex ? m.texture : null;
+    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1 || (flags !== null && flags.alpha);
+    const cut = m.alphaMode === 'mask' ? m.alphaCutoff : (flags !== null && flags.masked ? 0.5 : 0);
     const options = {
       color: srgb(new THREE.Color(), m.color),
       map: tex,
       transparent: blend,
       opacity: m.alphaMode === 'opaque' ? 1 : m.alpha,
-      alphaTest: m.alphaMode === 'mask' ? m.alphaCutoff : 0,
+      alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? THREE.DoubleSide : THREE.FrontSide
     };
@@ -242,11 +285,24 @@ export class ThreeBackend extends RenderBackend
     }
     if (known) known.texture.dispose();
     let texture;
-    if (t.image) texture = new THREE.Texture(t.image);
+    if (t.masked)
+    {
+      // Masked, as in Blitz3D: black pixels are not drawn.
+      const pixels = t.pixels ? new Uint8Array(t.pixels) : imagePixels(t.image);
+      if (!pixels) return null;
+      for (let i = 0; i < pixels.length; i += 4)
+      {
+        if (pixels[i] === 0 && pixels[i + 1] === 0 && pixels[i + 2] === 0) pixels[i + 3] = 0;
+      }
+      bleedEdges(pixels, t.width, t.height);
+      texture = new THREE.DataTexture(pixels, t.width, t.height, THREE.RGBAFormat);
+    }
+    else if (t.image) texture = new THREE.Texture(t.image);
     else if (t.pixels) texture = new THREE.DataTexture(new Uint8Array(t.pixels), t.width, t.height, THREE.RGBAFormat);
     else return null;
-    // Generated textures are usually pixel patterns, kept sharp.
-    if (t.nearest) texture.magFilter = THREE.NearestFilter;
+    // Generated textures are usually pixel patterns, kept sharp; images
+    // are smoothed.
+    texture.magFilter = t.nearest ? THREE.NearestFilter : THREE.LinearFilter;
     // Our rows start at the top, like the images: no flipping.
     texture.flipY = false;
     texture.colorSpace = THREE.SRGBColorSpace;
