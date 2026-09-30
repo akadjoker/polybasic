@@ -805,7 +805,8 @@ class Parser
           this.next();
           const expr = this.parseExpr();
           this.expectOp(')');
-          return expr;
+          // `(First Enemy)\x` reads a field of any object expression.
+          return this.isOp('\\') ? this.parsePostfix(expr) : expr;
         }
         break;
       case 'kw':

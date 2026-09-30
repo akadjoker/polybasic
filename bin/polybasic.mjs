@@ -10,11 +10,14 @@
 // (or Ctrl+C); --frames stops it after N updates.
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { compile, CompileError } from '../src/compiler/index.js';
 import { loadProgram, runProgram, NodeHost } from '../src/runtime/index.js';
 
 const USAGE = `Usage:
   polybasic run <file.pb> [--frames N] [--fake-time]   compile and run
+  polybasic run <file.js> [--frames N] [--fake-time]   run a program made by build
   polybasic build <file.pb> [-o out.js]                write the JavaScript module
   polybasic --js <file.pb>                             print the generated JavaScript
 `;
@@ -41,6 +44,15 @@ function main(argv)
     const i = args.indexOf(name);
     return i >= 0 ? args[i + 1] : undefined;
   };
+
+  const runOptions = {
+    maxUpdates: option('--frames') ? Number(option('--frames')) : 0,
+    fakeTime: args.includes('--fake-time')
+  };
+  if (command === 'run' && /\.m?js$/i.test(file))
+  {
+    return import(pathToFileURL(resolve(file)).href).then((module) => run(module, runOptions));
+  }
 
   let result;
   try
@@ -80,19 +92,15 @@ function main(argv)
       return 0;
     }
     case 'run':
-      return run(result.js, {
-        maxUpdates: option('--frames') ? Number(option('--frames')) : 0,
-        fakeTime: args.includes('--fake-time')
-      });
+      return loadProgram(result.js).then((module) => run(module, runOptions));
     default:
       process.stderr.write(`Unknown command '${command}'\n${USAGE}`);
       return 2;
   }
 }
 
-async function run(js, { maxUpdates, fakeTime })
+async function run(module, { maxUpdates, fakeTime })
 {
-  const module = await loadProgram(js);
   const host = new NodeHost({ fakeTime });
   const controller = new AbortController();
   process.once('SIGINT', () => controller.abort());
