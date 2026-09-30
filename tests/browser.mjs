@@ -659,6 +659,39 @@ try
     console.log(`      ${facts.coinHop}; ${facts.crates}; ${facts.paint}`);
   });
 
+  await check('playground projects are kept in IndexedDB across page loads', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/programs/manifest.json`);
+    const made = await page.evaluate(async () =>
+    {
+      const { ProjectStore } = await import('/web/projects.js');
+      const store = await ProjectStore.open();
+      const p = await store.create('Kept', { 'main.pb': 'Print 1\n', 'assets/a.bin': new Uint8Array([7, 8, 9]) });
+      await store.writeFile(p.id, 'lib/util.pb', 'Function F()\nEnd Function\n');
+      await store.renameFile(p.id, 'main.pb', 'game.pb');
+      return { id: p.id, persistent: store.persistent };
+    });
+    assert(made.persistent, 'IndexedDB was not used');
+    await page.reload();
+    const back = await page.evaluate(async (id) =>
+    {
+      const { ProjectStore } = await import('/web/projects.js');
+      const store = await ProjectStore.open();
+      const p = await store.get(id);
+      const files = await store.readAll(id);
+      const result = { name: p.name, main: p.main, paths: p.paths, bin: Array.from(files.get('assets/a.bin')), game: new TextDecoder().decode(files.get('game.pb')) };
+      await store.remove(id);
+      result.afterRemove = (await store.get(id)) === null && (await store.readAll(id)).size === 0;
+      return result;
+    }, made.id);
+    assert(back.name === 'Kept' && back.main === 'game.pb', JSON.stringify(back));
+    assert(back.paths.join() === 'assets/a.bin,game.pb,lib/util.pb', back.paths.join());
+    assert(back.bin.join() === '7,8,9' && back.game === 'Print 1\n', JSON.stringify(back));
+    assert(back.afterRemove, 'the project was not removed');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   // ── Playground ──────────────────────────────────────────────────────
 
   const playground = await openPage(browser, `${base}/web/`, { width: 1400, height: 850 });
