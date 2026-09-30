@@ -228,9 +228,11 @@ export class Engine
   }
 }
 
+// A file named by a program, relative to the program's own URL. Full URLs
+// (with a scheme) are kept; a path from the root starts at the base's root.
 function resolveUrl(base, file)
 {
-  if (!base || /^[a-z]+:|^\//i.test(file)) return file;
+  if (!base || /^[a-z][a-z0-9+.-]*:/i.test(file)) return file;
   try
   {
     return new URL(file, base).href;
