@@ -32,6 +32,14 @@ export class Entity
     this.materials = [];
     this.camera = null;
     this.light = null;
+    // Picking and collisions (src/engine/collide): how the entity is seen
+    // by rays and by moving spheres.
+    this.pickMode = 0;        // 0 none, 1 sphere, 2 polygon, 3 box
+    this.obscurer = true;     // blocks EntityVisible
+    this.collisionType = 0;   // 0: takes no part in collisions
+    this.radiusX = 1;         // sphere / ellipsoid radii, in world units
+    this.radiusY = 1;
+    this.box = null;          // [x, y, z, width, height, depth] in its own space; null: the mesh bounds
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
   }

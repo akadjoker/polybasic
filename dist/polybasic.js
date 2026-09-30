@@ -3355,6 +3355,12 @@ var Entity = class {
     this.materials = [];
     this.camera = null;
     this.light = null;
+    this.pickMode = 0;
+    this.obscurer = true;
+    this.collisionType = 0;
+    this.radiusX = 1;
+    this.radiusY = 1;
+    this.box = null;
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
   }
@@ -3633,6 +3639,12 @@ var World = class {
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.pickMode = src.pickMode;
+    e.obscurer = src.obscurer;
+    e.collisionType = src.collisionType;
+    e.radiusX = src.radiusX;
+    e.radiusY = src.radiusY;
+    e.box = src.box ? [...src.box] : null;
     if (parent) e.setParent(parent, false);
     for (const c of src.children) this.copyEntity(c, e);
     return e;
@@ -3943,6 +3955,37 @@ var Input = class {
   }
 };
 
+// src/engine/handles.js
+var byte = (v) => Math.max(0, Math.min(255, v | 0));
+var unit = (v) => byte(v) / 255;
+var tidy = (v) => {
+  const r = Math.round(v * 1e9) / 1e9;
+  return r === 0 ? 0 : r;
+};
+function handleHelpers(world) {
+  const entity = (handle) => {
+    const e = world.handles.get(handle);
+    if (e instanceof Entity) return e;
+    if (handle === 0) throw runtimeError("Entity handle is 0 (no entity)");
+    if (e instanceof Texture) throw runtimeError(`Handle ${handle} is a texture, not an entity`);
+    throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
+  };
+  const parentOf = (handle) => handle === 0 ? null : entity(handle);
+  const texture = (handle) => {
+    const t = world.handles.get(handle);
+    if (t instanceof Texture) return t;
+    if (handle === 0) throw runtimeError("Texture handle is 0 (no texture)");
+    if (t instanceof Entity) throw runtimeError(`Handle ${handle} is an entity, not a texture`);
+    throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
+  };
+  const ofKind = (handle, kind, what) => {
+    const e = entity(handle);
+    if (e.kind !== kind) throw runtimeError(`Entity ${handle} is not a ${what}`);
+    return e;
+  };
+  return { entity, parentOf, texture, ofKind };
+}
+
 // src/engine/math/aabb.js
 var Aabb = class _Aabb {
   constructor(min = new Vec3(Infinity, Infinity, Infinity), max = new Vec3(-Infinity, -Infinity, -Infinity)) {
@@ -4181,6 +4224,749 @@ function createTorus(segments = 24, thickness = 0.25) {
   return b.build();
 }
 
+// src/engine/collide/bvh.js
+var LEAF_SIZE = 4;
+var MeshBvh = class {
+  constructor(positions, indices) {
+    this.positions = positions;
+    const count = indices.length / 3;
+    this.triangleCount = count;
+    this.tri = Uint32Array.from(indices);
+    const box = new Float64Array(count * 6);
+    const centre = new Float64Array(count * 3);
+    for (let t = 0; t < count; t++) {
+      for (let axis = 0; axis < 3; axis++) {
+        const a = positions[this.tri[t * 3] * 3 + axis];
+        const b = positions[this.tri[t * 3 + 1] * 3 + axis];
+        const c = positions[this.tri[t * 3 + 2] * 3 + axis];
+        const lo = Math.min(a, b, c);
+        const hi = Math.max(a, b, c);
+        box[t * 6 + axis] = lo;
+        box[t * 6 + 3 + axis] = hi;
+        centre[t * 3 + axis] = (lo + hi) / 2;
+      }
+    }
+    this.boxes = box;
+    this.order = new Uint32Array(count);
+    for (let t = 0; t < count; t++) this.order[t] = t;
+    const maxNodes = Math.max(1, count * 2);
+    this.bounds = new Float64Array(maxNodes * 6);
+    this.left = new Int32Array(maxNodes);
+    this.start = new Uint32Array(maxNodes);
+    this.count = new Uint32Array(maxNodes);
+    this.nodes = 0;
+    if (count) this.build(box, centre, 0, count);
+    else {
+      this.bounds.set([Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity], 0);
+      this.left[0] = -1;
+      this.nodes = 1;
+    }
+  }
+  // Builds the node for order[from .. to) and returns its index.
+  build(box, centre, from, to) {
+    const node = this.nodes++;
+    const b = this.bounds;
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const clo = [Infinity, Infinity, Infinity];
+    const chi = [-Infinity, -Infinity, -Infinity];
+    for (let i2 = from; i2 < to; i2++) {
+      const t = this.order[i2];
+      for (let axis2 = 0; axis2 < 3; axis2++) {
+        lo[axis2] = Math.min(lo[axis2], box[t * 6 + axis2]);
+        hi[axis2] = Math.max(hi[axis2], box[t * 6 + 3 + axis2]);
+        clo[axis2] = Math.min(clo[axis2], centre[t * 3 + axis2]);
+        chi[axis2] = Math.max(chi[axis2], centre[t * 3 + axis2]);
+      }
+    }
+    b.set([...lo, ...hi], node * 6);
+    const n = to - from;
+    let axis = 0;
+    if (chi[1] - clo[1] > chi[axis] - clo[axis]) axis = 1;
+    if (chi[2] - clo[2] > chi[axis] - clo[axis]) axis = 2;
+    if (n <= LEAF_SIZE || chi[axis] - clo[axis] <= 0) {
+      this.left[node] = -1;
+      this.start[node] = from;
+      this.count[node] = n;
+      return node;
+    }
+    const mid = (clo[axis] + chi[axis]) / 2;
+    let i = from;
+    let j = to - 1;
+    while (i <= j) {
+      if (centre[this.order[i] * 3 + axis] < mid) i++;
+      else {
+        const tmp = this.order[i];
+        this.order[i] = this.order[j];
+        this.order[j] = tmp;
+        j--;
+      }
+    }
+    let split = i;
+    if (split === from || split === to) split = from + to >> 1;
+    const leftChild = this.build(box, centre, from, split);
+    const rightChild = this.build(box, centre, split, to);
+    this.left[node] = leftChild;
+    this.start[node] = rightChild;
+    return node;
+  }
+  // Writes the corners of triangle t (an index into the mesh's triangles)
+  // into out[0..8].
+  corners(t, out) {
+    const p = this.positions;
+    for (let k = 0; k < 3; k++) {
+      const v = this.tri[t * 3 + k] * 3;
+      out[k * 3] = p[v];
+      out[k * 3 + 1] = p[v + 1];
+      out[k * 3 + 2] = p[v + 2];
+    }
+    return out;
+  }
+  // Calls visit(t) for every triangle whose box overlaps the box
+  // [minX, minY, minZ] .. [maxX, maxY, maxZ].
+  queryBox(minX, minY, minZ, maxX, maxY, maxZ, visit) {
+    const b = this.bounds;
+    const stack = [0];
+    while (stack.length) {
+      const node = stack.pop();
+      const o = node * 6;
+      if (b[o] > maxX || b[o + 3] < minX || b[o + 1] > maxY || b[o + 4] < minY || b[o + 2] > maxZ || b[o + 5] < minZ) continue;
+      if (this.left[node] < 0) {
+        const tb = this.boxes;
+        const end = this.start[node] + this.count[node];
+        for (let i = this.start[node]; i < end; i++) {
+          const t = this.order[i];
+          const q = t * 6;
+          if (tb[q] > maxX || tb[q + 3] < minX || tb[q + 1] > maxY || tb[q + 4] < minY || tb[q + 2] > maxZ || tb[q + 5] < minZ) continue;
+          visit(t);
+        }
+      } else stack.push(this.start[node], this.left[node]);
+    }
+  }
+  // Calls visit(t) for triangles in nodes the ray origin + s * dir
+  // (0 <= s <= maxS) passes through. visit may return a new, smaller maxS
+  // (the nearest hit so far) to prune the rest of the search.
+  queryRay(ox, oy, oz, dx, dy, dz, maxS, visit) {
+    const b = this.bounds;
+    const ix = 1 / dx;
+    const iy = 1 / dy;
+    const iz = 1 / dz;
+    const stack = [0];
+    let limit = maxS;
+    while (stack.length) {
+      const node = stack.pop();
+      const o = node * 6;
+      if (!slab(b, o, ox, oy, oz, ix, iy, iz, limit)) continue;
+      if (this.left[node] < 0) {
+        const end = this.start[node] + this.count[node];
+        for (let i = this.start[node]; i < end; i++) {
+          const s = visit(this.order[i]);
+          if (typeof s === "number" && s < limit) limit = s;
+        }
+      } else stack.push(this.start[node], this.left[node]);
+    }
+  }
+};
+var range = new Float64Array(2);
+function slab(b, o, ox, oy, oz, ix, iy, iz, limit) {
+  range[0] = 0;
+  range[1] = limit;
+  return slabAxis(b[o], b[o + 3], ox, ix) && slabAxis(b[o + 1], b[o + 4], oy, iy) && slabAxis(b[o + 2], b[o + 5], oz, iz);
+}
+function slabAxis(lo, hi, origin, inv) {
+  let near = (lo - origin) * inv;
+  let far = (hi - origin) * inv;
+  if (near !== near || far !== far) return origin >= lo && origin <= hi;
+  if (near > far) {
+    const t = near;
+    near = far;
+    far = t;
+  }
+  if (near > range[0]) range[0] = near;
+  if (far < range[1]) range[1] = far;
+  return range[0] <= range[1];
+}
+function meshBvh(mesh) {
+  if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version) {
+    mesh.bvhCache = { version: mesh.version, bvh: new MeshBvh(mesh.positions, mesh.indices) };
+  }
+  return mesh.bvhCache.bvh;
+}
+
+// src/engine/collide/sweep.js
+var EPS = 1e-12;
+function newHit(limit = 1) {
+  return { t: limit, x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0 };
+}
+function record(hit, t, x, y, z, nx, ny, nz) {
+  hit.t = t;
+  hit.x = x;
+  hit.y = y;
+  hit.z = z;
+  hit.nx = nx;
+  hit.ny = ny;
+  hit.nz = nz;
+  return true;
+}
+function lowestRoot(a, b, c, max) {
+  if (Math.abs(a) < EPS) return -1;
+  const det = b * b - 4 * a * c;
+  if (det < 0) return -1;
+  const s = Math.sqrt(det);
+  let r1 = (-b - s) / (2 * a);
+  let r2 = (-b + s) / (2 * a);
+  if (r1 > r2) {
+    const t = r1;
+    r1 = r2;
+    r2 = t;
+  }
+  if (r1 >= 0 && r1 <= max) return r1;
+  if (r2 >= 0 && r2 <= max) return r2;
+  return -1;
+}
+function contactAt(hit, t, px, py, pz, vx, vy, vz, qx, qy, qz) {
+  const cx = px + vx * t;
+  const cy = py + vy * t;
+  const cz = pz + vz * t;
+  let nx = cx - qx;
+  let ny = cy - qy;
+  let nz = cz - qz;
+  const len = Math.hypot(nx, ny, nz);
+  if (len < EPS) return false;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  if (nx * vx + ny * vy + nz * vz >= 0) return false;
+  return record(hit, t, qx, qy, qz, nx, ny, nz);
+}
+function sweepTriangle(px, py, pz, vx, vy, vz, tri, twoSided, hit) {
+  const ax = tri[0], ay = tri[1], az = tri[2];
+  const bx = tri[3], by = tri[4], bz = tri[5];
+  const cx = tri[6], cy = tri[7], cz = tri[8];
+  const e1x = bx - ax, e1y = by - ay, e1z = bz - az;
+  const e2x = cx - ax, e2y = cy - ay, e2z = cz - az;
+  let nx = e1y * e2z - e1z * e2y;
+  let ny = e1z * e2x - e1x * e2z;
+  let nz = e1x * e2y - e1y * e2x;
+  const nlen = Math.hypot(nx, ny, nz);
+  if (nlen < EPS) return false;
+  nx /= nlen;
+  ny /= nlen;
+  nz /= nlen;
+  const dist = nx * (px - ax) + ny * (py - ay) + nz * (pz - az);
+  const nv = nx * vx + ny * vy + nz * vz;
+  if (!twoSided && dist < 0) return false;
+  let t0;
+  if (Math.abs(nv) < EPS) {
+    if (Math.abs(dist) >= 1) return false;
+    t0 = 0;
+  } else {
+    let a = (-1 - dist) / nv;
+    let b = (1 - dist) / nv;
+    if (a > b) {
+      const t = a;
+      a = b;
+      b = t;
+    }
+    if (a > hit.t || b < 0) return false;
+    t0 = Math.max(0, a);
+  }
+  const side = dist > 0 || dist === 0 && nv < 0 ? 1 : -1;
+  const qx = px + vx * t0 - nx * side;
+  const qy = py + vy * t0 - ny * side;
+  const qz = pz + vz * t0 - nz * side;
+  if (t0 <= hit.t && insideTriangle(qx, qy, qz, tri, nx, ny, nz)) {
+    if (nv * side < 0) return record(hit, t0, qx, qy, qz, nx * side, ny * side, nz * side);
+    return false;
+  }
+  let found = false;
+  const vv = vx * vx + vy * vy + vz * vz;
+  for (let k = 0; k < 3; k++) {
+    const qx2 = tri[k * 3], qy2 = tri[k * 3 + 1], qz2 = tri[k * 3 + 2];
+    const b = 2 * (vx * (px - qx2) + vy * (py - qy2) + vz * (pz - qz2));
+    const c = (qx2 - px) ** 2 + (qy2 - py) ** 2 + (qz2 - pz) ** 2 - 1;
+    const t = lowestRoot(vv, b, c, hit.t);
+    if (t >= 0 && contactAt(hit, t, px, py, pz, vx, vy, vz, qx2, qy2, qz2)) found = true;
+  }
+  for (let k = 0; k < 3; k++) {
+    const sx = tri[k * 3], sy = tri[k * 3 + 1], sz = tri[k * 3 + 2];
+    const ex = tri[(k + 1) % 3 * 3] - sx;
+    const ey = tri[(k + 1) % 3 * 3 + 1] - sy;
+    const ez = tri[(k + 1) % 3 * 3 + 2] - sz;
+    const bx2 = sx - px, by2 = sy - py, bz2 = sz - pz;
+    const edgeSq = ex * ex + ey * ey + ez * ez;
+    const edgeDotVel = ex * vx + ey * vy + ez * vz;
+    const edgeDotBase = ex * bx2 + ey * by2 + ez * bz2;
+    const a = edgeSq * -vv + edgeDotVel * edgeDotVel;
+    const b = edgeSq * (2 * (vx * bx2 + vy * by2 + vz * bz2)) - 2 * edgeDotVel * edgeDotBase;
+    const c = edgeSq * (1 - (bx2 * bx2 + by2 * by2 + bz2 * bz2)) + edgeDotBase * edgeDotBase;
+    const t = lowestRoot(a, b, c, hit.t);
+    if (t < 0) continue;
+    const f = (edgeDotVel * t - edgeDotBase) / edgeSq;
+    if (f < 0 || f > 1) continue;
+    if (contactAt(hit, t, px, py, pz, vx, vy, vz, sx + ex * f, sy + ey * f, sz + ez * f)) found = true;
+  }
+  if (found && !twoSided) {
+    if (hit.nx * nx + hit.ny * ny + hit.nz * nz < 0) return false;
+  }
+  return found;
+}
+function insideTriangle(qx, qy, qz, tri, nx, ny, nz) {
+  for (let k = 0; k < 3; k++) {
+    const ax = tri[k * 3], ay = tri[k * 3 + 1], az = tri[k * 3 + 2];
+    const k2 = (k + 1) % 3 * 3;
+    const ex = tri[k2] - ax, ey = tri[k2 + 1] - ay, ez = tri[k2 + 2] - az;
+    const wx = qx - ax, wy = qy - ay, wz = qz - az;
+    const cx = ey * wz - ez * wy;
+    const cy = ez * wx - ex * wz;
+    const cz = ex * wy - ey * wx;
+    if (cx * nx + cy * ny + cz * nz < -1e-9 * (ex * ex + ey * ey + ez * ez)) return false;
+  }
+  return true;
+}
+function sweepSphere(px, py, pz, vx, vy, vz, sx, sy, sz, r, hit) {
+  const R = 1 + r;
+  const dx = px - sx, dy = py - sy, dz = pz - sz;
+  const a = vx * vx + vy * vy + vz * vz;
+  const b = 2 * (vx * dx + vy * dy + vz * dz);
+  const c = dx * dx + dy * dy + dz * dz - R * R;
+  let t;
+  if (c <= 0) {
+    if (b >= 0) return false;
+    t = 0;
+  } else t = lowestRoot(a, b, c, hit.t);
+  if (t < 0 || t > hit.t) return false;
+  let nx = dx + vx * t, ny = dy + vy * t, nz = dz + vz * t;
+  const len = Math.hypot(nx, ny, nz) || 1;
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  return record(hit, t, sx + nx * r, sy + ny * r, sz + nz * r, nx, ny, nz);
+}
+function rayTriangle(px, py, pz, dx, dy, dz, tri, twoSided, hit) {
+  const ax = tri[0], ay = tri[1], az = tri[2];
+  const e1x = tri[3] - ax, e1y = tri[4] - ay, e1z = tri[5] - az;
+  const e2x = tri[6] - ax, e2y = tri[7] - ay, e2z = tri[8] - az;
+  const hx = dy * e2z - dz * e2y;
+  const hy = dz * e2x - dx * e2z;
+  const hz = dx * e2y - dy * e2x;
+  const det = e1x * hx + e1y * hy + e1z * hz;
+  if (Math.abs(det) < EPS) return false;
+  if (!twoSided && det < 0) return false;
+  const inv = 1 / det;
+  const sx = px - ax, sy = py - ay, sz = pz - az;
+  const u = (sx * hx + sy * hy + sz * hz) * inv;
+  if (u < 0 || u > 1) return false;
+  const qx = sy * e1z - sz * e1y;
+  const qy = sz * e1x - sx * e1z;
+  const qz = sx * e1y - sy * e1x;
+  const v = (dx * qx + dy * qy + dz * qz) * inv;
+  if (v < 0 || u + v > 1) return false;
+  const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+  if (t < 0 || t > hit.t) return false;
+  let nx = e1y * e2z - e1z * e2y;
+  let ny = e1z * e2x - e1x * e2z;
+  let nz = e1x * e2y - e1y * e2x;
+  const len = Math.hypot(nx, ny, nz);
+  nx /= len;
+  ny /= len;
+  nz /= len;
+  if (nx * dx + ny * dy + nz * dz > 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
+  }
+  return record(hit, t, px + dx * t, py + dy * t, pz + dz * t, nx, ny, nz);
+}
+function raySphere(px, py, pz, dx, dy, dz, sx, sy, sz, r, hit) {
+  const ox = px - sx, oy = py - sy, oz = pz - sz;
+  const c = ox * ox + oy * oy + oz * oz - r * r;
+  if (c < 0) return false;
+  const a = dx * dx + dy * dy + dz * dz;
+  const b = 2 * (ox * dx + oy * dy + oz * dz);
+  const t = lowestRoot(a, b, c, hit.t);
+  if (t < 0) return false;
+  const x = px + dx * t, y = py + dy * t, z = pz + dz * t;
+  return record(hit, t, x, y, z, (x - sx) / r, (y - sy) / r, (z - sz) / r);
+}
+
+// src/engine/collide/shapes.js
+function localBox(e) {
+  if (e.box) {
+    const [x, y, z, w, h, d] = e.box;
+    return { min: [x, y, z], max: [x + w, y + h, z + d] };
+  }
+  if (e.mesh && !e.mesh.bounds.isEmpty()) {
+    const b = e.mesh.bounds;
+    return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+  }
+  return { min: [-1, -1, -1], max: [1, 1, 1] };
+}
+function boxTriangles(e, out = new Float64Array(108)) {
+  const { min, max } = localBox(e);
+  const m = e.worldMatrix;
+  const corner = [];
+  for (let i = 0; i < 8; i++) {
+    corner.push(new Vec3(i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]).applyMat4(m));
+  }
+  const centre = new Vec3();
+  for (const c of corner) centre.add(c);
+  centre.scale(1 / 8);
+  const faces = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+  let o = 0;
+  const put = (a, b, c) => {
+    const n = b.clone().sub(a).cross(c.clone().sub(a));
+    if (n.dot(a.clone().sub(centre)) < 0) {
+      const t = b;
+      b = c;
+      c = t;
+    }
+    for (const p of [a, b, c]) {
+      out[o++] = p.x;
+      out[o++] = p.y;
+      out[o++] = p.z;
+    }
+  };
+  for (const [a, b, c, d] of faces) {
+    put(corner[a], corner[b], corner[c]);
+    put(corner[a], corner[c], corner[d]);
+  }
+  return out;
+}
+function shapeBounds(e, mode) {
+  if (mode === 1) {
+    const p2 = e.worldPosition();
+    const r = e.radiusX;
+    return { min: [p2.x - r, p2.y - r, p2.z - r], max: [p2.x + r, p2.y + r, p2.z + r] };
+  }
+  if (mode === 2) {
+    if (!e.mesh || e.mesh.bounds.isEmpty()) return null;
+    const b = e.worldBounds();
+    return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+  }
+  const { min, max } = localBox(e);
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  const p = new Vec3();
+  for (let i = 0; i < 8; i++) {
+    p.set(i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]).applyMat4(e.worldMatrix);
+    lo[0] = Math.min(lo[0], p.x);
+    lo[1] = Math.min(lo[1], p.y);
+    lo[2] = Math.min(lo[2], p.z);
+    hi[0] = Math.max(hi[0], p.x);
+    hi[1] = Math.max(hi[1], p.y);
+    hi[2] = Math.max(hi[2], p.z);
+  }
+  return { min: lo, max: hi };
+}
+function segmentNearBox(ox, oy, oz, lx, ly, lz, box, pad, limit) {
+  let t0 = 0;
+  let t1 = limit;
+  const o = [ox, oy, oz];
+  const d = [lx, ly, lz];
+  for (let a = 0; a < 3; a++) {
+    const lo = box.min[a] - pad;
+    const hi = box.max[a] + pad;
+    if (Math.abs(d[a]) < 1e-15) {
+      if (o[a] < lo || o[a] > hi) return false;
+      continue;
+    }
+    let n = (lo - o[a]) / d[a];
+    let f = (hi - o[a]) / d[a];
+    if (n > f) {
+      const t = n;
+      n = f;
+      f = t;
+    }
+    t0 = Math.max(t0, n);
+    t1 = Math.min(t1, f);
+    if (t0 > t1) return false;
+  }
+  return true;
+}
+
+// src/engine/collide/picking.js
+var PICK_NONE = 0;
+var PICK_SPHERE = 1;
+var PICK_POLYGON = 2;
+var PICK_BOX = 3;
+function emptyPick() {
+  return { entity: null, t: 0, x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, distance: 0 };
+}
+function pickLine(world, origin, line, radius, accept = () => true) {
+  const best = newHit(1);
+  let found = null;
+  const r = Math.max(0, radius);
+  const tri = new Float64Array(9);
+  const boxTris = new Float64Array(108);
+  const { x: ox, y: oy, z: oz } = origin;
+  const { x: lx, y: ly, z: lz } = line;
+  for (const e of world.handles.values()) {
+    if (!(e instanceof Entity) || e.pickMode === PICK_NONE || !accept(e) || !e.shown) continue;
+    const bounds = shapeBounds(e, e.pickMode);
+    if (!bounds || !segmentNearBox(ox, oy, oz, lx, ly, lz, bounds, r, best.t)) continue;
+    const before = best.t;
+    if (e.pickMode === PICK_SPHERE) {
+      const c = e.worldPosition();
+      if (r > 0) sweepScaled(best, r, (h, s) => sweepSphere(ox * s, oy * s, oz * s, lx * s, ly * s, lz * s, c.x * s, c.y * s, c.z * s, e.radiusX * s, h));
+      else raySphere(ox, oy, oz, lx, ly, lz, c.x, c.y, c.z, e.radiusX, best);
+    } else if (e.pickMode === PICK_BOX) {
+      boxTriangles(e, boxTris);
+      for (let k = 0; k < 12; k++) {
+        tri.set(boxTris.subarray(k * 9, k * 9 + 9));
+        if (r > 0) sweepScaled(best, r, (h, s) => sweepTriangle(ox * s, oy * s, oz * s, lx * s, ly * s, lz * s, scaleTri(tri, s), false, h));
+        else rayTriangle(ox, oy, oz, lx, ly, lz, tri, false, best);
+      }
+    } else if (e.pickMode === PICK_POLYGON) {
+      if (r > 0) sweepMesh(e, origin, line, r, best);
+      else rayMesh(e, origin, line, best);
+    }
+    if (best.t < before) found = e;
+  }
+  const result = emptyPick();
+  if (!found) return result;
+  result.entity = found;
+  result.t = best.t;
+  result.x = best.x;
+  result.y = best.y;
+  result.z = best.z;
+  result.nx = best.nx;
+  result.ny = best.ny;
+  result.nz = best.nz;
+  result.distance = best.t * Math.hypot(lx, ly, lz);
+  return result;
+}
+function sweepScaled(best, r, sweep) {
+  const s = 1 / r;
+  const hit = newHit(best.t);
+  if (!sweep(hit, s)) return;
+  best.t = hit.t;
+  best.x = hit.x * r;
+  best.y = hit.y * r;
+  best.z = hit.z * r;
+  best.nx = hit.nx;
+  best.ny = hit.ny;
+  best.nz = hit.nz;
+}
+function scaleTri(tri, s) {
+  const out = new Float64Array(9);
+  for (let i = 0; i < 9; i++) out[i] = tri[i] * s;
+  return out;
+}
+function rayMesh(e, origin, line, best) {
+  const inv = e.worldMatrix.clone();
+  if (!inv.invert()) return;
+  const o = origin.clone().applyMat4(inv);
+  const d = line.clone().applyMat4Direction(inv);
+  const bvh = meshBvh(e.mesh);
+  const tri = new Float64Array(9);
+  const hit = newHit(best.t);
+  let got = false;
+  bvh.queryRay(o.x, o.y, o.z, d.x, d.y, d.z, hit.t, (t) => {
+    if (rayTriangle(o.x, o.y, o.z, d.x, d.y, d.z, bvh.corners(t, tri), true, hit)) got = true;
+    return hit.t;
+  });
+  if (!got) return;
+  const p = new Vec3(hit.x, hit.y, hit.z).applyMat4(e.worldMatrix);
+  const n = normalToWorld(inv, hit.nx, hit.ny, hit.nz);
+  if (n.dot(line) > 0) n.scale(-1);
+  best.t = hit.t;
+  best.x = p.x;
+  best.y = p.y;
+  best.z = p.z;
+  best.nx = n.x;
+  best.ny = n.y;
+  best.nz = n.z;
+}
+function sweepMesh(e, origin, line, r, best) {
+  const tris = meshTrianglesNear(e, origin, line, r);
+  const s = 1 / r;
+  for (const tri of tris) {
+    for (let i = 0; i < 9; i++) tri[i] *= s;
+    sweepScaled(best, r, (h) => sweepTriangle(origin.x * s, origin.y * s, origin.z * s, line.x * s, line.y * s, line.z * s, tri, true, h));
+  }
+}
+function meshTrianglesNear(e, origin, line, pad) {
+  const inv = e.worldMatrix.clone();
+  if (!inv.invert()) return [];
+  const [px, py, pz] = Array.isArray(pad) ? pad : [pad, pad, pad];
+  const lo = [Math.min(origin.x, origin.x + line.x) - px, Math.min(origin.y, origin.y + line.y) - py, Math.min(origin.z, origin.z + line.z) - pz];
+  const hi = [Math.max(origin.x, origin.x + line.x) + px, Math.max(origin.y, origin.y + line.y) + py, Math.max(origin.z, origin.z + line.z) + pz];
+  const llo = [Infinity, Infinity, Infinity];
+  const lhi = [-Infinity, -Infinity, -Infinity];
+  const p = new Vec3();
+  for (let i = 0; i < 8; i++) {
+    p.set(i & 1 ? hi[0] : lo[0], i & 2 ? hi[1] : lo[1], i & 4 ? hi[2] : lo[2]).applyMat4(inv);
+    llo[0] = Math.min(llo[0], p.x);
+    llo[1] = Math.min(llo[1], p.y);
+    llo[2] = Math.min(llo[2], p.z);
+    lhi[0] = Math.max(lhi[0], p.x);
+    lhi[1] = Math.max(lhi[1], p.y);
+    lhi[2] = Math.max(lhi[2], p.z);
+  }
+  const bvh = meshBvh(e.mesh);
+  const m = e.worldMatrix;
+  const mirrored = m.determinant() < 0;
+  const out = [];
+  bvh.queryBox(llo[0], llo[1], llo[2], lhi[0], lhi[1], lhi[2], (t) => {
+    const tri = bvh.corners(t, new Float64Array(9));
+    for (let k = 0; k < 3; k++) {
+      p.set(tri[k * 3], tri[k * 3 + 1], tri[k * 3 + 2]).applyMat4(m);
+      tri[k * 3] = p.x;
+      tri[k * 3 + 1] = p.y;
+      tri[k * 3 + 2] = p.z;
+    }
+    if (mirrored) {
+      for (let k = 0; k < 3; k++) {
+        const t2 = tri[3 + k];
+        tri[3 + k] = tri[6 + k];
+        tri[6 + k] = t2;
+      }
+    }
+    out.push(tri);
+  });
+  return out;
+}
+function normalToWorld(inv, nx, ny, nz) {
+  const e = inv.e;
+  return new Vec3(
+    e[0] * nx + e[1] * ny + e[2] * nz,
+    e[4] * nx + e[5] * ny + e[6] * nz,
+    e[8] * nx + e[9] * ny + e[10] * nz
+  ).normalize();
+}
+
+// src/engine/collide/camera.js
+var DEG4 = Math.PI / 180;
+function viewportOf(camera, width, height) {
+  return camera.camera.viewport || [0, 0, width, height];
+}
+function screenRay(camera, x, y, width, height) {
+  const [vx, vy, vw, vh] = viewportOf(camera, width, height);
+  const tan = Math.tan(camera.camera.fov * DEG4 / 2);
+  const ndcX = (x - vx) / vw * 2 - 1;
+  const ndcY = 1 - (y - vy) / vh * 2;
+  const dir = new Vec3(ndcX * tan * (vw / vh), ndcY * tan, 1);
+  dir.applyMat4Direction(camera.worldMatrix).normalize();
+  return { origin: camera.worldPosition(), direction: dir };
+}
+function projectPoint(camera, point, width, height) {
+  const inv = camera.worldMatrix.clone();
+  if (!inv.invert()) return { x: 0, y: 0, depth: 0, inFront: false };
+  const p = point.clone().applyMat4(inv);
+  const [vx, vy, vw, vh] = viewportOf(camera, width, height);
+  if (p.z <= 0) return { x: 0, y: 0, depth: p.z, inFront: false };
+  const tan = Math.tan(camera.camera.fov * DEG4 / 2);
+  const ndcX = p.x / (p.z * tan * (vw / vh));
+  const ndcY = p.y / (p.z * tan);
+  return {
+    x: vx + (ndcX + 1) / 2 * vw,
+    y: vy + (1 - ndcY) / 2 * vh,
+    depth: p.z,
+    inFront: true
+  };
+}
+
+// src/engine/collide/commands.js
+var COLLIDE_COMMANDS = [
+  // Shapes for picking and collisions
+  "EntityPickMode(entity, mode, obscurer = 1)",
+  "EntityRadius(entity, x#, y# = 0)",
+  "EntityBox(entity, x#, y#, z#, width#, height#, depth#)",
+  // Picking
+  "CameraPick%(camera, x#, y#)",
+  "LinePick%(x#, y#, z#, dx#, dy#, dz#, radius# = 0)",
+  "EntityPick%(entity, range#)",
+  "EntityVisible%(entity, other)",
+  "PickedEntity%()",
+  "PickedX#()",
+  "PickedY#()",
+  "PickedZ#()",
+  "PickedNX#()",
+  "PickedNY#()",
+  "PickedNZ#()",
+  "PickedTime#()",
+  "PickedDistance#()",
+  // From the world to the screen
+  "CameraProject%(camera, x#, y#, z#)",
+  "ProjectedX#()",
+  "ProjectedY#()",
+  "ProjectedZ#()"
+];
+var COLLIDE_CONSTANTS = {
+  PICK_NONE,
+  PICK_SPHERE,
+  PICK_POLYGON,
+  PICK_BOX
+};
+function createCollideCommands(engine) {
+  const world = engine.world;
+  const { entity, ofKind } = handleHelpers(world);
+  let picked = emptyPick();
+  let projected = { x: 0, y: 0, depth: 0 };
+  const pick = (origin, line, radius, accept) => {
+    picked = pickLine(world, origin, line, radius, accept);
+    return picked.entity ? picked.entity.id : 0;
+  };
+  return {
+    entitypickmode(handle, mode, obscurer) {
+      if (mode < PICK_NONE || mode > PICK_BOX) throw runtimeError(`EntityPickMode mode must be PICK_NONE, PICK_SPHERE, PICK_POLYGON or PICK_BOX (0 to 3), not ${mode}`);
+      const e = entity(handle);
+      e.pickMode = mode;
+      e.obscurer = obscurer !== 0;
+    },
+    entityradius(handle, x, y) {
+      if (!(x > 0) || y < 0) throw runtimeError(`EntityRadius needs a positive radius, not ${x}, ${y}`);
+      const e = entity(handle);
+      e.radiusX = x;
+      e.radiusY = y > 0 ? y : x;
+    },
+    entitybox(handle, x, y, z, width, height, depth) {
+      if (!(width >= 0 && height >= 0 && depth >= 0)) throw runtimeError(`EntityBox needs a size of 0 or more, not ${width} x ${height} x ${depth}`);
+      entity(handle).box = [x, y, z, width, height, depth];
+    },
+    camerapick(camera, x, y) {
+      const cam = ofKind(camera, "camera", "camera");
+      const ray = screenRay(cam, x, y, engine.width, engine.height);
+      return pick(ray.origin, ray.direction.scale(cam.camera.far), 0, (e) => e !== cam);
+    },
+    linepick(x, y, z, dx, dy, dz, radius) {
+      return pick(new Vec3(x, y, z), new Vec3(dx, dy, dz), radius, () => true);
+    },
+    entitypick(handle, range2) {
+      const e = entity(handle);
+      const forward = new Vec3(0, 0, 1).applyMat4Direction(e.worldMatrix).normalize().scale(range2);
+      return pick(e.worldPosition(), forward, 0, (o) => o !== e);
+    },
+    entityvisible(a, b) {
+      const from = entity(a);
+      const to = entity(b);
+      const start = from.worldPosition();
+      const line = to.worldPosition().sub(start);
+      const hit = pickLine(world, start, line, 0, (e) => e.obscurer && e !== from && e !== to);
+      return hit.entity ? 0 : 1;
+    },
+    pickedentity: () => picked.entity && picked.entity.alive ? picked.entity.id : 0,
+    pickedx: () => tidy(picked.x),
+    pickedy: () => tidy(picked.y),
+    pickedz: () => tidy(picked.z),
+    pickednx: () => tidy(picked.nx),
+    pickedny: () => tidy(picked.ny),
+    pickednz: () => tidy(picked.nz),
+    pickedtime: () => tidy(picked.t),
+    pickeddistance: () => tidy(picked.distance),
+    cameraproject(camera, x, y, z) {
+      const cam = ofKind(camera, "camera", "camera");
+      const p = projectPoint(cam, new Vec3(x, y, z), engine.width, engine.height);
+      projected = p.inFront ? p : { x: 0, y: 0, depth: 0 };
+      return p.inFront ? 1 : 0;
+    },
+    projectedx: () => tidy(projected.x),
+    projectedy: () => tidy(projected.y),
+    projectedz: () => tidy(projected.depth)
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -4270,7 +5056,8 @@ var ENGINE_COMMANDS = [
   "Rect(x, y, width, height, solid = 1)",
   "Oval(x, y, width, height, solid = 1)",
   "Line(x1, y1, x2, y2)",
-  "Plot(x, y)"
+  "Plot(x, y)",
+  ...COLLIDE_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
   ...KEYS,
@@ -4281,36 +5068,12 @@ var ENGINE_CONSTANTS = {
   LIGHT_POINT: 2,
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
-  FX_TWOSIDED: 16
+  FX_TWOSIDED: 16,
+  ...COLLIDE_CONSTANTS
 };
-var byte = (v) => Math.max(0, Math.min(255, v | 0));
-var tidy = (v) => {
-  const r = Math.round(v * 1e9) / 1e9;
-  return r === 0 ? 0 : r;
-};
-var unit = (v) => byte(v) / 255;
 function createEngineCommands(engine) {
   const world = engine.world;
-  const entity = (handle) => {
-    const e = world.handles.get(handle);
-    if (e instanceof Entity) return e;
-    if (handle === 0) throw runtimeError("Entity handle is 0 (no entity)");
-    if (e instanceof Texture) throw runtimeError(`Handle ${handle} is a texture, not an entity`);
-    throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
-  };
-  const parentOf = (handle) => handle === 0 ? null : entity(handle);
-  const texture = (handle) => {
-    const t = world.handles.get(handle);
-    if (t instanceof Texture) return t;
-    if (handle === 0) throw runtimeError("Texture handle is 0 (no texture)");
-    if (t instanceof Entity) throw runtimeError(`Handle ${handle} is an entity, not a texture`);
-    throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
-  };
-  const ofKind = (handle, kind, what) => {
-    const e = entity(handle);
-    if (e.kind !== kind) throw runtimeError(`Entity ${handle} is not a ${what}`);
-    return e;
-  };
+  const { entity, parentOf, texture, ofKind } = handleHelpers(world);
   const material = (handle) => {
     const e = entity(handle);
     if (!e.material) throw runtimeError(`Entity ${handle} is a ${e.kind}, which has no surface to colour`);
@@ -4323,6 +5086,7 @@ function createEngineCommands(engine) {
   const style = engine.style;
   const step = () => engine.input.step;
   return {
+    ...createCollideCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -4363,8 +5127,8 @@ function createEngineCommands(engine) {
     lightcolor(light, r, g, b) {
       ofKind(light, "light", "light").light.color = [unit(r), unit(g), unit(b)];
     },
-    lightrange(light, range) {
-      ofKind(light, "light", "light").light.range = Math.max(0, range);
+    lightrange(light, range2) {
+      ofKind(light, "light", "light").light.range = Math.max(0, range2);
     },
     ambientlight(r, g, b) {
       world.ambient = [unit(r), unit(g), unit(b)];
@@ -20556,26 +21320,26 @@ function WebGLAttributes(gl) {
       let mergeIndex = 0;
       for (let i = 1; i < updateRanges.length; i++) {
         const previousRange = updateRanges[mergeIndex];
-        const range = updateRanges[i];
-        if (range.start <= previousRange.start + previousRange.count + 1) {
+        const range2 = updateRanges[i];
+        if (range2.start <= previousRange.start + previousRange.count + 1) {
           previousRange.count = Math.max(
             previousRange.count,
-            range.start + range.count - previousRange.start
+            range2.start + range2.count - previousRange.start
           );
         } else {
           ++mergeIndex;
-          updateRanges[mergeIndex] = range;
+          updateRanges[mergeIndex] = range2;
         }
       }
       updateRanges.length = mergeIndex + 1;
       for (let i = 0, l = updateRanges.length; i < l; i++) {
-        const range = updateRanges[i];
+        const range2 = updateRanges[i];
         gl.bufferSubData(
           bufferType,
-          range.start * array.BYTES_PER_ELEMENT,
+          range2.start * array.BYTES_PER_ELEMENT,
           array,
-          range.start,
-          range.count
+          range2.start,
+          range2.count
         );
       }
       attribute.clearUpdateRanges();
@@ -27639,18 +28403,18 @@ function WebGLTextures(_gl, extensions, state, properties, capabilities, utils, 
       let mergeIndex = 0;
       for (let i = 1; i < updateRanges.length; i++) {
         const previousRange = updateRanges[mergeIndex];
-        const range = updateRanges[i];
+        const range2 = updateRanges[i];
         const previousEnd = previousRange.start + previousRange.count;
-        const currentRow = getRow(range.start, image.width, componentStride);
+        const currentRow = getRow(range2.start, image.width, componentStride);
         const previousRow = getRow(previousRange.start, image.width, componentStride);
-        if (range.start <= previousEnd + 1 && currentRow === previousRow && getRow(range.start + range.count - 1, image.width, componentStride) === currentRow) {
+        if (range2.start <= previousEnd + 1 && currentRow === previousRow && getRow(range2.start + range2.count - 1, image.width, componentStride) === currentRow) {
           previousRange.count = Math.max(
             previousRange.count,
-            range.start + range.count - previousRange.start
+            range2.start + range2.count - previousRange.start
           );
         } else {
           ++mergeIndex;
-          updateRanges[mergeIndex] = range;
+          updateRanges[mergeIndex] = range2;
         }
       }
       updateRanges.length = mergeIndex + 1;
@@ -27659,9 +28423,9 @@ function WebGLTextures(_gl, extensions, state, properties, capabilities, utils, 
       const currentUnpackSkipRows = state.getParameter(_gl.UNPACK_SKIP_ROWS);
       state.pixelStorei(_gl.UNPACK_ROW_LENGTH, image.width);
       for (let i = 0, l = updateRanges.length; i < l; i++) {
-        const range = updateRanges[i];
-        const pixelStart = Math.floor(range.start / componentStride);
-        const pixelCount = Math.ceil(range.count / componentStride);
+        const range2 = updateRanges[i];
+        const pixelStart = Math.floor(range2.start / componentStride);
+        const pixelCount = Math.ceil(range2.count / componentStride);
         const x = pixelStart % image.width;
         const y = Math.floor(pixelStart / image.width);
         const width = pixelCount;

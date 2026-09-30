@@ -7,6 +7,8 @@ import { newHit, sweepTriangle, sweepSphere, rayTriangle, raySphere } from '../.
 import { screenRay, projectPoint } from '../../src/engine/collide/camera.js';
 import { createSphere, createTorus } from '../../src/engine/scene/mesh.js';
 import { World } from '../../src/engine/scene/world.js';
+import { pickLine } from '../../src/engine/collide/picking.js';
+import { createPlane } from '../../src/engine/scene/mesh.js';
 import { Vec3 } from '../../src/engine/math/vec3.js';
 import { assert, near } from './assert.mjs';
 
@@ -267,6 +269,33 @@ test('camera projection and the ray through a pixel agree', () =>
   // The top edge of the screen is half the field of view above.
   const top = screenRay(cam, 400, 0, 800, 600);
   near(Math.acos(top.direction.dot(fwd)) * 180 / Math.PI, 35, 1e-9, 'half fov');
+});
+
+test('picked normals stay perpendicular under a parent with uneven scale', () =>
+{
+  // A plane rolled 45 degrees under a parent stretched 3 times in Y: the
+  // world surface is sheared, and the right normal comes from the inverse
+  // transpose of the world matrix, not the matrix itself.
+  const world = new World();
+  const parent = world.createEntity('pivot');
+  parent.setScale(1, 3, 1);
+  const plane = world.createMesh(createPlane(1), parent);
+  plane.setRotation(0, 0, 45, false);
+  plane.pickMode = 2;
+  const hit = pickLine(world, new Vec3(-5, 0.2, 0.1), new Vec3(10, 0, 0), 0);
+  assert(hit.entity === plane, 'missed the plane');
+  const m = plane.worldMatrix;
+  const ax = new Vec3(1, 0, 0).applyMat4Direction(m);
+  const az = new Vec3(0, 0, 1).applyMat4Direction(m);
+  const n = new Vec3(hit.nx, hit.ny, hit.nz);
+  near(n.length(), 1, 1e-12, 'unit normal');
+  near(n.dot(ax), 0, 1e-12, 'perpendicular to the surface (x)');
+  near(n.dot(az), 0, 1e-12, 'perpendicular to the surface (z)');
+  assert(n.x < 0, 'normal faces the ray');
+  // The hit point lies on the line and on the surface.
+  const p = new Vec3(hit.x, hit.y, hit.z);
+  near(p.y, 0.2, 1e-12, 'on the line');
+  near(p.clone().sub(plane.worldPosition()).dot(n), 0, 1e-12, 'on the surface');
 });
 
 export default unit;

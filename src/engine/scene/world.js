@@ -82,6 +82,12 @@ export class World
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.pickMode = src.pickMode;
+    e.obscurer = src.obscurer;
+    e.collisionType = src.collisionType;
+    e.radiusX = src.radiusX;
+    e.radiusY = src.radiusY;
+    e.box = src.box ? [...src.box] : null;
     if (parent) e.setParent(parent, false);
     for (const c of src.children) this.copyEntity(c, e);
     return e;
