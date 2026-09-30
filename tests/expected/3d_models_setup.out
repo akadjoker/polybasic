@@ -1,0 +1,9 @@
+in main: loaded 0, has a body 1, vx 0.0, copies have 0 parts
+Animate: the model has 0 animations, not number 1
+first Update: copies have 1 and 1 parts, their own: 1
+copy 2 kept its place: -1.0, the coin model has no animations: animating 0
+the crate got its body, mass 2 and the push: vx 1.0
+picked the ground model: 1 at y 0.5
+the ball stopped on the ground model: 1, y 0.8
+the crate landed on it: 1, y 1
+[ended]

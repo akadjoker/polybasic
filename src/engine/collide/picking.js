@@ -3,14 +3,15 @@
 //
 // An entity is pickable when it is shown and has a pick mode:
 //   1 sphere   a sphere of its EntityRadius around its position
-//   2 polygon  the triangles of its mesh, both sides
+//   2 polygon  the triangles of its mesh (a model: of all its parts),
+//              both sides
 //   3 box      its EntityBox (or mesh bounds), from the outside
 // A line with a radius sweeps a sphere of that radius instead of a thin
 // ray, so it finds what a ball of that size would hit first.
 
 import { meshBvh } from './bvh.js';
 import { newHit, sweepTriangle, sweepSphere, rayTriangle, raySphere } from './sweep.js';
-import { boxTriangles, shapeBounds, segmentNearBox } from './shapes.js';
+import { boxTriangles, shapeBounds, segmentNearBox, meshParts } from './shapes.js';
 import { Entity } from '../scene/entity.js';
 import { Vec3 } from '../math/vec3.js';
 
@@ -63,8 +64,12 @@ export function pickLine(world, origin, line, radius, accept = () => true)
     }
     else if (e.pickMode === PICK_POLYGON)
     {
-      if (r > 0) sweepMesh(e, origin, line, r, best);
-      else rayMesh(e, origin, line, best);
+      // A model is picked as a whole: any of its parts' triangles.
+      for (const part of meshParts(e))
+      {
+        if (r > 0) sweepMesh(part, origin, line, r, best);
+        else rayMesh(part, origin, line, best);
+      }
     }
     if (best.t < before) found = e;
   }

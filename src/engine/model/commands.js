@@ -31,13 +31,13 @@ export function createModelCommands(engine)
   const { entity, parentOf } = handleHelpers(engine.world);
   const models = engine.models;
 
-  // The model of a LoadMesh pivot, once it has arrived.
-  const model = (handle) =>
+  // The model of a LoadMesh pivot (loaded, unless `loading` is allowed).
+  const model = (handle, loading = false) =>
   {
     const e = entity(handle);
     if (!e.model) throw runtimeError(`Entity ${handle} is not a model (LoadMesh makes models)`);
     if (e.model.failed) throw runtimeError(`Model ${handle} could not be loaded`);
-    if (!e.model.loaded) throw runtimeError(`Model ${handle} is still loading (MeshLoaded tells when it is in)`);
+    if (!e.model.loaded && !loading) throw runtimeError(`Model ${handle} is still loading: its parts and animations are there from the first Update (MeshLoaded tells when)`);
     return e;
   };
   const animation = (e, index) =>
@@ -84,19 +84,21 @@ export function createModelCommands(engine)
     },
     animate(handle, index, mode, speed)
     {
-      const e = model(handle);
+      // A model still loading starts the animation when it arrives.
+      const e = model(handle, true);
       if (mode < ANIM_STOP || mode > ANIM_PINGPONG) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_ONCE or ANIM_PINGPONG (0 to 3), not ${mode}`);
-      if (index !== 0) animation(e, index);
+      if (index < 0) throw runtimeError(`Animate needs an animation number from 1, or 0 to stop, not ${index}`);
+      if (index !== 0 && e.model.loaded) animation(e, index);
       models.play(e, index, mode, speed);
     },
     animating(handle)
     {
-      const e = model(handle);
+      const e = model(handle, true);
       return e.model.state && e.model.state.playing ? 1 : 0;
     },
     animtime(handle)
     {
-      const e = model(handle);
+      const e = model(handle, true);
       return e.model.state ? tidy(e.model.state.time) : 0;
     },
     setanimtime(handle, time)

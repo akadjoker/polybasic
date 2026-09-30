@@ -4620,6 +4620,20 @@ function raySphere(px, py, pz, dx, dy, dz, sx, sy, sz, r, hit) {
 }
 
 // src/engine/collide/shapes.js
+function meshParts(e) {
+  if (e.mesh) return [e];
+  if (!e.model || !e.model.loaded) return [];
+  const parts = [];
+  const walk = (n) => {
+    for (const c of n.children) {
+      if (!c.visible) continue;
+      if (c.mesh && c.mesh.positions.length) parts.push(c);
+      walk(c);
+    }
+  };
+  walk(e);
+  return parts;
+}
 function localBox(e) {
   if (e.box) {
     const [x, y, z, w, h, d] = e.box;
@@ -4628,6 +4642,26 @@ function localBox(e) {
   if (e.mesh && !e.mesh.bounds.isEmpty()) {
     const b = e.mesh.bounds;
     return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+  }
+  const parts = e.mesh ? [] : meshParts(e);
+  const inv = e.worldMatrix.clone();
+  if (parts.length && inv.invert()) {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const p = new Vec3();
+    for (const part of parts) {
+      const b = part.mesh.bounds;
+      for (let i = 0; i < 8; i++) {
+        p.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMat4(part.worldMatrix).applyMat4(inv);
+        lo[0] = Math.min(lo[0], p.x);
+        lo[1] = Math.min(lo[1], p.y);
+        lo[2] = Math.min(lo[2], p.z);
+        hi[0] = Math.max(hi[0], p.x);
+        hi[1] = Math.max(hi[1], p.y);
+        hi[2] = Math.max(hi[2], p.z);
+      }
+    }
+    return { min: lo, max: hi };
   }
   return { min: [-1, -1, -1], max: [1, 1, 1] };
 }
@@ -4669,9 +4703,19 @@ function shapeBounds(e, mode) {
     return { min: [p2.x - r, p2.y - r, p2.z - r], max: [p2.x + r, p2.y + r, p2.z + r] };
   }
   if (mode === 2) {
-    if (!e.mesh || e.mesh.bounds.isEmpty()) return null;
-    const b = e.worldBounds();
-    return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+    const lo2 = [Infinity, Infinity, Infinity];
+    const hi2 = [-Infinity, -Infinity, -Infinity];
+    for (const part of meshParts(e)) {
+      if (part.mesh.bounds.isEmpty()) continue;
+      const b = part.worldBounds();
+      lo2[0] = Math.min(lo2[0], b.min.x);
+      lo2[1] = Math.min(lo2[1], b.min.y);
+      lo2[2] = Math.min(lo2[2], b.min.z);
+      hi2[0] = Math.max(hi2[0], b.max.x);
+      hi2[1] = Math.max(hi2[1], b.max.y);
+      hi2[2] = Math.max(hi2[2], b.max.z);
+    }
+    return lo2[0] <= hi2[0] ? { min: lo2, max: hi2 } : null;
   }
   const { min, max } = localBox(e);
   const lo = [Infinity, Infinity, Infinity];
@@ -4741,8 +4785,10 @@ function pickLine(world, origin, line, radius, accept = () => true) {
         else rayTriangle(ox, oy, oz, lx, ly, lz, tri, false, best);
       }
     } else if (e.pickMode === PICK_POLYGON) {
-      if (r > 0) sweepMesh(e, origin, line, r, best);
-      else rayMesh(e, origin, line, best);
+      for (const part of meshParts(e)) {
+        if (r > 0) sweepMesh(part, origin, line, r, best);
+        else rayMesh(part, origin, line, best);
+      }
     }
     if (best.t < before) found = e;
   }
@@ -4904,19 +4950,29 @@ var Collisions = class {
     this.cache = /* @__PURE__ */ new Map();
     this.tri = new Float64Array(9);
   }
-  // The world box of an entity's shape for a method, cached for the step.
-  boundsOf(e, method) {
+  entry(e) {
     let c = this.cache.get(e);
     if (!c) {
-      c = { bounds: [], boxTris: null, inv: void 0 };
+      c = { bounds: [], boxTris: null, inv: void 0, parts: null };
       this.cache.set(e, c);
     }
+    return c;
+  }
+  // The world box of an entity's shape for a method, cached for the step.
+  boundsOf(e, method) {
+    const c = this.entry(e);
     if (c.bounds[method] === void 0) c.bounds[method] = shapeBounds(e, method);
     return c.bounds[method];
   }
+  // The entities whose triangles make up e (itself, or a model's parts).
+  partsOf(e) {
+    const c = this.entry(e);
+    if (!c.parts) c.parts = meshParts(e);
+    return c.parts;
+  }
   // The inverse world matrix, or null when there is none (a zero scale).
   inverseOf(e) {
-    const c = this.cache.get(e);
+    const c = this.entry(e);
     if (c.inv === void 0) {
       const inv = e.worldMatrix.clone();
       c.inv = inv.invert() ? inv : null;
@@ -4924,7 +4980,7 @@ var Collisions = class {
     return c.inv;
   }
   boxTrianglesOf(e) {
-    const c = this.cache.get(e);
+    const c = this.entry(e);
     if (!c.boxTris) c.boxTris = boxTriangles(e);
     return c.boxTris;
   }
@@ -5067,11 +5123,13 @@ var Collisions = class {
       const before = hit.t;
       if (rule.method === COLLIDE_SPHERE) this.sphereHit(other, wPos, wVel, rx, ry, hit);
       else if (rule.method === COLLIDE_POLYGON) {
-        const inv = other.mesh ? this.inverseOf(other) : null;
-        if (!inv) continue;
-        meshTrianglesNear(other, wPos, wVel, [rx, ry, rx], (t) => {
-          sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(t, 0), true, hit);
-        }, inv);
+        for (const part of this.partsOf(other)) {
+          const inv = this.inverseOf(part);
+          if (!inv) continue;
+          meshTrianglesNear(part, wPos, wVel, [rx, ry, rx], (t) => {
+            sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(t, 0), true, hit);
+          }, inv);
+        }
       } else {
         const boxTris = this.boxTrianglesOf(other);
         for (let k = 0; k < 12; k++) {
@@ -5284,15 +5342,19 @@ var SHAPE_CYLINDER = 4;
 var SHAPE_HULL = 5;
 var SHAPE_MESH = 6;
 var TYPES = { [BODY_STATIC]: "static", [BODY_DYNAMIC]: "dynamic", [BODY_KINEMATIC]: "kinematic" };
+var MESH_NOT_DYNAMIC = "SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX";
 var DEFAULT_GRAVITY = [0, -19.6, 0];
 var Physics = class {
-  constructor(world, load) {
+  constructor(world, load, warn2 = () => {
+  }) {
     this.world = world;
     this.load = load;
+    this.warn = warn2;
     this.backend = null;
     this.loading = null;
     this.gravity = [...DEFAULT_GRAVITY];
     this.bodies = /* @__PURE__ */ new Map();
+    this.waiting = /* @__PURE__ */ new Map();
   }
   get available() {
     return Boolean(this.load);
@@ -5312,8 +5374,30 @@ var Physics = class {
     this.gravity = [x, y, z];
     if (this.backend) this.backend.setGravity(x, y, z);
   }
+  // The body of e: { id, type, ... }, or { pending: true, type, ops } for
+  // a model that has not arrived yet, or null.
   body(e) {
-    return this.bodies.get(e) || null;
+    return this.bodies.get(e) || this.waiting.get(e) || null;
+  }
+  // Like add, for a model still loading: the body is made when
+  // `whenLoaded` calls back, and what was asked of it meanwhile follows.
+  addLater(e, kind, shapeKind, options, whenLoaded) {
+    this.remove(e);
+    const pending = { pending: true, type: TYPES[kind], ops: [] };
+    this.waiting.set(e, pending);
+    whenLoaded(() => {
+      if (this.waiting.get(e) !== pending) return;
+      this.waiting.delete(e);
+      if (!e.alive || !this.backend) return;
+      try {
+        this.add(e, kind, shapeKind, options);
+      } catch (err) {
+        this.warn(`EntityBody: ${err.message}`);
+        return;
+      }
+      const id = this.bodies.get(e).id;
+      for (const op of pending.ops) op(id);
+    });
   }
   // Gives entity e a body of `kind` (BODY_...) with a shape (SHAPE_...).
   // Throws an Error with a message for the program when it cannot.
@@ -5334,6 +5418,7 @@ var Physics = class {
     this.bodies.set(e, { id, type, position, rotation });
   }
   remove(e) {
+    this.waiting.delete(e);
     const b = this.bodies.get(e);
     if (!b) return;
     this.backend.removeBody(b.id);
@@ -5382,6 +5467,7 @@ var Physics = class {
     if (this.backend) this.backend.dispose();
     this.backend = null;
     this.bodies.clear();
+    this.waiting.clear();
   }
 };
 function sameQuat(a, b) {
@@ -5393,9 +5479,7 @@ function buildShape(e, type, kind) {
   if ((kind === SHAPE_HULL || kind === SHAPE_MESH) && !points.triangles.length) {
     throw new Error(`Entity ${e.id} has no mesh to make a ${kind === SHAPE_HULL ? "SHAPE_HULL" : "SHAPE_MESH"} from`);
   }
-  if (kind === SHAPE_MESH && type === "dynamic") {
-    throw new Error("SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX");
-  }
+  if (kind === SHAPE_MESH && type === "dynamic") throw new Error(MESH_NOT_DYNAMIC);
   if (kind === SHAPE_MESH) {
     return { shape: { kind: "mesh", vertices: Float32Array.from(points.positions), indices: Uint32Array.from(points.triangles) }, offset: [0, 0, 0] };
   }
@@ -5537,6 +5621,15 @@ function createPhysicsCommands(engine) {
     if (dynamicOnly && b.type !== "dynamic") throw runtimeError(`Entity ${handle} has a ${b.type} body; only a dynamic body (BODY_DYNAMIC) can be pushed or weighed`);
     return b;
   };
+  const act = (handle, dynamicOnly, fn) => {
+    const b = bodyOf(handle, dynamicOnly);
+    if (b.pending) b.ops.push(fn);
+    else fn(b.id);
+  };
+  const read = (handle, fn) => {
+    const b = bodyOf(handle);
+    return b.pending ? 0 : tidy(fn(b.id));
+  };
   const nonNegative = (v, what) => {
     if (!(v >= 0)) throw runtimeError(`${what} must be 0 or more, not ${v}`);
     return v;
@@ -5550,7 +5643,12 @@ function createPhysicsCommands(engine) {
       ready();
       if (kind < BODY_STATIC || kind > BODY_KINEMATIC) throw runtimeError(`EntityBody kind must be BODY_STATIC, BODY_DYNAMIC or BODY_KINEMATIC (1 to 3), not ${kind}`);
       if (shape < SHAPE_AUTO || shape > SHAPE_MESH) throw runtimeError(`EntityBody shape must be one of the SHAPE_ constants (0 to 6), not ${shape}`);
+      if (shape === SHAPE_MESH && kind === BODY_DYNAMIC) throw runtimeError(`EntityBody: ${MESH_NOT_DYNAMIC}`);
       const e = entity(handle);
+      if (e.model && !e.model.loaded && !e.model.failed) {
+        physics.addLater(e, kind, shape, DEFAULTS, (fn) => engine.models.whenLoaded(e, fn));
+        return;
+      }
       try {
         physics.add(e, kind, shape, DEFAULTS);
       } catch (err) {
@@ -5564,48 +5662,52 @@ function createPhysicsCommands(engine) {
     entityhasbody: (handle) => physics.body(entity(handle)) ? 1 : 0,
     bodymass(handle, mass) {
       if (!(mass > 0)) throw runtimeError(`BodyMass must be more than 0, not ${mass}`);
-      physics.backend.setMass(bodyOf(handle, true).id, mass);
+      act(handle, true, (id) => physics.backend.setMass(id, mass));
     },
     bodyfriction(handle, friction) {
-      physics.backend.setFriction(bodyOf(handle).id, nonNegative(friction, "BodyFriction"));
+      nonNegative(friction, "BodyFriction");
+      act(handle, false, (id) => physics.backend.setFriction(id, friction));
     },
     bodybounce(handle, bounce) {
-      physics.backend.setRestitution(bodyOf(handle).id, nonNegative(bounce, "BodyBounce"));
+      nonNegative(bounce, "BodyBounce");
+      act(handle, false, (id) => physics.backend.setRestitution(id, bounce));
     },
     bodydamping(handle, linear, angular) {
-      physics.backend.setDamping(bodyOf(handle, true).id, nonNegative(linear, "BodyDamping linear"), nonNegative(angular, "BodyDamping angular"));
+      nonNegative(linear, "BodyDamping linear");
+      nonNegative(angular, "BodyDamping angular");
+      act(handle, true, (id) => physics.backend.setDamping(id, linear, angular));
     },
     bodylockrotation(handle, pitch, yaw, roll) {
-      physics.backend.lockRotation(bodyOf(handle, true).id, pitch !== 0, yaw !== 0, roll !== 0);
+      act(handle, true, (id) => physics.backend.lockRotation(id, pitch !== 0, yaw !== 0, roll !== 0));
     },
     applyforce(handle, x, y, z) {
-      physics.backend.applyForce(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.applyForce(id, [x, y, z]));
     },
     applyimpulse(handle, x, y, z) {
-      physics.backend.applyImpulse(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.applyImpulse(id, [x, y, z]));
     },
     applytorque(handle, pitch, yaw, roll) {
-      physics.backend.applyTorque(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+      act(handle, true, (id) => physics.backend.applyTorque(id, toAxes(pitch, yaw, roll)));
     },
     setvelocity(handle, x, y, z) {
-      physics.backend.setVelocity(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.setVelocity(id, [x, y, z]));
     },
     setangularvelocity(handle, pitch, yaw, roll) {
-      physics.backend.setAngularVelocity(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+      act(handle, true, (id) => physics.backend.setAngularVelocity(id, toAxes(pitch, yaw, roll)));
     },
-    bodyvx: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[0]),
-    bodyvy: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[1]),
-    bodyvz: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[2]),
-    bodypitchspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[0] / DEG5),
-    bodyyawspeed: (handle) => tidy(-physics.backend.angularVelocity(bodyOf(handle).id)[1] / DEG5),
-    bodyrollspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[2] / DEG5),
+    bodyvx: (handle) => read(handle, (id) => physics.backend.velocity(id)[0]),
+    bodyvy: (handle) => read(handle, (id) => physics.backend.velocity(id)[1]),
+    bodyvz: (handle) => read(handle, (id) => physics.backend.velocity(id)[2]),
+    bodypitchspeed: (handle) => read(handle, (id) => physics.backend.angularVelocity(id)[0] / DEG5),
+    bodyyawspeed: (handle) => read(handle, (id) => -physics.backend.angularVelocity(id)[1] / DEG5),
+    bodyrollspeed: (handle) => read(handle, (id) => physics.backend.angularVelocity(id)[2] / DEG5),
     countcontacts(handle) {
-      bodyOf(handle);
+      if (bodyOf(handle).pending) return 0;
       return physics.contacts(entity(handle)).length;
     },
     contactentity(handle, index) {
-      bodyOf(handle);
-      const list = physics.contacts(entity(handle));
+      const b = bodyOf(handle);
+      const list = b.pending ? [] : physics.contacts(entity(handle));
       const other = list[index - 1];
       if (!other) throw runtimeError(`Entity ${handle} touches ${list.length} bod${list.length === 1 ? "y" : "ies"}, not number ${index}`);
       return other.id;
@@ -5771,11 +5873,11 @@ var MODEL_CONSTANTS = {
 function createModelCommands(engine) {
   const { entity, parentOf } = handleHelpers(engine.world);
   const models = engine.models;
-  const model = (handle) => {
+  const model = (handle, loading = false) => {
     const e = entity(handle);
     if (!e.model) throw runtimeError(`Entity ${handle} is not a model (LoadMesh makes models)`);
     if (e.model.failed) throw runtimeError(`Model ${handle} could not be loaded`);
-    if (!e.model.loaded) throw runtimeError(`Model ${handle} is still loading (MeshLoaded tells when it is in)`);
+    if (!e.model.loaded && !loading) throw runtimeError(`Model ${handle} is still loading: its parts and animations are there from the first Update (MeshLoaded tells when)`);
     return e;
   };
   const animation = (e, index) => {
@@ -5813,17 +5915,18 @@ function createModelCommands(engine) {
       return i + 1;
     },
     animate(handle, index, mode, speed) {
-      const e = model(handle);
+      const e = model(handle, true);
       if (mode < ANIM_STOP || mode > ANIM_PINGPONG) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_ONCE or ANIM_PINGPONG (0 to 3), not ${mode}`);
-      if (index !== 0) animation(e, index);
+      if (index < 0) throw runtimeError(`Animate needs an animation number from 1, or 0 to stop, not ${index}`);
+      if (index !== 0 && e.model.loaded) animation(e, index);
       models.play(e, index, mode, speed);
     },
     animating(handle) {
-      const e = model(handle);
+      const e = model(handle, true);
       return e.model.state && e.model.state.playing ? 1 : 0;
     },
     animtime(handle) {
-      const e = model(handle);
+      const e = model(handle, true);
       return e.model.state ? tidy(e.model.state.time) : 0;
     },
     setanimtime(handle, time) {
@@ -6614,10 +6717,10 @@ var Models = class {
   load(file, url, parent) {
     const engine = this.engine;
     const root = engine.world.createEntity("pivot", parent);
-    root.model = { data: null, nodes: [], state: null, loaded: false, failed: false };
+    root.model = newModel();
     const fail2 = (message) => {
-      root.model.failed = true;
       engine.warn(`LoadMesh: could not load "${file}": ${message}`);
+      this.failed(root);
     };
     if (!engine.loadFile) {
       fail2("this platform cannot read files");
@@ -6641,6 +6744,22 @@ var Models = class {
     engine.track(build);
     return root;
   }
+  // Runs fn once the model of `root` has arrived (now if it has); onFail
+  // if it never will.
+  whenLoaded(root, fn, onFail = null) {
+    const m = root.model;
+    if (m.loaded) fn();
+    else if (m.failed) {
+      if (onFail) onFail();
+    } else m.waiting.push({ fn, onFail });
+  }
+  failed(root) {
+    const m = root.model;
+    m.failed = true;
+    const waiting = m.waiting;
+    m.waiting = [];
+    for (const w of waiting) if (w.onFail) w.onFail();
+  }
   build(root, data) {
     const world = this.engine.world;
     const nodes = new Array(data.nodes.length).fill(null);
@@ -6648,9 +6767,9 @@ var Models = class {
       const n = data.nodes[index];
       let e;
       if (n.mesh >= 0) {
-        const m = data.meshes[n.mesh];
-        e = world.createMesh(m.mesh, parent);
-        e.materials = m.materials.map((mat) => mat.clone());
+        const m2 = data.meshes[n.mesh];
+        e = world.createMesh(m2.mesh, parent);
+        e.materials = m2.materials.map((mat) => mat.clone());
       } else e = world.createEntity("pivot", parent);
       e.name = n.name;
       e.position.copy(n.position);
@@ -6662,15 +6781,29 @@ var Models = class {
       for (const c of n.children) make(c, e);
     };
     for (const r of data.roots) make(r, root);
-    root.model.data = data;
-    root.model.nodes = nodes;
-    root.model.loaded = true;
+    const m = root.model;
+    m.data = data;
+    m.nodes = nodes;
+    m.loaded = true;
+    const waiting = m.waiting;
+    m.waiting = [];
+    for (const w of waiting) w.fn();
   }
   // CopyEntity of a model pivot: the copy gets the same model, with its
   // own nodes (found by their place in the tree) and no animation playing.
+  // A copy of a model still loading gets its own parts when it arrives.
   copy(src, dst) {
     const m = src.model;
-    dst.model = { data: m.data, nodes: [], state: null, loaded: m.loaded, failed: m.failed };
+    dst.model = newModel();
+    if (!m.loaded) {
+      dst.model.failed = m.failed;
+      this.whenLoaded(src, () => {
+        if (dst.alive) this.build(dst, m.data);
+      }, () => this.failed(dst));
+      return;
+    }
+    dst.model.data = m.data;
+    dst.model.loaded = true;
     dst.model.nodes = m.nodes.map((node) => {
       if (!node) return null;
       const path = [];
@@ -6682,6 +6815,16 @@ var Models = class {
   }
   play(root, index, mode, speed) {
     const m = root.model;
+    if (!m.loaded) {
+      this.whenLoaded(root, () => {
+        if (index > m.data.animations.length) {
+          this.engine.warn(`Animate: the model has ${m.data.animations.length} animations, not number ${index}`);
+          return;
+        }
+        this.play(root, index, mode, speed);
+      });
+      return;
+    }
     if (mode === ANIM_STOP || index === 0) {
       m.state = null;
       this.animated.delete(root);
@@ -6717,6 +6860,9 @@ var Models = class {
     }
   }
 };
+function newModel() {
+  return { data: null, nodes: [], state: null, loaded: false, failed: false, waiting: [] };
+}
 
 // src/engine/engine.js
 var DEFAULT_WIDTH = 800;
@@ -6741,7 +6887,7 @@ var Engine = class {
   constructor(options = {}) {
     this.world = new World();
     this.collisions = new Collisions(this.world);
-    this.physics = new Physics(this.world, options.loadPhysics || null);
+    this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();

@@ -47,7 +47,7 @@ export class Engine
   {
     this.world = new World();
     this.collisions = new Collisions(this.world);
-    this.physics = new Physics(this.world, options.loadPhysics || null);
+    this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();
