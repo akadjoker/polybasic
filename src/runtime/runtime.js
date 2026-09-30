@@ -35,6 +35,7 @@ export function createRuntime(host, options = {})
   rt.commands = createCoreCommands(rt);
   // Later phases (graphics, 3D, input) add their commands here.
   for (const extra of options.commands || []) Object.assign(rt.commands, extra(rt));
+  if (options.engine) Object.assign(rt.commands, options.engine.commands(rt));
   return rt;
 }
 

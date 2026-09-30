@@ -1,0 +1,11 @@
+camera pitch 21.8014 yaw 0.0
+distance 5.38516
+frames 45
+cube yaw 45.0 pitch 0.0
+ship at -1.71347, 0.0, 4.03668
+ship yaw 45.0
+frames 90
+cube yaw 90.0 pitch 0.0
+ship at -5.77943, 0.0, 5.67943
+ship yaw 90.0
+[ended]

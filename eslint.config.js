@@ -2,7 +2,7 @@
 // goes on its own line. Single-line blocks are allowed so short guards such
 // as `if (done) { return; }` do not have to be spread over four lines.
 export default [
-  { ignores: ['node_modules/**', 'dist/**'] },
+  { ignores: ['node_modules/**', 'dist/**', 'web/vendor/**'] },
   {
     files: ['**/*.js', '**/*.mjs'],
     languageOptions: {

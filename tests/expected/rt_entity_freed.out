@@ -1,0 +1,3 @@
+freed
+0
+Runtime error (rt_entity_freed.pb, line 7): Entity 1 does not exist (it was freed, or never created)

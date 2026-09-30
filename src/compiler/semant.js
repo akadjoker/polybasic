@@ -50,6 +50,7 @@ class Analyser
   constructor(program, options)
   {
     this.program = program;
+    this.options = options;
     this.commands = buildCommandTable(options.commands || []);
     this.types = new Map();
     this.globals = new Map();
@@ -61,6 +62,7 @@ class Analyser
   run()
   {
     const p = this.program;
+    this.declareBuiltinConstants(this.options.constants || {});
     for (const t of p.types) this.declareType(t);
     for (const t of p.types) this.declareFields(t);
     for (const c of p.consts) this.declareConst(c);
@@ -148,10 +150,30 @@ class Analyser
     }
   }
 
+  // Named values provided by command sets (KEY_LEFT, LIGHT_POINT, ...).
+  declareBuiltinConstants(constants)
+  {
+    for (const [name, value] of Object.entries(constants))
+    {
+      let type = STRING;
+      if (typeof value === 'number') type = Number.isInteger(value) ? INT : FLOAT;
+      this.globals.set(name.toLowerCase(), { kind: 'const', name, key: name.toLowerCase(), type, value, builtin: true });
+    }
+  }
+
+  // A user declaration may not reuse the name of a Const or Global.
+  checkFreeName(nameTok)
+  {
+    const known = this.globals.get(nameTok.v);
+    if (!known) return;
+    if (known.builtin) fail(`'${nameTok.text}' is a built-in constant; choose another name`, nameTok);
+    fail(`'${nameTok.text}' is already declared as a ${known.kind === 'const' ? 'Const' : 'Global'}`, nameTok);
+  }
+
   declareConst(node)
   {
     const key = node.name.v;
-    if (this.globals.has(key)) fail(`'${node.name.text}' is already declared`, node.pos);
+    this.checkFreeName(node.name);
     let type = this.tagType(node.tag);
     if (type && type.kind === 'struct') fail('A Const must be an Int, Float or String', node.pos);
     // Consts see only the consts declared before them.
@@ -167,10 +189,7 @@ class Analyser
     for (const d of stmt.decls)
     {
       const key = d.name.v;
-      if (this.globals.has(key))
-      {
-        fail(`'${d.name.text}' is already declared as a ${this.globals.get(key).kind === 'const' ? 'Const' : 'Global'}`, d.pos);
-      }
+      this.checkFreeName(d.name);
       const decl = {
         kind: 'global',
         name: d.name.text,

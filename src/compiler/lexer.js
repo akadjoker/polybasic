@@ -11,7 +11,7 @@ import { CompileError } from './errors.js';
 // Every keyword, keyed by its lower-case spelling. The value is the canonical
 // token name the parser matches on. Two-word forms map to the same name as
 // their one-word forms.
-const KEYWORDS = new Map([
+export const KEYWORDS = new Map([
   ['dim', 'dim'], ['exit', 'exit'], ['return', 'return'],
   ['if', 'if'], ['then', 'then'], ['else', 'else'], ['elseif', 'elseif'],
   ['endif', 'endif'], ['while', 'while'], ['wend', 'wend'],

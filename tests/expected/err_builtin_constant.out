@@ -1,0 +1,1 @@
+err_builtin_constant.pb:1:7: error: 'KEY_LEFT' is a built-in constant; choose another name

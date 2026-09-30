@@ -1,0 +1,14 @@
+children of sun: 1, first is planet: 1
+moon local 2.0 global 14.0
+after the sun turned: planet 0.0,10.0  moon 0.0,14.0
+moon yaw local 0.0 global 90.0
+moon placed at world y=5: local -5.0,2.5,0.0 world y 5.0
+moon freed from planet: parent 0 world y 5.0
+moon back with local values kept: world 0.0,10.0,10.0
+box after local translate -1.0,0.0
+box after global translate -1.0,1.0
+box yaw world 30.0 local -60.0
+copy has 1 child, planet still at 0.0,10.0
+name: twin hidden: 0
+hidden now: 1
+exists: copy 0 child 0 planet 1

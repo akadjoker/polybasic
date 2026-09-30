@@ -24,6 +24,10 @@ export async function loadProgram(js)
 //   maxUpdates  stop after this many Update calls (tests, `--frames`)
 //   signal      an AbortSignal that stops the loop (the playground's Stop)
 //   commands    extra command factories (see runtime.js)
+//   engine      an object that joins the frame loop (the 3D engine):
+//               commands(rt), beginStep() before each Update,
+//               renderFrame() once per frame after the Updates, and
+//               beginDraw() / endDraw() around Draw
 //
 // Resolves to { status, updates, error? } where status is
 //   'finished'  main body done and there is no Update/Draw
@@ -33,6 +37,7 @@ export async function loadProgram(js)
 export function runProgram(module, host, options = {})
 {
   const rt = createRuntime(host, options);
+  const engine = options.engine || null;
   const result = { status: 'finished', updates: 0 };
 
   const fail = (e) =>
@@ -58,7 +63,25 @@ export function runProgram(module, host, options = {})
   {
     return Promise.resolve(fail(e));
   }
-  if (!program.update && !program.draw) return Promise.resolve(result);
+  if (!program.update && !program.draw)
+  {
+    // A program that set up a scene but has no frame functions still gets
+    // one picture of it.
+    if (engine && engine.graphicsSet)
+    {
+      try
+      {
+        engine.renderFrame();
+        engine.beginDraw();
+        engine.endDraw();
+      }
+      catch (e)
+      {
+        return Promise.resolve(fail(e));
+      }
+    }
+    return Promise.resolve(result);
+  }
 
   return new Promise((resolve) =>
   {
@@ -96,6 +119,7 @@ export function runProgram(module, host, options = {})
         {
           pending -= STEP_MS;
           n++;
+          if (engine) engine.beginStep();
           if (program.update)
           {
             rt.frameCount++;
@@ -105,7 +129,13 @@ export function runProgram(module, host, options = {})
           if (options.maxUpdates && result.updates >= options.maxUpdates) break;
         }
         if (n === MAX_UPDATES_PER_FRAME) pending = 0;
+        if (engine)
+        {
+          engine.renderFrame();
+          engine.beginDraw();
+        }
         if (program.draw) program.draw();
+        if (engine) engine.endDraw();
       }
       catch (e)
       {

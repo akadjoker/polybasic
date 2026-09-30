@@ -5,7 +5,8 @@ import { analyse } from './semant.js';
 import { generate } from './codegen.js';
 
 export { CompileError } from './errors.js';
-export { CORE_COMMANDS } from './builtins.js';
+export { CORE_COMMANDS, parseSignature } from './builtins.js';
+export { KEYWORDS } from './lexer.js';
 
 // options:
 //   file      name of the source file, used in messages (default "main.pb")

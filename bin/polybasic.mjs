@@ -12,8 +12,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { compile, CompileError } from '../src/compiler/index.js';
-import { loadProgram, runProgram, NodeHost } from '../src/runtime/index.js';
+import { compile, CompileError, loadProgram, runProgram, NodeHost } from '../src/index.js';
+
 
 const USAGE = `Usage:
   polybasic run <file.pb> [--frames N] [--fake-time]   compile and run

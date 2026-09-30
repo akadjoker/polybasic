@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolyBasic Player</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #05080b; color: #e8f1f8; font-family: system-ui, sans-serif; }
+    #screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+    #log { position: fixed; left: 0; bottom: 0; margin: 0; padding: 6px 10px; font: 12px monospace; white-space: pre-wrap; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <!-- A bare player: runs the .pb named by ?src= (default: the spin example).
+       ?frames=N stops after N updates. The playground is index.html. -->
+  <div id="screen"></div>
+  <pre id="log"></pre>
+  <script type="module">
+    import { createScreen, compile, loadProgram, runProgram, BrowserHost, CompileError } from '../dist/polybasic.js';
+
+    const params = new URLSearchParams(location.search);
+    const src = new URL(params.get('src') || '../examples/spin.pb', location.href);
+    const log = document.getElementById('log');
+    const screen = createScreen(document.getElementById('screen'));
+    const state = { status: 'loading', output: '', result: null, engine: null };
+    window.polybasicPlayer = { state, screen };
+
+    try
+    {
+      const source = await (await fetch(src)).text();
+      const { js } = compile(source, { file: src.pathname.split('/').pop() });
+      const module = await loadProgram(js);
+      const engine = screen.newEngine({ baseUrl: src.href });
+      state.engine = engine;
+      const host = new BrowserHost({
+        output: (text) =>
+        {
+          state.output += text;
+          log.textContent = state.output.split('\n').slice(-8).join('\n');
+        },
+        onError: (text) =>
+        {
+          state.output += text + '\n';
+          log.textContent = text;
+        }
+      });
+      state.status = 'running';
+      screen.canvas.focus();
+      state.result = await runProgram(module, host, { engine, maxUpdates: Number(params.get('frames')) || 0 });
+      state.status = state.result.status;
+    }
+    catch (e)
+    {
+      state.status = 'error';
+      log.textContent = e instanceof CompileError ? e.format() : String(e.stack || e);
+    }
+  </script>
+</body>
+</html>
