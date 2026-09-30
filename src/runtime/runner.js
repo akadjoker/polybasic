@@ -31,7 +31,8 @@ export async function loadProgram(js)
 //               prepare(uses), called with the program's $uses before
 //               main, and whenReady(), called after main: each returns a
 //               promise to wait for, or null when there is nothing to wait
-//               for (then main still runs at once, as without an engine).
+//               for (then main still runs at once, as without an engine),
+//               and stop() once the run is over.
 //
 // Resolves to { status, updates, error? } where status is
 //   'finished'  main body done and there is no Update/Draw
@@ -39,6 +40,18 @@ export async function loadProgram(js)
 //   'stopped'   maxUpdates reached or the signal fired
 //   'error'     a runtime error; `error` has { message, file, line }
 export async function runProgram(module, host, options = {})
+{
+  try
+  {
+    return await run(module, host, options);
+  }
+  finally
+  {
+    if (options.engine && options.engine.stop) options.engine.stop();
+  }
+}
+
+async function run(module, host, options)
 {
   const rt = createRuntime(host, options);
   const engine = options.engine || null;

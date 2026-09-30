@@ -151,6 +151,15 @@ export class Entity
     this.touch();
   }
 
+  // Sets the rotation from a quaternion in world space.
+  setWorldRotation(q)
+  {
+    const r = q.clone();
+    if (this.parent) r.premultiply(this.parent.worldRotation().invert());
+    this.rotation.copy(r.normalize());
+    this.touch();
+  }
+
   // Turns by the given angles: about the entity's own axes, or about the
   // world axes when global.
   turn(pitch, yaw, roll, global)
