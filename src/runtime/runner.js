@@ -28,7 +28,7 @@ export async function loadProgram(js)
 //               commands(rt), beginStep() before each Update, endStep()
 //               after it, renderFrame() once per frame after the Updates,
 //               and beginDraw() / endDraw() around Draw. Optionally
-//               prepare(uses), called with the program's $uses before
+//               prepare(uses, files), called with the program's $uses and $files before
 //               main, and whenReady(), called after main: each returns a
 //               promise to wait for, or null when there is nothing to wait
 //               for (then main still runs at once, as without an engine),
@@ -100,7 +100,7 @@ async function run(module, host, options)
   {
     // Only a real promise is awaited: without one, main runs right here,
     // inside the runProgram call.
-    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || []) : null;
+    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || [], module.$files || []) : null;
     if (preparing && !await wait(preparing)) return result;
     program = module.create(rt);
     program.main();
