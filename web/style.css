@@ -183,6 +183,139 @@ canvas:focus-visible {
   font-size: 11px;
 }
 
+.side-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.program-list .hint {
+  margin: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The open project's files, under its name. */
+.program-list .files {
+  margin: 2px 0 8px 12px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
+}
+
+.program-list .files button {
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 4px 6px;
+  overflow-wrap: anywhere;
+}
+
+.program-list .files .folder {
+  margin: 6px 0 2px 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.program-list .files button.in-folder {
+  padding-left: 16px;
+}
+
+.program-list .main-mark {
+  color: var(--accent);
+  font-family: var(--sans);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.program-list .file-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.program-list .file-actions button {
+  width: auto;
+  flex: 1;
+  justify-content: center;
+  border-color: var(--border);
+}
+
+.info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.info-actions:empty {
+  display: none;
+}
+
+.file-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-2);
+}
+
+.file-bar .file-name {
+  flex: 1;
+  font-family: var(--mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.asset-view {
+  flex: 1;
+  overflow: auto;
+  padding: 14px;
+}
+
+.asset-view h3 {
+  margin: 0 0 4px;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.asset-view p {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.asset-view img {
+  display: block;
+  max-width: 100%;
+  max-height: 50vh;
+  image-rendering: pixelated;
+  background: repeating-conic-gradient(#333 0 25%, #444 0 50%) 0 0 / 16px 16px;
+  border-radius: 6px;
+}
+
+.asset-view code {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
 .editor-pane {
   grid-area: editor;
   display: flex;

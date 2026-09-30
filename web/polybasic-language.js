@@ -124,16 +124,20 @@ const highlightStyle = HighlightStyle.define([
 
 // Compile the whole document; a CompileError becomes an error diagnostic
 // at its line and column, warnings become warnings. Nothing runs.
-export function compileDiagnostics(source, doc, file)
+// `readFile` reads Include files (a project's). Problems found in another
+// file are shown on the first line, naming that file.
+export function compileDiagnostics(source, doc, file, readFile = null)
 {
+  const here = (d) => !d.file || d.file === file;
+  const elsewhere = (d) => ({ message: `${d.message} (in ${d.file}, line ${d.line})`, line: 1, column: 1 });
   try
   {
-    const { warnings } = compile(source, { file });
-    return warnings.map((w) => toDiagnostic(w, doc, 'warning'));
+    const { warnings } = compile(source, { file, readFile: readFile || undefined });
+    return warnings.filter(here).map((w) => toDiagnostic(w, doc, 'warning'));
   }
   catch (err)
   {
-    return [toDiagnostic(err, doc, 'error')];
+    return [toDiagnostic(here(err) ? err : elsewhere(err), doc, 'error')];
   }
 }
 
@@ -177,13 +181,18 @@ function completionSource()
   };
 }
 
-export function polybasicLanguage(fileName)
+// `context()` gives { file, readFile } for the document being edited.
+export function polybasicLanguage(context)
 {
   return [
     StreamLanguage.define(streamParser),
     syntaxHighlighting(highlightStyle),
     autocompletion({ override: [completionSource()] }),
     lintGutter(),
-    linter((view) => compileDiagnostics(view.state.doc.toString(), view.state.doc, fileName()), { delay: 400 })
+    linter((view) =>
+    {
+      const { file, readFile } = context();
+      return compileDiagnostics(view.state.doc.toString(), view.state.doc, file, readFile);
+    }, { delay: 400 })
   ];
 }

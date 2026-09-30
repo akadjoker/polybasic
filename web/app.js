@@ -1,10 +1,14 @@
-// PolyBasic Playground: pick a program, edit it, run it.
+// PolyBasic Playground: pick an example or one of your projects, edit it,
+// run it.
 //
-// The page is static. Programs come from programs/manifest.json and the
-// .pb files it points at; edits are kept in localStorage (per program,
-// only while they differ from the original); "Share" puts the code,
-// compressed, in the URL hash so a link carries it without any server.
-// The structure follows the DivJS playground (same author, MIT).
+// The page is static. Examples come from programs/manifest.json and the
+// .pb files it points at; edits to an example are kept in localStorage
+// (per example, only while they differ from the original), and "Share"
+// puts the code, compressed, in the URL hash. Your projects are kept in
+// the browser (IndexedDB, see projects.js): several files each (programs,
+// images, models), one of them the main program. They go in and out as
+// .zip files. The structure follows the DivJS playground (same author,
+// MIT).
 
 import {
   basicSetup,
@@ -17,25 +21,24 @@ import {
   setDiagnostics
 } from './vendor/codemirror.js';
 import {
-  compile, CompileError, loadProgram, runProgram, BrowserHost, createScreen
+  compile, CompileError, loadProgram, runProgram, BrowserHost, createScreen, PROJECT_SCHEME
 } from '../dist/polybasic.js';
 import { polybasicLanguage, toDiagnostic } from './polybasic-language.js';
+import { ProjectStore, cleanPath } from './projects.js';
 
 const MANIFEST_URL = 'programs/manifest.json';
 // Static hosting caches files; revalidate so a new deploy shows up.
 const FETCH_OPTIONS = { cache: 'no-cache' };
 const STORAGE_PREFIX = 'polybasic.playground.source.';
+// Where the single program of earlier versions of the playground was kept.
+const OLD_NEW_PROGRAM_KEY = STORAGE_PREFIX + 'new';
 const MAX_CONSOLE_LINES = 500;
 const STATS_INTERVAL_MS = 500;
+const SAVE_DELAY_MS = 400;
 
-const NEW_PROGRAM = {
-  id: 'new',
-  title: 'New program',
-  category: 'yours',
-  file: null,
-  description: 'Your own program. It is kept in this browser.',
-  controls: ''
-};
+// Files edited as text; everything else is an asset (image, model...).
+const TEXT_TYPES = new Set(['pb', 'txt', 'md', 'json', 'csv']);
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 const NEW_PROGRAM_SOURCE = `; My first PolyBasic program
 Graphics3D 800, 600
@@ -65,11 +68,17 @@ const el = {
   resetBtn: document.getElementById('resetBtn'),
   shareBtn: document.getElementById('shareBtn'),
   newBtn: document.getElementById('newBtn'),
+  importBtn: document.getElementById('importBtn'),
+  importInput: document.getElementById('importInput'),
+  uploadInput: document.getElementById('uploadInput'),
   programList: document.getElementById('programList'),
   title: document.getElementById('programTitle'),
   description: document.getElementById('programDescription'),
   controls: document.getElementById('programControls'),
+  infoActions: document.getElementById('infoActions'),
+  fileBar: document.getElementById('fileBar'),
   editor: document.getElementById('editor'),
+  assetView: document.getElementById('assetView'),
   screen: document.getElementById('screen'),
   status: document.getElementById('status'),
   stats: document.getElementById('stats'),
@@ -79,20 +88,35 @@ const el = {
 };
 
 let manifest = { programs: [], categories: [] };
-let current = null;          // the open program's manifest entry
-let originalSource = '';     // its unedited source
+let store = null;            // the ProjectStore
+let projects = [];           // the saved projects (records), newest first
+
+// What is open: an example (`current`, its entry in the manifest) or a
+// project (`project`, its record, with `files` in memory and `openPath` the
+// file in the editor).
+let mode = null;             // 'example' | 'project'
+let current = null;
+let originalSource = '';     // the example's unedited source
+let project = null;
+let files = new Map();       // path -> Uint8Array
+let openPath = null;
+const dirty = new Set();     // project files changed since they were saved
+
 let view = null;             // the CodeMirror EditorView
 let screen = null;           // the PolyBasic screen (canvases + input)
 let session = null;          // the running program: { controller, engine, done }
 let settingDoc = false;      // true while the page replaces the document itself
 let sharedUnsaved = false;   // shared code on screen, not saved until the user edits it
 let saveTimer = 0;
+let previewUrl = null;       // object URL of the image shown for an asset
 // Bumped by every run() and stop(): a run overtaken while it was still
 // loading must not start.
 let runToken = 0;
 const sourceCache = new Map();
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
-// ── Storage (may be unavailable: private windows, blocked site data) ────
+// ── Storage for example edits (may be unavailable) ──────────────────────
 
 function storageGet(id)
 {
@@ -156,23 +180,22 @@ async function transform(bytes, stream)
 
 async function encodeSource(text)
 {
-  return bytesToBase64Url(await transform(new TextEncoder().encode(text), new CompressionStream('deflate-raw')));
+  return bytesToBase64Url(await transform(encoder.encode(text), new CompressionStream('deflate-raw')));
 }
 
 async function decodeSource(encoded)
 {
-  return new TextDecoder().decode(await transform(base64UrlToBytes(encoded), new DecompressionStream('deflate-raw')));
+  return decoder.decode(await transform(base64UrlToBytes(encoded), new DecompressionStream('deflate-raw')));
 }
 
 function parseHash()
 {
   const params = new URLSearchParams(window.location.hash.slice(1));
-  return { programId: params.get('p'), code: params.get('code') };
+  return { programId: params.get('p'), projectId: params.get('project'), code: params.get('code') };
 }
 
-function setHash(programId)
+function setHash(hash)
 {
-  const hash = `#p=${encodeURIComponent(programId)}`;
   if (window.location.hash !== hash) window.history.replaceState(null, '', hash);
 }
 
@@ -210,16 +233,22 @@ function logOutput(text)
   el.console.scrollTop = el.console.scrollHeight;
 }
 
-// An error line whose location jumps to the code when clicked.
-function logErrorAt(prefix, message, line, column, kind = 'error')
+// An error line whose location jumps to the code when clicked. In a
+// project, `file` names the file it is in (opened on the click).
+function logErrorAt(prefix, message, line, column, kind = 'error', file = null)
 {
   const entry = logLine('', kind);
   entry.append(`${prefix}: ${message} `);
   if (Number.isInteger(line) && line > 0)
   {
     const link = document.createElement('a');
-    link.textContent = column ? `(line ${line}, column ${column})` : `(line ${line})`;
-    link.addEventListener('click', () => jumpTo(line, column));
+    const where = column ? `line ${line}, column ${column}` : `line ${line}`;
+    link.textContent = file && mode === 'project' ? `(${file}, ${where})` : `(${where})`;
+    link.addEventListener('click', async () =>
+    {
+      if (file && mode === 'project' && file !== openPath) await openFile(file);
+      jumpTo(line, column);
+    });
     entry.append(link);
   }
 }
@@ -248,10 +277,49 @@ function toast(text)
   }, 2500);
 }
 
+// ── Files of a project ──────────────────────────────────────────────────
+
+const extensionOf = (path) => (path.includes('.') ? path.split('.').pop().toLowerCase() : '');
+const isText = (path) => TEXT_TYPES.has(extensionOf(path));
+
+function textOf(path)
+{
+  const bytes = files.get(path);
+  return bytes ? decoder.decode(bytes) : null;
+}
+
+// Include files, read from the project (text files only).
+function readProjectFile(path)
+{
+  const clean = path.replace(/^\/+/, '');
+  if (!isText(clean) || !files.has(clean)) throw new Error(`no file ${clean}`);
+  return textOf(clean);
+}
+
+// The path of `target` as seen from the folder of `from` ("assets/a.png"
+// from "main.pb", "../assets/a.png" from "lib/game.pb").
+function relativePath(from, target)
+{
+  const base = from.split('/').slice(0, -1);
+  const parts = target.split('/');
+  let same = 0;
+  while (same < base.length && same < parts.length - 1 && base[same] === parts[same]) same++;
+  return [...base.slice(same).map(() => '..'), ...parts.slice(same)].join('/');
+}
+
+function formatSize(n)
+{
+  if (n < 1024) return `${n} bytes`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
 // ── Editor ──────────────────────────────────────────────────────────────
 
+// The file being edited, as the compiler names it.
 function fileName()
 {
+  if (mode === 'project') return openPath || 'main.pb';
   return current && current.file ? current.file.split('/').pop() : 'main.pb';
 }
 
@@ -266,18 +334,21 @@ function createEditor()
         // Above basicSetup's own Mod-Enter (insert blank line).
         Prec.highest(keymap.of([
           { key: 'Mod-Enter', run: () => { run(); return true; } },
-          { key: 'Mod-s', run: () => { saveNow(); toast('Saved in this browser'); return true; } }
+          { key: 'Mod-s', run: () => { saveNow().then(() => toast('Saved in this browser')); return true; } }
         ])),
         keymap.of([indentWithTab]),
         oneDarkTheme,
-        polybasicLanguage(fileName),
+        polybasicLanguage(() => ({ file: fileName(), readFile: mode === 'project' ? readProjectFile : null })),
         EditorView.updateListener.of((update) =>
         {
-          if (update.docChanged && !settingDoc)
+          if (!update.docChanged || settingDoc) return;
+          sharedUnsaved = false;
+          if (mode === 'project' && openPath)
           {
-            sharedUnsaved = false;
-            scheduleSave();
+            files.set(openPath, encoder.encode(currentText()));
+            dirty.add(openPath);
           }
+          scheduleSave();
         })
       ]
     })
@@ -307,23 +378,51 @@ function currentText()
   return view.state.doc.toString();
 }
 
-// ── Saving edits ────────────────────────────────────────────────────────
+// Shows the editor, or the panel for an asset (a file that is not text).
+function showEditor(on)
+{
+  el.editor.hidden = !on;
+  el.assetView.hidden = on;
+}
 
-function saveNow()
+// ── Saving ──────────────────────────────────────────────────────────────
+
+// Saves what is not saved yet: an example's edits in localStorage, a
+// project's changed files in the project store.
+async function saveNow()
 {
   clearTimeout(saveTimer);
-  // Shared code only replaces the saved edits once the user changes it.
-  if (!current || sharedUnsaved) return;
-  const text = currentText();
-  if (text === originalSource) storageRemove(current.id);
-  else storageSet(current.id, text);
-  updateEditedState();
+  if (mode === 'example')
+  {
+    // Shared code only replaces the saved edits once the user changes it.
+    if (!current || sharedUnsaved) return;
+    const text = currentText();
+    if (text === originalSource) storageRemove(current.id);
+    else storageSet(current.id, text);
+    updateEditedState();
+    return;
+  }
+  if (mode === 'project' && project && dirty.size)
+  {
+    const id = project.id;
+    const paths = [...dirty];
+    dirty.clear();
+    try
+    {
+      for (const path of paths) await store.writeFile(id, path, files.get(path));
+    }
+    catch (err)
+    {
+      for (const path of paths) dirty.add(path);
+      logLine(`Could not save: ${err.message}`, 'error');
+    }
+  }
 }
 
 function scheduleSave()
 {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveNow, 400);
+  saveTimer = setTimeout(saveNow, SAVE_DELAY_MS);
   updateEditedState();
 }
 
@@ -334,58 +433,193 @@ function isEdited(id)
 
 function updateEditedState()
 {
-  const edited = Boolean(current) && currentText() !== originalSource;
+  const edited = mode === 'example' && Boolean(current) && currentText() !== originalSource;
   el.resetBtn.disabled = !edited;
   for (const button of el.programList.querySelectorAll('button[data-id]'))
   {
     const mark = button.querySelector('.edited');
-    mark.hidden = !(button.dataset.id === current?.id ? edited : isEdited(button.dataset.id));
+    mark.hidden = !(mode === 'example' && button.dataset.id === current?.id ? edited : isEdited(button.dataset.id));
   }
 }
 
-// ── Program list ────────────────────────────────────────────────────────
+// ── The side bar: your projects and their files, then the examples ─────
 
-function allPrograms()
+function sideButton(label, onClick)
 {
-  return [NEW_PROGRAM, ...manifest.programs];
+  const button = document.createElement('button');
+  button.append(label);
+  button.addEventListener('click', onClick);
+  return button;
 }
 
 function renderProgramList()
 {
   el.programList.textContent = '';
-  const categories = [{ id: 'yours', title: 'Yours' }, ...manifest.categories];
-  for (const category of categories)
+  const heading = (text) =>
   {
-    const entries = allPrograms().filter((p) => p.category === category.id);
-    if (category.id === 'yours' && !isEdited(NEW_PROGRAM.id) && current?.id !== NEW_PROGRAM.id) continue;
+    const h = document.createElement('h3');
+    h.textContent = text;
+    el.programList.appendChild(h);
+  };
+
+  heading('Your projects');
+  if (projects.length === 0)
+  {
+    const hint = document.createElement('p');
+    hint.className = 'hint';
+    hint.textContent = 'None yet: start one with + New project, or save an example as a project.';
+    el.programList.appendChild(hint);
+  }
+  for (const p of projects)
+  {
+    const button = sideButton(p.name, () => openProject(p.id));
+    button.dataset.project = p.id;
+    const isOpen = mode === 'project' && project && project.id === p.id;
+    button.setAttribute('aria-current', String(isOpen));
+    el.programList.appendChild(button);
+    if (isOpen) el.programList.appendChild(renderFiles());
+  }
+
+  for (const category of manifest.categories)
+  {
+    const entries = manifest.programs.filter((e) => e.category === category.id);
     if (entries.length === 0) continue;
-    const heading = document.createElement('h3');
-    heading.textContent = category.title;
-    el.programList.appendChild(heading);
+    heading(category.title);
     for (const entry of entries)
     {
-      const button = document.createElement('button');
+      const button = sideButton(entry.title, () => openProgram(entry));
       button.dataset.id = entry.id;
-      button.append(entry.title);
       const mark = document.createElement('span');
       mark.className = 'edited';
       mark.textContent = 'edited';
       mark.hidden = true;
       button.append(mark);
-      button.addEventListener('click', () => openProgram(entry));
+      button.setAttribute('aria-current', String(mode === 'example' && entry.id === current?.id));
       el.programList.appendChild(button);
     }
-  }
-  for (const button of el.programList.querySelectorAll('button[data-id]'))
-  {
-    button.setAttribute('aria-current', String(button.dataset.id === current?.id));
   }
   updateEditedState();
 }
 
+// The open project's files as a tree (folders as labels, files under
+// them), and buttons to add some.
+function renderFiles()
+{
+  const box = document.createElement('div');
+  box.className = 'files';
+  const sorted = [...project.paths].sort((a, b) =>
+  {
+    // Files at the top of the project first, then each folder.
+    const da = a.includes('/') ? 1 : 0;
+    const db = b.includes('/') ? 1 : 0;
+    return da - db || a.localeCompare(b);
+  });
+  let folder = '';
+  for (const path of sorted)
+  {
+    const slash = path.lastIndexOf('/');
+    const dir = slash >= 0 ? path.slice(0, slash + 1) : '';
+    if (dir !== folder)
+    {
+      folder = dir;
+      if (dir)
+      {
+        const label = document.createElement('div');
+        label.className = 'folder';
+        label.textContent = dir;
+        box.appendChild(label);
+      }
+    }
+    const button = sideButton(path.slice(slash + 1), () => openFile(path));
+    if (dir) button.classList.add('in-folder');
+    button.dataset.path = path;
+    button.title = path === project.main ? `${path}: the main program (Run starts here)` : path;
+    button.setAttribute('aria-current', String(path === openPath));
+    if (path === project.main)
+    {
+      const star = document.createElement('span');
+      star.className = 'main-mark';
+      star.textContent = 'main';
+      button.append(star);
+    }
+    box.appendChild(button);
+  }
+  const row = document.createElement('div');
+  row.className = 'file-actions';
+  const add = sideButton('+ File', () => newFile());
+  add.className = 'small';
+  add.id = 'newFileBtn';
+  const upload = sideButton('Upload…', () => el.uploadInput.click());
+  upload.className = 'small';
+  upload.id = 'uploadBtn';
+  upload.title = 'Add images, models or programs to the project';
+  row.append(add, upload);
+  box.appendChild(row);
+  return box;
+}
+
+// Buttons under the title: for an example, saving it as a project; for a
+// project, what can be done to it and to the open file.
+function renderActions()
+{
+  el.infoActions.textContent = '';
+  el.fileBar.textContent = '';
+  const button = (id, label, title, onClick, disabled = false) =>
+  {
+    const b = document.createElement('button');
+    b.id = id;
+    b.className = 'small';
+    b.textContent = label;
+    b.title = title;
+    b.disabled = disabled;
+    b.addEventListener('click', onClick);
+    return b;
+  };
+  if (mode === 'example')
+  {
+    el.infoActions.append(button('saveAsProjectBtn', 'Save as project', 'Copy this example, with its images and models, into a project of your own', saveAsProject));
+    el.fileBar.hidden = true;
+    return;
+  }
+  if (mode !== 'project') return;
+  setProjectInfo();
+  el.infoActions.append(
+    button('renameProjectBtn', 'Rename', 'Rename the project', renameProject),
+    button('exportZipBtn', 'Download .zip', 'Download the whole project as a .zip file', () => exportZip()),
+    button('exportPageBtn', 'Export page', 'Make one web page that plays the program, to put anywhere', () => exportPage()),
+    button('deleteProjectBtn', 'Delete', 'Delete the project from this browser', deleteProject)
+  );
+  el.fileBar.hidden = false;
+  const label = document.createElement('span');
+  label.className = 'file-name';
+  label.textContent = openPath || '';
+  el.fileBar.append(
+    label,
+    button('mainFileBtn', 'Make main', 'Run starts with this program', () => makeMain(), !openPath || openPath === project.main || extensionOf(openPath) !== 'pb'),
+    button('renameFileBtn', 'Rename file', 'Rename or move the file (use / for folders)', () => renameFile(), !openPath),
+    button('deleteFileBtn', 'Delete file', 'Delete the file from the project', () => deleteFile(), !openPath || openPath === project.main)
+  );
+}
+
+function setProjectInfo()
+{
+  const n = project.paths.length;
+  const where = store.persistent ? 'kept in this browser' : 'kept only until this page is closed';
+  setInfo(project.name, `Your project: ${n} file${n === 1 ? '' : 's'}, ${where}. Run starts with ${project.main}.`, '');
+}
+
+function setInfo(title, description, controls)
+{
+  el.title.textContent = title;
+  el.description.textContent = description || '';
+  el.controls.textContent = controls || '';
+  document.title = `${title} - PolyBasic Playground`;
+}
+
+// ── Examples ────────────────────────────────────────────────────────────
+
 async function fetchOriginal(entry)
 {
-  if (!entry.file) return NEW_PROGRAM_SOURCE;
   if (!sourceCache.has(entry.id))
   {
     const response = await fetch(entry.file, FETCH_OPTIONS);
@@ -395,23 +629,28 @@ async function fetchOriginal(entry)
   return sourceCache.get(entry.id);
 }
 
-// Open a program. `sharedSource` is code from a share link: it replaces the
-// editor text (and becomes the saved edit once the user changes it) but
-// never silently overwrites edits already saved for that program.
+// Open an example. `sharedSource` is code from a share link: it replaces
+// the editor text (and becomes the saved edit once the user changes it)
+// but never silently overwrites edits already saved for that example.
 async function openProgram(entry, { sharedSource = null } = {})
 {
-  saveNow();
-  stop();
-  current = entry;
+  await leave();
+  let source;
   try
   {
-    originalSource = await fetchOriginal(entry);
+    source = await fetchOriginal(entry);
   }
   catch (err)
   {
     logLine(String(err.message || err), 'error');
     return;
   }
+  mode = 'example';
+  current = entry;
+  project = null;
+  files = new Map();
+  openPath = null;
+  originalSource = source;
   const saved = storageGet(entry.id);
   let text = saved ?? originalSource;
   let notice = '';
@@ -423,38 +662,307 @@ async function openProgram(entry, { sharedSource = null } = {})
     }
     text = sharedSource;
   }
+  showEditor(true);
   setEditorText(text);
   sharedUnsaved = sharedSource !== null && text !== saved;
-  el.title.textContent = entry.title;
-  el.description.textContent = entry.description || '';
-  el.controls.textContent = entry.controls || '';
-  document.title = `${entry.title} - PolyBasic Playground`;
-  setHash(entry.id);
+  setInfo(entry.title, entry.description, entry.controls);
+  el.shareBtn.disabled = false;
+  setHash(`#p=${encodeURIComponent(entry.id)}`);
   renderProgramList();
+  renderActions();
   await run();
   if (notice) logLine(notice, 'warn');
 }
 
+// Saves what is open and stops it, before something else is opened.
+async function leave()
+{
+  await saveNow();
+  stop();
+}
+
+// ── Projects ────────────────────────────────────────────────────────────
+
+async function refreshProjects()
+{
+  projects = await store.list();
+}
+
+async function openProject(id, { run: runIt = true, path = null } = {})
+{
+  await leave();
+  const record = await store.get(id);
+  if (!record)
+  {
+    logLine('That project is no longer in this browser.', 'error');
+    return false;
+  }
+  mode = 'project';
+  project = record;
+  current = null;
+  files = await store.readAll(id);
+  dirty.clear();
+  setProjectInfo();
+  el.shareBtn.disabled = true;
+  setHash(`#project=${encodeURIComponent(id)}`);
+  await refreshProjects();
+  await openFile(path && files.has(path) ? path : record.main);
+  if (runIt) await run();
+  return true;
+}
+
+// Shows a file of the open project: text in the editor, anything else in
+// the asset panel.
+async function openFile(path)
+{
+  await saveNow();
+  openPath = path;
+  if (isText(path))
+  {
+    showEditor(true);
+    setEditorText(textOf(path) ?? '');
+  }
+  else showAsset(path);
+  renderProgramList();
+  renderActions();
+}
+
+function showAsset(path)
+{
+  showEditor(false);
+  if (previewUrl) URL.revokeObjectURL(previewUrl);
+  previewUrl = null;
+  const bytes = files.get(path) || new Uint8Array(0);
+  const ext = extensionOf(path);
+  el.assetView.textContent = '';
+  const title = document.createElement('h3');
+  title.textContent = path;
+  const size = document.createElement('p');
+  size.textContent = formatSize(bytes.length);
+  el.assetView.append(title, size);
+  const from = relativePath(project.main, path);
+  let use = null;
+  if (IMAGE_TYPES[ext])
+  {
+    previewUrl = URL.createObjectURL(new Blob([bytes], { type: IMAGE_TYPES[ext] }));
+    const img = document.createElement('img');
+    img.src = previewUrl;
+    img.alt = path;
+    el.assetView.appendChild(img);
+    use = `tex = LoadTexture("${from}")`;
+  }
+  else if (ext === 'glb' || ext === 'gltf') use = `model = LoadMesh("${from}")`;
+  if (use)
+  {
+    const hint = document.createElement('p');
+    hint.textContent = `Use it from ${project.main}:`;
+    const code = document.createElement('code');
+    code.textContent = use;
+    el.assetView.append(hint, code);
+  }
+}
+
+// A name typed by the user, checked; null when cancelled or wrong.
+function askPath(question, suggestion)
+{
+  const answer = window.prompt(question, suggestion);
+  if (answer === null) return null;
+  const path = cleanPath(answer);
+  if (path instanceof Error)
+  {
+    toast(`Not a file name: ${path.message}`);
+    return null;
+  }
+  return path;
+}
+
+async function newProject(name = null)
+{
+  const chosen = name ?? window.prompt('Name of the new project:', 'My game');
+  if (chosen === null) return null;
+  const record = await store.create(chosen.trim() || 'My game', { 'main.pb': NEW_PROGRAM_SOURCE });
+  await openProject(record.id);
+  return record.id;
+}
+
+async function renameProject()
+{
+  const name = window.prompt('New name of the project:', project.name);
+  if (name === null || !name.trim()) return;
+  project = await store.update(project.id, (p) =>
+  {
+    p.name = name.trim();
+  });
+  await refreshProjects();
+  renderProgramList();
+  renderActions();
+}
+
+async function deleteProject()
+{
+  if (!window.confirm(`Delete the project "${project.name}" and all its files from this browser?`)) return;
+  const id = project.id;
+  stop();
+  dirty.clear();
+  mode = null;
+  project = null;
+  await store.remove(id);
+  await refreshProjects();
+  await openProgram(manifest.programs[0]);
+  toast('Project deleted');
+}
+
+async function newFile()
+{
+  const path = askPath('Name of the new file (for example enemies.pb or lib/maths.pb):', 'new.pb');
+  if (!path) return;
+  if (files.has(path))
+  {
+    toast(`There is already a file ${path}`);
+    return;
+  }
+  const text = extensionOf(path) === 'pb' ? `; ${path}\n` : '';
+  await addFiles([{ path, bytes: encoder.encode(text) }]);
+  await openFile(path);
+}
+
+// Adds (or replaces) files in the open project.
+async function addFiles(list)
+{
+  for (const { path, bytes } of list)
+  {
+    await store.writeFile(project.id, path, bytes);
+    files.set(path, bytes);
+  }
+  project = await store.get(project.id);
+  await refreshProjects();
+  renderProgramList();
+}
+
+// Files chosen with Upload: programs at the top of the project, the rest
+// (images, models) in assets/.
+async function uploadFiles(fileList)
+{
+  const list = [];
+  for (const file of fileList)
+  {
+    const path = cleanPath(extensionOf(file.name) === 'pb' ? file.name : `assets/${file.name}`);
+    if (path instanceof Error)
+    {
+      toast(`Skipped ${file.name}: ${path.message}`);
+      continue;
+    }
+    if (files.has(path) && !window.confirm(`Replace ${path} in the project?`)) continue;
+    list.push({ path, bytes: new Uint8Array(await file.arrayBuffer()) });
+  }
+  if (!list.length) return;
+  await addFiles(list);
+  toast(list.length === 1 ? `Added ${list[0].path}` : `Added ${list.length} files`);
+  await openFile(list[0].path);
+}
+
+async function renameFile()
+{
+  const to = askPath('New name (use / for folders):', openPath);
+  if (!to || to === openPath) return;
+  await saveNow();
+  try
+  {
+    await store.renameFile(project.id, openPath, to);
+  }
+  catch (err)
+  {
+    toast(err.message);
+    return;
+  }
+  files.set(to, files.get(openPath));
+  files.delete(openPath);
+  project = await store.get(project.id);
+  await openFile(to);
+}
+
+async function deleteFile()
+{
+  if (!window.confirm(`Delete ${openPath} from the project?`)) return;
+  const path = openPath;
+  await store.deleteFile(project.id, path);
+  files.delete(path);
+  dirty.delete(path);
+  project = await store.get(project.id);
+  await openFile(project.main);
+}
+
+async function makeMain()
+{
+  await store.setMain(project.id, openPath);
+  project = await store.get(project.id);
+  renderProgramList();
+  renderActions();
+  toast(`${openPath} is the main program now`);
+}
+
+// An example, with its edits and the files it uses (listed in the
+// manifest), copied into a new project. Paths stay as they are, so the
+// program finds its files where it looked for them before.
+async function saveAsProject()
+{
+  const entry = current;
+  const name = window.prompt('Name of the new project:', entry.title);
+  if (name === null) return null;
+  await saveNow();
+  const main = entry.file.split('/').pop();
+  const copy = { [main]: currentText() };
+  const base = new URL(entry.file, window.location.href);
+  try
+  {
+    for (const asset of entry.assets || [])
+    {
+      const response = await fetch(new URL(asset, base), FETCH_OPTIONS);
+      if (!response.ok) throw new Error(`could not load ${asset} (${response.status})`);
+      copy[asset] = new Uint8Array(await response.arrayBuffer());
+    }
+  }
+  catch (err)
+  {
+    logLine(`Could not copy the example: ${err.message}`, 'error');
+    return null;
+  }
+  const record = await store.create(name.trim() || entry.title, copy, main);
+  await openProject(record.id);
+  toast('Saved as a project');
+  return record.id;
+}
+
 // ── Running ─────────────────────────────────────────────────────────────
+
+// Shows a compile error in the editor, in the file it is in.
+async function showCompileError(err)
+{
+  const file = mode === 'project' && err.file && files.has(err.file) ? err.file : null;
+  if (file && file !== openPath && isText(file)) await openFile(file);
+  if (!file || file === openPath) view.dispatch(setDiagnostics(view.state, [toDiagnostic(err, view.state.doc)]));
+  logErrorAt('Compile error', err.message, err.line, err.column, 'error', file);
+}
 
 async function run()
 {
-  if (!current) return;
-  saveNow();
+  if (mode !== 'example' && mode !== 'project') return;
+  await saveNow();
   stop();
   clearConsole();
   view.dispatch(setDiagnostics(view.state, []));
 
+  const main = mode === 'project' ? project.main : fileName();
+  const source = mode === 'project' ? textOf(project.main) ?? '' : currentText();
   let compiled;
   try
   {
-    compiled = compile(currentText(), { file: fileName() });
+    compiled = compile(source, { file: main, readFile: mode === 'project' ? readProjectFile : undefined });
   }
   catch (err)
   {
     if (!(err instanceof CompileError)) throw err;
-    view.dispatch(setDiagnostics(view.state, [toDiagnostic(err, view.state.doc)]));
-    logErrorAt('Compile error', err.message, err.line, err.column);
+    await showCompileError(err);
     setStatus('Compile error', 'error');
     el.stats.textContent = '';
     // Nothing ran: do not leave the previous program's picture on screen
@@ -462,13 +970,21 @@ async function run()
     screen.clear();
     return;
   }
-  for (const w of compiled.warnings) logErrorAt('Warning', w.message, w.line, w.column, 'warn');
+  for (const w of compiled.warnings)
+  {
+    const inProject = mode === 'project' && w.file && files.has(w.file);
+    logErrorAt('Warning', w.message, w.line, w.column, 'warn', inProject ? w.file : null);
+  }
 
   const token = runToken;
   const module = await loadProgram(compiled.js);
   if (token !== runToken) return;
-  const baseUrl = current.file ? new URL(current.file, window.location.href).href : window.location.href;
-  const engine = screen.newEngine({ baseUrl });
+  const engine = mode === 'project'
+    ? screen.newEngine({
+      baseUrl: `${PROJECT_SCHEME}///${main.split('/').map(encodeURIComponent).join('/')}`,
+      files: { read: (path) => files.get(path) || null }
+    })
+    : screen.newEngine({ baseUrl: new URL(current.file, window.location.href).href });
   const controller = new AbortController();
   const host = new BrowserHost({ output: logOutput, onError: () => {} });
   const me = { controller, engine, done: null };
@@ -483,8 +999,16 @@ async function run()
     if (result.status === 'error')
     {
       const e = result.error;
-      const here = e.file === fileName();
-      logErrorAt('Runtime error', e.file && !here ? `${e.message} (in ${e.file})` : e.message, here ? e.line : null);
+      if (mode === 'project')
+      {
+        const known = e.file && files.has(e.file);
+        logErrorAt('Runtime error', known ? e.message : `${e.message}${e.file ? ` (in ${e.file})` : ''}`, known ? e.line : null, null, 'error', known ? e.file : null);
+      }
+      else
+      {
+        const here = e.file === fileName();
+        logErrorAt('Runtime error', e.file && !here ? `${e.message} (in ${e.file})` : e.message, here ? e.line : null);
+      }
       setStatus('Stopped by an error', 'error');
     }
     else if (result.status === 'ended') setStatus('Finished (End)');
@@ -509,6 +1033,23 @@ function stop()
 function updateStats()
 {
   if (session && session.engine) el.stats.textContent = `${session.engine.fps} fps · ${session.engine.world.entities.length} entities`;
+}
+
+// ── Export and import (see F4-5) ────────────────────────────────────────
+
+async function exportZip()
+{
+  toast('Not ready yet');
+}
+
+async function exportPage()
+{
+  toast('Not ready yet');
+}
+
+async function importZip(file)
+{
+  toast(`Not ready yet: ${file.name}`);
 }
 
 // ── Full screen ─────────────────────────────────────────────────────────
@@ -551,13 +1092,14 @@ function updateFullscreenButton()
 
 async function buildShareUrl()
 {
-  saveNow();
+  await saveNow();
   const encoded = await encodeSource(currentText());
   return `${window.location.origin}${window.location.pathname}#p=${encodeURIComponent(current.id)}&code=${encoded}`;
 }
 
 async function share()
 {
+  if (mode !== 'example') return;
   const url = await buildShareUrl();
   window.polybasicPlayground.lastShareUrl = url;
   try
@@ -574,7 +1116,7 @@ async function share()
 
 function reset()
 {
-  if (!current || currentText() === originalSource) return;
+  if (mode !== 'example' || currentText() === originalSource) return;
   if (!window.confirm(`Discard your edits to "${current.title}"?`)) return;
   storageRemove(current.id);
   sharedUnsaved = false;
@@ -585,8 +1127,9 @@ function reset()
 
 async function openFromHash()
 {
-  const { programId, code } = parseHash();
-  const entry = allPrograms().find((p) => p.id === programId) || manifest.programs[0];
+  const { programId, projectId, code } = parseHash();
+  if (projectId && await openProject(projectId)) return;
+  const entry = manifest.programs.find((p) => p.id === programId) || manifest.programs[0];
   if (code)
   {
     try
@@ -600,6 +1143,24 @@ async function openFromHash()
     }
   }
   await openProgram(entry);
+}
+
+// Earlier versions kept one program of your own ("New program") in
+// localStorage: it becomes a project.
+async function migrateOldProgram()
+{
+  let text = null;
+  try
+  {
+    text = window.localStorage.getItem(OLD_NEW_PROGRAM_KEY);
+  }
+  catch
+  {
+    return;
+  }
+  if (text === null || !store.persistent) return;
+  await store.create('My program', { 'main.pb': text });
+  storageRemove('new');
 }
 
 async function init()
@@ -617,13 +1178,29 @@ async function init()
     logLine(String(err.message || err), 'error');
     return;
   }
+  store = await ProjectStore.open();
+  await migrateOldProgram();
+  await refreshProjects();
   createEditor();
 
   el.runBtn.addEventListener('click', run);
   el.stopBtn.addEventListener('click', stop);
   el.resetBtn.addEventListener('click', reset);
   el.shareBtn.addEventListener('click', share);
-  el.newBtn.addEventListener('click', () => openProgram(NEW_PROGRAM));
+  el.newBtn.addEventListener('click', () => newProject());
+  el.importBtn.addEventListener('click', () => el.importInput.click());
+  el.importInput.addEventListener('change', () =>
+  {
+    const file = el.importInput.files[0];
+    el.importInput.value = '';
+    if (file) importZip(file);
+  });
+  el.uploadInput.addEventListener('change', () =>
+  {
+    const chosen = [...el.uploadInput.files];
+    el.uploadInput.value = '';
+    if (chosen.length && mode === 'project') uploadFiles(chosen);
+  });
   el.fullscreenBtn.addEventListener('click', toggleFullscreen);
   document.addEventListener('fullscreenchange', updateFullscreenButton);
   window.addEventListener('keydown', (event) =>
@@ -635,25 +1212,42 @@ async function init()
     }
   });
   screen.canvas.addEventListener('pointerdown', () => screen.canvas.focus({ preventScroll: true }));
-  window.addEventListener('beforeunload', saveNow);
+  window.addEventListener('beforeunload', () =>
+  {
+    saveNow();
+  });
   window.addEventListener('hashchange', () =>
   {
-    const { programId, code } = parseHash();
-    if (code || programId !== current?.id) openFromHash();
+    const { programId, projectId, code } = parseHash();
+    if (code || (projectId && projectId !== project?.id) || (programId && programId !== current?.id)) openFromHash();
   });
   setInterval(updateStats, STATS_INTERVAL_MS);
 
   await openFromHash();
+  if (!store.persistent)
+  {
+    logLine('This browser does not let the playground keep projects (a private window?): they last until the page is closed. Download them as .zip to keep them.', 'warn');
+  }
 }
 
 // For debugging from the browser console, and for the browser tests.
 window.polybasicPlayground = {
-  getProgramId: () => current?.id ?? null,
+  getProgramId: () => (mode === 'example' ? current?.id ?? null : null),
+  getProjectId: () => (mode === 'project' ? project?.id ?? null : null),
+  getProject: () => (project ? { ...project } : null),
+  getOpenPath: () => openPath,
   getSession: () => session,
   getScreen: () => screen,
+  getStore: () => store,
   getText: () => currentText(),
   setText: (text) => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: text } }),
-  openProgram: (id) => openProgram(allPrograms().find((p) => p.id === id)),
+  openProgram: (id) => openProgram(manifest.programs.find((p) => p.id === id)),
+  openProject: (id) => openProject(id),
+  openFile: (path) => openFile(path),
+  newProject: (name) => newProject(name),
+  // [{ name, bytes }] as if chosen with Upload.
+  upload: (list) => uploadFiles(list.map(({ name, bytes }) => new File([bytes], name))),
+  saveNow: () => saveNow(),
   run: () => run(),
   buildShareUrl: () => buildShareUrl(),
   lastShareUrl: null

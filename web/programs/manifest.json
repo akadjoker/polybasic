@@ -10,7 +10,10 @@
       "category": "3d",
       "file": "../examples/spin.pb",
       "description": "The hello world of PolyBasic 3D: a camera, a light and a textured cube turning in Update().",
-      "controls": ""
+      "controls": "",
+      "assets": [
+        "assets/tile.png"
+      ]
     },
     {
       "id": "block-rain",
@@ -18,7 +21,8 @@
       "category": "3d",
       "file": "../examples/block-rain.pb",
       "description": "A small game: dodge the falling blocks. Types, For Each, input, and a 2D score on top.",
-      "controls": "Arrows or WASD, or drag with the mouse or a finger; Space or a tap to start"
+      "controls": "Arrows or WASD, or drag with the mouse or a finger; Space or a tap to start",
+      "assets": []
     },
     {
       "id": "orbits",
@@ -26,7 +30,8 @@
       "category": "3d",
       "file": "../examples/orbits.pb",
       "description": "Parents and children: a moon turns around a planet that turns around a sun.",
-      "controls": "Left/Right turn the camera, mouse wheel zooms"
+      "controls": "Left/Right turn the camera, mouse wheel zooms",
+      "assets": []
     },
     {
       "id": "coin-hop",
@@ -34,7 +39,17 @@
       "category": "3d",
       "file": "../examples/coin-hop.pb",
       "description": "A small platformer with glTF models by Kenney: collisions keep the character on the platforms, and its walk, idle and jump animations come from the model file.",
-      "controls": "Arrows or WASD run, Space jumps"
+      "controls": "Arrows or WASD run, Space jumps",
+      "assets": [
+        "assets/kenney/platform-large.glb",
+        "assets/kenney/platform.glb",
+        "assets/kenney/platform-medium.glb",
+        "assets/kenney/cloud.glb",
+        "assets/kenney/character.glb",
+        "assets/kenney/coin.glb",
+        "assets/kenney/Textures/colormap.png",
+        "assets/kenney/License.txt"
+      ]
     },
     {
       "id": "crates",
@@ -42,7 +57,8 @@
       "category": "3d",
       "file": "../examples/crates.pb",
       "description": "Physics: throw heavy balls at a tower of crates and watch it fall. The program gives things bodies; the physics engine does the rest.",
-      "controls": "Click or tap to throw, Left/Right turn the view, R builds a new tower"
+      "controls": "Click or tap to throw, Left/Right turn the view, R builds a new tower",
+      "assets": []
     },
     {
       "id": "paint-shapes",
@@ -50,7 +66,8 @@
       "category": "3d",
       "file": "../examples/paint-shapes.pb",
       "description": "Picking: point at a shape to see its name, click to paint it. Labels follow the shapes with CameraProject.",
-      "controls": "Mouse or finger; right click or P switches the picking mode"
+      "controls": "Mouse or finger; right click or P switches the picking mode",
+      "assets": []
     },
     {
       "id": "tour",
@@ -58,7 +75,8 @@
       "category": "language",
       "file": "../examples/tour.pb",
       "description": "Variables, loops, functions, arrays, Types and Select, printed to the console.",
-      "controls": ""
+      "controls": "",
+      "assets": []
     },
     {
       "id": "bounce",
@@ -66,7 +84,8 @@
       "category": "language",
       "file": "../examples/bounce.pb",
       "description": "The Update/Draw frame loop without graphics: balls move in Update, Draw prints a report.",
-      "controls": ""
+      "controls": "",
+      "assets": []
     }
   ]
 }

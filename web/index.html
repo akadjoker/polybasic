@@ -26,8 +26,13 @@
       </div>
     </header>
 
-    <nav class="sidebar" aria-label="Programs">
-      <button id="newBtn" class="new">+ New program</button>
+    <nav class="sidebar" aria-label="Projects and examples">
+      <div class="side-actions">
+        <button id="newBtn" class="new" title="Start a project of your own, kept in this browser">+ New project</button>
+        <button id="importBtn" class="small" title="Open a project from a .zip file">Import .zip</button>
+      </div>
+      <input id="importInput" type="file" accept=".zip,application/zip" hidden>
+      <input id="uploadInput" type="file" multiple hidden>
       <div id="programList" class="program-list"></div>
     </nav>
 
@@ -36,8 +41,11 @@
         <h2 id="programTitle">Loading…</h2>
         <p id="programDescription"></p>
         <p id="programControls" class="controls"></p>
+        <div id="infoActions" class="info-actions"></div>
       </div>
+      <div id="fileBar" class="file-bar" hidden></div>
       <div id="editor" class="editor"></div>
+      <div id="assetView" class="asset-view" hidden></div>
     </main>
 
     <section class="run-pane" aria-label="Output">
