@@ -1,7 +1,7 @@
 // Mesh data in PolyBasic's own format, independent of any renderer:
 // flat arrays of positions, normals and uvs, triangle indices, and
-// submeshes (ranges of indices that share a material; one for now, glTF
-// models in phase 3 bring more).
+// submeshes (ranges of indices that share a material: one for the built-in
+// shapes, one per part for a model).
 //
 // Conventions: left-handed space (X right, Y up, Z forward); a triangle's
 // front face is the one where its corners run clockwise, so the standard
@@ -23,6 +23,7 @@ export class MeshData
     this.uvs = Float32Array.from(uvs);
     this.indices = Uint32Array.from(indices);
     this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
+    this.colors = null;       // optional RGBA per vertex (0..1, linear), from models
     this.bounds = new Aabb().fromPositions(this.positions);
   }
 

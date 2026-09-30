@@ -17,6 +17,7 @@ import {
 import { KEYS } from './input/input.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
+import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -118,7 +119,8 @@ export const ENGINE_COMMANDS = [
   'Plot(x, y)',
 
   ...COLLIDE_COMMANDS,
-  ...PHYSICS_COMMANDS
+  ...PHYSICS_COMMANDS,
+  ...MODEL_COMMANDS
 ];
 
 export const ENGINE_CONSTANTS = {
@@ -132,7 +134,8 @@ export const ENGINE_CONSTANTS = {
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
   ...COLLIDE_CONSTANTS,
-  ...PHYSICS_CONSTANTS
+  ...PHYSICS_CONSTANTS,
+  ...MODEL_CONSTANTS
 };
 
 
@@ -158,6 +161,7 @@ export function createEngineCommands(engine)
   return {
     ...createCollideCommands(engine),
     ...createPhysicsCommands(engine),
+    ...createModelCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -390,7 +394,10 @@ export function createEngineCommands(engine)
     },
     copyentity(handle, parent)
     {
-      return world.copyEntity(entity(handle), parentOf(parent)).id;
+      const src = entity(handle);
+      const copy = world.copyEntity(src, parentOf(parent));
+      if (src.model) engine.models.copy(src, copy);
+      return copy.id;
     },
     entityexists: (handle) => (world.handles.get(handle) instanceof Entity ? 1 : 0),
     nameentity(handle, name)

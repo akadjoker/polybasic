@@ -1,0 +1,12 @@
+3D models by Kenney (www.kenney.nl), CC0 1.0 Universal (public domain):
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Taken unchanged from Kenney's Starter Kit 3D Platformer
+(https://github.com/KenneyNL/Starter-Kit-3D-Platformer, models/ folder,
+commit 3fa8a04b1c01ab23db43123d4ce814a34c3fc7f0), whose README states:
+"Assets included in this package (2D sprites, 3D models and sound effects)
+are CC0 licensed".
+
+Files: character.glb, platform.glb, platform-medium.glb, platform-large.glb,
+coin.glb, block-coin.glb, brick.glb, flag.glb, grass.glb, cloud.glb and
+Textures/colormap.png (shared by all of them).

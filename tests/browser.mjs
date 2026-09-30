@@ -12,13 +12,16 @@
 //   - CameraPick and CameraProject agree with the pixels three.js drew;
 //   - physics: the Rapier file is fetched only when a program needs it,
 //     and the motion is the same as in Node;
+//   - glTF models draw textured, with the texture in a PNG file or inside
+//     the .glb, and match three.js's own GLTFLoader picture (so nothing is
+//     mirrored);
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
 // Screenshots go to tests/output/.
 
 import http from 'node:http';
-import { readFile, stat, mkdir } from 'node:fs/promises';
+import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -129,6 +132,26 @@ const canvasStats = (canvas) =>
   return { colours: colours.size, hash, width: copy.width, height: copy.height, corner: Array.from(d.slice(0, 3)) };
 };
 
+// All the pixels of a canvas (RGBA bytes), found by a selector or the
+// player's screen. Sent as base64: a plain array of numbers is slow.
+async function canvasPixels(page, selector = null)
+{
+  const encoded = await page.evaluate((sel) =>
+  {
+    const canvas = sel ? document.querySelector(sel) : window.polybasicPlayer.screen.canvas;
+    const copy = document.createElement('canvas');
+    copy.width = canvas.width;
+    copy.height = canvas.height;
+    const ctx = copy.getContext('2d');
+    ctx.drawImage(canvas, 0, 0);
+    const bytes = ctx.getImageData(0, 0, copy.width, copy.height).data;
+    let text = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    return { width: copy.width, height: copy.height, data: btoa(text) };
+  }, selector);
+  return { width: encoded.width, height: encoded.height, data: Buffer.from(encoded.data, 'base64') };
+}
+
 async function playerStats(page)
 {
   return page.evaluate(`(${canvasStats})(window.polybasicPlayer.screen.canvas)`);
@@ -149,6 +172,42 @@ async function nodeMatrices(file, frames)
   return engine.world.entities.map((e) => [e.id, Array.from(e.worldMatrix.e)]);
 }
 
+// The Kenney character as a .glb with its PNG stored inside (the image
+// moves from a separate file into the binary chunk), to check both ways a
+// model can carry its textures.
+async function embeddedCharacter()
+{
+  const glb = await readFile(join(ROOT, 'examples/assets/kenney/character.glb'));
+  const png = await readFile(join(ROOT, 'examples/assets/kenney/Textures/colormap.png'));
+  const jsonLength = glb.readUInt32LE(12);
+  const json = JSON.parse(glb.subarray(20, 20 + jsonLength).toString('utf8'));
+  const binStart = 20 + jsonLength;
+  const bin = glb.subarray(binStart + 8, binStart + 8 + glb.readUInt32LE(binStart));
+  const pad4 = (n) => Math.ceil(n / 4) * 4;
+  const imageOffset = pad4(bin.length);
+  const newBin = Buffer.alloc(pad4(imageOffset + png.length));
+  bin.copy(newBin, 0);
+  png.copy(newBin, imageOffset);
+  json.bufferViews.push({ buffer: 0, byteOffset: imageOffset, byteLength: png.length });
+  json.images = [{ bufferView: json.bufferViews.length - 1, mimeType: 'image/png' }];
+  json.buffers[0].byteLength = newBin.length;
+  const text = Buffer.from(JSON.stringify(json));
+  const jsonChunk = Buffer.alloc(pad4(text.length), 0x20);
+  text.copy(jsonChunk);
+  const header = Buffer.alloc(12);
+  header.writeUInt32LE(0x46546c67, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(12 + 8 + jsonChunk.length + 8 + newBin.length, 8);
+  const chunk = (type, body) =>
+  {
+    const h = Buffer.alloc(8);
+    h.writeUInt32LE(body.length, 0);
+    h.writeUInt32LE(type, 4);
+    return Buffer.concat([h, body]);
+  };
+  await writeFile(join(SHOTS, 'character-embedded.glb'), Buffer.concat([header, chunk(0x4e4f534a, jsonChunk), chunk(0x004e4942, newBin)]));
+}
+
 function maxDifference(a, b)
 {
   assert(a.length === b.length, `entity counts differ: ${a.length} vs ${b.length}`);
@@ -164,6 +223,7 @@ function maxDifference(a, b)
 const server = await startServer();
 const base = `http://127.0.0.1:${server.address().port}`;
 await mkdir(SHOTS, { recursive: true });
+await embeddedCharacter();
 const browser = await chromium.launch({ args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 
 try
@@ -301,23 +361,14 @@ try
     const page = await openPage(browser, `${base}/web/player.html?src=../tests/browser/picking.pb`, { width: 800, height: 600 });
     await page.waitForFunction(() => window.polybasicPlayer.state.output.includes('done'), null, { timeout: 20000 });
     const lines = (await page.evaluate(() => window.polybasicPlayer.state.output)).trim().split('\n');
-    const pixels = await page.evaluate(() =>
-    {
-      const canvas = window.polybasicPlayer.screen.canvas;
-      const copy = document.createElement('canvas');
-      copy.width = canvas.width;
-      copy.height = canvas.height;
-      const ctx = copy.getContext('2d');
-      ctx.drawImage(canvas, 0, 0);
-      return { width: copy.width, height: copy.height, data: Array.from(ctx.getImageData(0, 0, copy.width, copy.height).data) };
-    });
+    const pixels = await canvasPixels(page);
     assert(pixels.width === 800 && pixels.height === 600, `canvas is ${pixels.width} x ${pixels.height}`);
     // Handles in picking.pb: the camera is 1, the shapes 2 to 6.
     const colours = { 0: [0, 0, 0], 2: [255, 0, 0], 3: [0, 255, 0], 4: [0, 0, 255], 5: [255, 255, 0], 6: [255, 0, 255] };
     const classAt = (x, y) =>
     {
       const i = (y * pixels.width + x) * 4;
-      const c = pixels.data.slice(i, i + 3);
+      const c = pixels.data.subarray(i, i + 3);
       for (const [id, rgb] of Object.entries(colours))
       {
         if (Math.abs(c[0] - rgb[0]) + Math.abs(c[1] - rgb[1]) + Math.abs(c[2] - rgb[2]) < 30) return Number(id);
@@ -413,6 +464,91 @@ try
     assert(messages.length === 0, `console:\n${messages.join('\n')}`);
     await page.screenshot({ path: join(SHOTS, 'physics.png') });
     await page.close();
+  });
+
+  await check('glTF models draw with their textures, from a separate PNG or from inside the .glb', async () =>
+  {
+    const pictures = {};
+    for (const variant of ['external', 'embedded'])
+    {
+      const page = await openPage(browser, `${base}/web/player.html?src=../tests/browser/models-${variant}.pb`, { width: 800, height: 600 });
+      await page.waitForFunction(() => window.polybasicPlayer.state.output.includes('ready'), null, { timeout: 20000 });
+      const textures = await page.evaluate(() =>
+      {
+        const seen = new Set();
+        for (const e of window.polybasicPlayer.state.engine.world.entities)
+        {
+          for (const m of e.materials) if (m.texture) seen.add(m.texture);
+        }
+        return [...seen].map((t) => ({ loaded: t.loaded, failed: t.failed, width: t.width, height: t.height, kind: t.image ? t.image.constructor.name : null }));
+      });
+      assert(textures.length >= 2 && textures.every((t) => t.loaded && !t.failed && t.width === 512 && t.height === 512), `${variant}: textures ${JSON.stringify(textures)}`);
+      // The character's image: the embedded one is decoded to an ImageBitmap.
+      if (variant === 'embedded') assert(textures.some((t) => t.kind === 'ImageBitmap'), `embedded image decoded as ${JSON.stringify(textures)}`);
+      await page.waitForTimeout(300);
+      pictures[variant] = (await canvasPixels(page)).data;
+      await page.screenshot({ path: join(SHOTS, `models-${variant}.png`) });
+      noConsoleErrors(page);
+      await page.close();
+    }
+    const a = pictures.external;
+    const b = pictures.embedded;
+    let different = 0;
+    const colours = new Set();
+    for (let i = 0; i < a.length; i += 4)
+    {
+      if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 6) different++;
+      colours.add((a[i] << 16) | (a[i + 1] << 8) | a[i + 2]);
+    }
+    facts.models = `${colours.size} colours, ${different} pixels differ between the two ways of storing the texture`;
+    console.log(`      ${facts.models}`);
+    assert(colours.size > 200, `only ${colours.size} colours: texture missing?`);
+    assert(different === 0, `${different} pixels differ`);
+  });
+
+  await check('a glTF scene looks as it does in three.js on its own (not mirrored)', async () =>
+  {
+    const ref = await openPage(browser, `${base}/tests/browser/three-reference.html`, { width: 800, height: 600 });
+    await ref.waitForFunction(() => window.referenceReady, null, { timeout: 20000 });
+    const theirs = (await canvasPixels(ref, 'canvas')).data;
+    await ref.screenshot({ path: join(SHOTS, 'models-three-reference.png') });
+    noConsoleErrors(ref);
+    await ref.close();
+
+    const page = await openPage(browser, `${base}/web/player.html?src=../tests/browser/models-external.pb`, { width: 800, height: 600 });
+    await page.waitForFunction(() => window.polybasicPlayer.state.output.includes('ready'), null, { timeout: 20000 });
+    // Unlit like the reference: lights shade differently there (PBR).
+    await page.evaluate(() =>
+    {
+      for (const e of window.polybasicPlayer.state.engine.world.entities)
+      {
+        for (const m of e.materials)
+        {
+          m.fullbright = true;
+          m.changed();
+        }
+      }
+    });
+    await page.waitForTimeout(300);
+    const ours = (await canvasPixels(page)).data;
+    await page.screenshot({ path: join(SHOTS, 'models-unlit.png') });
+    noConsoleErrors(page);
+    await page.close();
+
+    assert(ours.length === theirs.length, 'sizes differ');
+    let differ = 0;
+    const colours = new Set();
+    for (let i = 0; i < ours.length; i += 4)
+    {
+      if (Math.abs(ours[i] - theirs[i]) + Math.abs(ours[i + 1] - theirs[i + 1]) + Math.abs(ours[i + 2] - theirs[i + 2]) > 24) differ++;
+      colours.add((theirs[i] << 16) | (theirs[i + 1] << 8) | theirs[i + 2]);
+    }
+    // Two empty pictures would agree too.
+    assert(colours.size > 200, `the reference has only ${colours.size} colours`);
+    const share = differ / (ours.length / 4);
+    facts.reference = `${differ} of ${ours.length / 4} pixels differ from three.js on its own (${(share * 100).toFixed(3)}%)`;
+    console.log(`      ${facts.reference}`);
+    assert(share < 0.002, facts.reference);
   });
 
   // ── Playground ──────────────────────────────────────────────────────

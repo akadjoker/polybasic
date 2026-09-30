@@ -4,7 +4,7 @@
 //   before main:        prepare() loads what the program needs (physics)
 //   when it stops:      stop() releases the physics world
 //   after main:         whenReady() waits for the files main started loading
-//   every Update step:  input.sample()  ->  Update()  ->  endStep() (physics, collisions)
+//   every Update step:  input.sample()  ->  Update()  ->  endStep() (animations, physics, collisions)
 //   every frame:        world matrices + backend.render()  ->  Draw() on the overlay
 //
 // It is platform-neutral. src/engine/browser.js builds one with the three.js
@@ -18,6 +18,7 @@ import { Input } from './input/input.js';
 import { createEngineCommands } from './commands.js';
 import { Collisions } from './collide/collisions.js';
 import { Physics } from './physics/physics.js';
+import { Models } from './model/model.js';
 import { PHYSICS_KEYS } from './physics/commands.js';
 import { STEP_MS } from '../runtime/runtime.js';
 
@@ -47,6 +48,7 @@ export class Engine
     this.world = new World();
     this.collisions = new Collisions(this.world);
     this.physics = new Physics(this.world, options.loadPhysics || null);
+    this.models = new Models(this);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
@@ -148,6 +150,13 @@ export class Engine
     return t;
   }
 
+  // Starts loading a glTF model; returns its pivot at once (see
+  // model/model.js).
+  loadMesh(file, parent)
+  {
+    return this.models.load(file, resolveUrl(this.baseUrl, file), parent);
+  }
+
   // ----------------------------------------------------- runner hooks
 
   // Called before main with the commands the program uses. Returns a
@@ -176,10 +185,11 @@ export class Engine
     this.input.sample();
   }
 
-  // After each Update: the world moves on by one step. Physics first, so
-  // collisions see where bodies ended up.
+  // After each Update: the world moves on by one step. Animations, then
+  // physics, then collisions, which see where bodies ended up.
   endStep()
   {
+    this.models.step(STEP_MS / 1000);
     this.physics.step(STEP_MS / 1000);
     this.collisions.update();
   }

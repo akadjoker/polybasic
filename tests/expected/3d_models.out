@@ -1,0 +1,10 @@
+right after LoadMesh: loaded 0, children 0
+platform: loaded 1, part 'platform-large'
+character parts: character > root
+animations: 4, walk is number 3
+platform top at y 0.5, normal y 1.0
+left leg x -0.125, right leg x 0.125
+ball resting on the platform: y 1, touching 1
+character standing on the platform: feet near y 1, touches it 1
+walking: 1, the left leg swings: 1
+[ended]

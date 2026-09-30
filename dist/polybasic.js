@@ -2723,9 +2723,9 @@ async function run(module, host, options) {
   const wait = async (promise) => {
     if (options.signal) {
       const signal = options.signal;
-      await Promise.race([promise, new Promise((resolve) => {
-        if (signal.aborted) resolve();
-        else signal.addEventListener("abort", resolve, { once: true });
+      await Promise.race([promise, new Promise((resolve2) => {
+        if (signal.aborted) resolve2();
+        else signal.addEventListener("abort", resolve2, { once: true });
       })]);
     } else await promise;
     if (aborted()) {
@@ -2757,14 +2757,14 @@ async function run(module, host, options) {
     }
     return result;
   }
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     let last = null;
     let pending = 0;
     let handle = null;
     const stop = (status) => {
       result.status = status;
       if (handle !== null) host.cancelFrame(handle);
-      resolve(result);
+      resolve2(result);
     };
     if (options.signal) {
       if (options.signal.aborted) return stop("stopped");
@@ -2798,7 +2798,7 @@ async function run(module, host, options) {
         if (program.draw) program.draw();
         if (engine) engine.endDraw();
       } catch (e) {
-        resolve(fail2(e));
+        resolve2(fail2(e));
         return;
       }
       if (options.maxUpdates && result.updates >= options.maxUpdates) {
@@ -3525,6 +3525,10 @@ var Material = class _Material {
     this.flat = false;
     this.twoSided = false;
     this.texture = null;
+    this.alphaMode = null;
+    this.alphaCutoff = 0.5;
+    this.vertexColors = false;
+    this.name = "";
   }
   changed() {
     this.version++;
@@ -3538,6 +3542,10 @@ var Material = class _Material {
     m.flat = this.flat;
     m.twoSided = this.twoSided;
     m.texture = this.texture;
+    m.alphaMode = this.alphaMode;
+    m.alphaCutoff = this.alphaCutoff;
+    m.vertexColors = this.vertexColors;
+    m.name = this.name;
     return m;
   }
 };
@@ -3557,6 +3565,9 @@ var Texture = class {
     this.failed = false;
     this.scaleU = 1;
     this.scaleV = 1;
+    this.wrapU = "repeat";
+    this.wrapV = "repeat";
+    this.nearest = this.pixels !== null;
   }
   fill(r, g, b, a = 255) {
     const p = this.pixels;
@@ -4062,6 +4073,7 @@ var MeshData = class {
     this.uvs = Float32Array.from(uvs);
     this.indices = Uint32Array.from(indices);
     this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
+    this.colors = null;
     this.bounds = new Aabb().fromPositions(this.positions);
   }
   get vertexCount() {
@@ -5601,6 +5613,228 @@ function createPhysicsCommands(engine) {
   };
 }
 
+// src/engine/model/animation.js
+var ANIM_STOP = 0;
+var ANIM_LOOP = 1;
+var ANIM_ONCE = 2;
+var ANIM_PINGPONG = 3;
+function sample(channel, t, out) {
+  const { times, values, interpolation } = channel;
+  const size = channel.path === "rotation" ? 4 : 3;
+  const cubic = interpolation === "CUBICSPLINE";
+  const stride = cubic ? size * 3 : size;
+  const valueAt = (k, i) => values[k * stride + (cubic ? size : 0) + i];
+  const n = times.length;
+  if (n === 0) return out;
+  if (t <= times[0] || n === 1) {
+    for (let i = 0; i < size; i++) out[i] = valueAt(0, i);
+    return out;
+  }
+  if (t >= times[n - 1]) {
+    for (let i = 0; i < size; i++) out[i] = valueAt(n - 1, i);
+    return out;
+  }
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = lo + hi >> 1;
+    if (times[mid] <= t) lo = mid;
+    else hi = mid;
+  }
+  const t0 = times[lo];
+  const dt = times[hi] - t0;
+  const u = dt > 0 ? (t - t0) / dt : 0;
+  if (interpolation === "STEP") {
+    for (let i = 0; i < size; i++) out[i] = valueAt(lo, i);
+    return out;
+  }
+  if (cubic) {
+    const u2 = u * u;
+    const u3 = u2 * u;
+    const h00 = 2 * u3 - 3 * u2 + 1;
+    const h10 = u3 - 2 * u2 + u;
+    const h01 = -2 * u3 + 3 * u2;
+    const h11 = u3 - u2;
+    for (let i = 0; i < size; i++) {
+      const p0 = valueAt(lo, i);
+      const p1 = valueAt(hi, i);
+      const m0 = values[lo * stride + size * 2 + i] * dt;
+      const m1 = values[hi * stride + i] * dt;
+      out[i] = h00 * p0 + h10 * m0 + h01 * p1 + h11 * m1;
+    }
+    if (size === 4) normalize4(out);
+    return out;
+  }
+  if (size === 4) return slerp(out, lo, hi, u, valueAt);
+  for (let i = 0; i < size; i++) out[i] = valueAt(lo, i) + (valueAt(hi, i) - valueAt(lo, i)) * u;
+  return out;
+}
+function slerp(out, a, b, u, valueAt) {
+  let bx = valueAt(b, 0);
+  let by = valueAt(b, 1);
+  let bz = valueAt(b, 2);
+  let bw = valueAt(b, 3);
+  const ax = valueAt(a, 0);
+  const ay = valueAt(a, 1);
+  const az = valueAt(a, 2);
+  const aw = valueAt(a, 3);
+  let cos = ax * bx + ay * by + az * bz + aw * bw;
+  if (cos < 0) {
+    cos = -cos;
+    bx = -bx;
+    by = -by;
+    bz = -bz;
+    bw = -bw;
+  }
+  let wa;
+  let wb;
+  if (cos > 0.9995) {
+    wa = 1 - u;
+    wb = u;
+  } else {
+    const angle = Math.acos(cos);
+    const s = Math.sin(angle);
+    wa = Math.sin((1 - u) * angle) / s;
+    wb = Math.sin(u * angle) / s;
+  }
+  out[0] = ax * wa + bx * wb;
+  out[1] = ay * wa + by * wb;
+  out[2] = az * wa + bz * wb;
+  out[3] = aw * wa + bw * wb;
+  return normalize4(out);
+}
+function normalize4(q) {
+  const len = Math.hypot(q[0], q[1], q[2], q[3]) || 1;
+  for (let i = 0; i < 4; i++) q[i] /= len;
+  return q;
+}
+function pose(model, animation, t) {
+  const v = [0, 0, 0, 0];
+  for (const ch of animation.channels) {
+    const e = model.nodes[ch.node];
+    if (!e || !e.alive) continue;
+    sample(ch, t, v);
+    if (ch.path === "translation") e.position.set(v[0], v[1], v[2]);
+    else if (ch.path === "rotation") e.rotation.set(v[0], v[1], v[2], v[3]);
+    else if (ch.path === "scale") e.scale.set(v[0], v[1], v[2]);
+    e.worldDirty = false;
+    e.touch();
+  }
+}
+function advance(state, animation, dt) {
+  const length = animation.duration;
+  if (length <= 0) {
+    state.time = 0;
+    return state.mode !== ANIM_ONCE;
+  }
+  if (state.mode === ANIM_LOOP) {
+    state.time = ((state.time + dt * state.speed) % length + length) % length;
+    return true;
+  }
+  if (state.mode === ANIM_ONCE) {
+    state.time += dt * state.speed;
+    if (state.time >= length || state.time <= 0) {
+      state.time = Math.max(0, Math.min(length, state.time));
+      return false;
+    }
+    return true;
+  }
+  state.time += dt * state.speed * state.direction;
+  while (state.time > length || state.time < 0) {
+    if (state.time > length) state.time = 2 * length - state.time;
+    else state.time = -state.time;
+    state.direction = -state.direction;
+  }
+  return true;
+}
+
+// src/engine/model/commands.js
+var MODEL_COMMANDS = [
+  "LoadMesh%(file$, parent = 0)",
+  "MeshLoaded%(entity)",
+  "FindChild%(entity, name$)",
+  "CountAnimations%(entity)",
+  "AnimationName$(entity, index)",
+  "FindAnimation%(entity, name$)",
+  "Animate(entity, animation = 1, mode = 1, speed# = 1)",
+  "Animating%(entity)",
+  "AnimTime#(entity)",
+  "SetAnimTime(entity, time#)",
+  "AnimLength#(entity, animation = 1)"
+];
+var MODEL_CONSTANTS = {
+  ANIM_STOP,
+  ANIM_LOOP,
+  ANIM_ONCE,
+  ANIM_PINGPONG
+};
+function createModelCommands(engine) {
+  const { entity, parentOf } = handleHelpers(engine.world);
+  const models = engine.models;
+  const model = (handle) => {
+    const e = entity(handle);
+    if (!e.model) throw runtimeError(`Entity ${handle} is not a model (LoadMesh makes models)`);
+    if (e.model.failed) throw runtimeError(`Model ${handle} could not be loaded`);
+    if (!e.model.loaded) throw runtimeError(`Model ${handle} is still loading (MeshLoaded tells when it is in)`);
+    return e;
+  };
+  const animation = (e, index) => {
+    const list = e.model.data.animations;
+    if (index < 1 || index > list.length) throw runtimeError(`Model ${e.id} has ${list.length} animation${list.length === 1 ? "" : "s"}, not number ${index}`);
+    return list[index - 1];
+  };
+  return {
+    loadmesh(file, parent) {
+      engine.autoGraphics();
+      return engine.loadMesh(file, parentOf(parent)).id;
+    },
+    meshloaded(handle) {
+      const e = entity(handle);
+      return e.model && e.model.loaded ? 1 : 0;
+    },
+    findchild(handle, name) {
+      const want = name.toLowerCase();
+      const search = (e) => {
+        for (const c of e.children) {
+          if (c.name.toLowerCase() === want) return c;
+          const found2 = search(c);
+          if (found2) return found2;
+        }
+        return null;
+      };
+      const found = search(entity(handle));
+      return found ? found.id : 0;
+    },
+    countanimations: (handle) => model(handle).model.data.animations.length,
+    animationname: (handle, index) => animation(model(handle), index).name,
+    findanimation(handle, name) {
+      const want = name.toLowerCase();
+      const i = model(handle).model.data.animations.findIndex((a) => a.name.toLowerCase() === want);
+      return i + 1;
+    },
+    animate(handle, index, mode, speed) {
+      const e = model(handle);
+      if (mode < ANIM_STOP || mode > ANIM_PINGPONG) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_ONCE or ANIM_PINGPONG (0 to 3), not ${mode}`);
+      if (index !== 0) animation(e, index);
+      models.play(e, index, mode, speed);
+    },
+    animating(handle) {
+      const e = model(handle);
+      return e.model.state && e.model.state.playing ? 1 : 0;
+    },
+    animtime(handle) {
+      const e = model(handle);
+      return e.model.state ? tidy(e.model.state.time) : 0;
+    },
+    setanimtime(handle, time) {
+      const e = model(handle);
+      if (!e.model.data.animations.length) throw runtimeError(`Model ${handle} has no animations`);
+      models.setTime(e, time);
+    },
+    animlength: (handle, index) => tidy(animation(model(handle), index).duration)
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -5692,7 +5926,8 @@ var ENGINE_COMMANDS = [
   "Line(x1, y1, x2, y2)",
   "Plot(x, y)",
   ...COLLIDE_COMMANDS,
-  ...PHYSICS_COMMANDS
+  ...PHYSICS_COMMANDS,
+  ...MODEL_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
   ...KEYS,
@@ -5705,7 +5940,8 @@ var ENGINE_CONSTANTS = {
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
   ...COLLIDE_CONSTANTS,
-  ...PHYSICS_CONSTANTS
+  ...PHYSICS_CONSTANTS,
+  ...MODEL_CONSTANTS
 };
 function createEngineCommands(engine) {
   const world = engine.world;
@@ -5724,6 +5960,7 @@ function createEngineCommands(engine) {
   return {
     ...createCollideCommands(engine),
     ...createPhysicsCommands(engine),
+    ...createModelCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -5903,7 +6140,10 @@ function createEngineCommands(engine) {
       world.freeEntity(entity(handle));
     },
     copyentity(handle, parent) {
-      return world.copyEntity(entity(handle), parentOf(parent)).id;
+      const src = entity(handle);
+      const copy = world.copyEntity(src, parentOf(parent));
+      if (src.model) engine.models.copy(src, copy);
+      return copy.id;
     },
     entityexists: (handle) => world.handles.get(handle) instanceof Entity ? 1 : 0,
     nameentity(handle, name) {
@@ -5958,6 +6198,526 @@ function clampSegments(n) {
   return Math.max(3, Math.min(128, n));
 }
 
+// src/engine/model/gltf.js
+var GLB_MAGIC = 1179937895;
+var CHUNK_JSON = 1313821514;
+var CHUNK_BIN = 5130562;
+var SUPPORTED_REQUIRED = /* @__PURE__ */ new Set(["KHR_texture_transform", "KHR_materials_unlit", "KHR_mesh_quantization"]);
+var COMPONENTS = {
+  5120: { array: Int8Array, bytes: 1, get: "getInt8", norm: (v) => Math.max(v / 127, -1) },
+  5121: { array: Uint8Array, bytes: 1, get: "getUint8", norm: (v) => v / 255 },
+  5122: { array: Int16Array, bytes: 2, get: "getInt16", norm: (v) => Math.max(v / 32767, -1) },
+  5123: { array: Uint16Array, bytes: 2, get: "getUint16", norm: (v) => v / 65535 },
+  5125: { array: Uint32Array, bytes: 4, get: "getUint32", norm: (v) => v },
+  5126: { array: Float32Array, bytes: 4, get: "getFloat32", norm: (v) => v }
+};
+var SIZES = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4, MAT2: 4, MAT3: 9, MAT4: 16 };
+var WRAPS = { 10497: "repeat", 33071: "clamp", 33648: "mirror" };
+async function readGltf(bytes, url, io) {
+  const { json, bin } = container(toBytes(bytes));
+  const version = String(json.asset && json.asset.version || "");
+  if (!version.startsWith("2.")) throw new Error(`this is glTF ${version || "(no version)"}, only glTF 2.0 is read`);
+  for (const ext of json.extensionsRequired || []) {
+    if (!SUPPORTED_REQUIRED.has(ext)) throw new Error(`the file needs the glTF extension ${ext}, which PolyBasic does not read`);
+  }
+  const reader = new Reader(json, url, io);
+  await reader.loadBuffers(bin);
+  return reader.read();
+}
+function toBytes(data) {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (ArrayBuffer.isView(data)) return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+  throw new Error("not file data");
+}
+function container(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.length >= 12 && view.getUint32(0, true) === GLB_MAGIC) {
+    const version = view.getUint32(4, true);
+    if (version !== 2) throw new Error(`this is a version ${version} .glb, only version 2 is read`);
+    const length = Math.min(view.getUint32(8, true), bytes.length);
+    let json = null;
+    let bin = null;
+    for (let at = 12; at + 8 <= length; ) {
+      const size = view.getUint32(at, true);
+      const type = view.getUint32(at + 4, true);
+      const body = bytes.subarray(at + 8, at + 8 + size);
+      if (type === CHUNK_JSON && !json) json = JSON.parse(new TextDecoder().decode(body));
+      else if (type === CHUNK_BIN && !bin) bin = body;
+      at += 8 + size;
+    }
+    if (!json) throw new Error("the .glb has no JSON chunk");
+    return { json, bin };
+  }
+  const text = new TextDecoder().decode(bytes).replace(/^﻿/, "");
+  if (!/^\s*\{/.test(text)) throw new Error("not a glTF file (only .gltf and .glb models are read)");
+  return { json: JSON.parse(text), bin: null };
+}
+function resolve(base, uri) {
+  try {
+    return new URL(uri, base).href;
+  } catch {
+    return uri;
+  }
+}
+function dataUri(uri) {
+  const m = /^data:([^;,]*)(;base64)?,(.*)$/s.exec(uri);
+  if (!m) return null;
+  if (!m[2]) return { mime: m[1], bytes: new TextEncoder().encode(decodeURIComponent(m[3])) };
+  const text = atob(m[3]);
+  const bytes = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+  return { mime: m[1], bytes };
+}
+function toSrgb(c) {
+  const v = Math.max(0, Math.min(1, c));
+  return v <= 31308e-7 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+var Reader = class {
+  constructor(json, url, io) {
+    this.json = json;
+    this.url = url;
+    this.io = io;
+    this.buffers = [];
+    this.accessors = /* @__PURE__ */ new Map();
+    this.textures = /* @__PURE__ */ new Map();
+    this.materials = /* @__PURE__ */ new Map();
+    this.warned = /* @__PURE__ */ new Set();
+  }
+  warnOnce(key, text) {
+    if (this.warned.has(key)) return;
+    this.warned.add(key);
+    this.io.warn(text);
+  }
+  async loadBuffers(bin) {
+    const list = this.json.buffers || [];
+    this.buffers = await Promise.all(list.map(async (b, i) => {
+      if (b.uri === void 0) {
+        if (i !== 0 || !bin) throw new Error(`buffer ${i} has no data`);
+        return bin;
+      }
+      const inline = dataUri(b.uri);
+      if (inline) return inline.bytes;
+      return toBytes(await this.io.loadFile(resolve(this.url, b.uri)));
+    }));
+  }
+  // -------------------------------------------------------------- data
+  bufferView(index) {
+    const v = this.json.bufferViews[index];
+    const buffer = this.buffers[v.buffer];
+    const offset = v.byteOffset || 0;
+    if (offset + v.byteLength > buffer.length) throw new Error(`bufferView ${index} runs past the end of its buffer`);
+    return { bytes: buffer.subarray(offset, offset + v.byteLength), stride: v.byteStride || 0 };
+  }
+  // An accessor's values as numbers (normalized ones scaled to -1..1 or
+  // 0..1), `count * size` long.
+  accessor(index) {
+    let values = this.accessors.get(index);
+    if (values) return values;
+    const a = this.json.accessors[index];
+    const comp = COMPONENTS[a.componentType];
+    const size = SIZES[a.type];
+    if (!comp || !size) throw new Error(`accessor ${index} has an unknown type`);
+    const n = a.count * size;
+    const floats = a.componentType === 5126 || a.normalized;
+    values = floats ? new Float32Array(n) : new comp.array(n);
+    if (a.bufferView !== void 0) this.readInto(values, this.bufferView(a.bufferView), a.byteOffset || 0, a.count, size, comp, a.normalized);
+    if (a.sparse) {
+      const s = a.sparse;
+      const idxComp = COMPONENTS[s.indices.componentType];
+      const indices = new idxComp.array(s.count);
+      this.readInto(indices, this.bufferView(s.indices.bufferView), s.indices.byteOffset || 0, s.count, 1, idxComp, false);
+      const sparseValues = floats ? new Float32Array(s.count * size) : new comp.array(s.count * size);
+      this.readInto(sparseValues, this.bufferView(s.values.bufferView), s.values.byteOffset || 0, s.count, size, comp, a.normalized);
+      for (let i = 0; i < s.count; i++) {
+        for (let k = 0; k < size; k++) values[indices[i] * size + k] = sparseValues[i * size + k];
+      }
+    }
+    this.accessors.set(index, values);
+    return values;
+  }
+  readInto(out, view, offset, count, size, comp, normalized) {
+    const stride = view.stride || size * comp.bytes;
+    const bytes = view.bytes;
+    if (offset + stride * (count - 1) + size * comp.bytes > bytes.length) throw new Error("an accessor runs past the end of its data");
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const get = dv[comp.get].bind(dv);
+    for (let i = 0; i < count; i++) {
+      const base = offset + i * stride;
+      for (let k = 0; k < size; k++) {
+        const v = get(base + k * comp.bytes, true);
+        out[i * size + k] = normalized ? comp.norm(v) : v;
+      }
+    }
+  }
+  // ------------------------------------------------------------ textures
+  texture(info) {
+    if (!info || info.index === void 0) return null;
+    const key = info.index;
+    if (this.textures.has(key)) return this.textures.get(key);
+    const tex = this.json.textures[info.index];
+    const t = new Texture(0, 0);
+    this.textures.set(key, t);
+    const sampler = tex.sampler !== void 0 ? this.json.samplers[tex.sampler] : {};
+    t.wrapU = WRAPS[sampler.wrapS] || "repeat";
+    t.wrapV = WRAPS[sampler.wrapT] || "repeat";
+    t.nearest = sampler.magFilter === 9728;
+    if (tex.source === void 0) {
+      this.warnOnce("texture-source", "a texture uses an image format PolyBasic does not read; it is left out");
+      t.failed = true;
+      return t;
+    }
+    const image = this.json.images[tex.source];
+    const done = (img) => {
+      if (img) {
+        t.image = img;
+        t.width = img.width;
+        t.height = img.height;
+      }
+      t.loaded = true;
+      t.version++;
+    };
+    const failed = (err) => {
+      t.failed = true;
+      this.io.warn(`a texture of the model could not be loaded (${err && err.message ? err.message : err})`);
+    };
+    let job;
+    const inline = image.uri !== void 0 ? dataUri(image.uri) : null;
+    if (image.bufferView !== void 0 || inline) {
+      const bytes = inline ? inline.bytes : this.bufferView(image.bufferView).bytes;
+      const mime = inline ? inline.mime : image.mimeType;
+      job = this.io.decodeImage ? this.io.decodeImage(bytes, mime) : Promise.resolve(null);
+    } else {
+      t.url = resolve(this.url, image.uri);
+      if (this.io.loadImage) job = this.io.loadImage(t.url);
+      else job = this.io.loadFile(t.url).then(() => null);
+    }
+    this.io.track(job.then(done, failed));
+    return t;
+  }
+  // ----------------------------------------------------------- materials
+  // The material template for a glTF material index (-1: the default).
+  material(index) {
+    if (this.materials.has(index)) return this.materials.get(index);
+    const m = new Material();
+    const g = index >= 0 ? this.json.materials[index] : {};
+    const pbr = g.pbrMetallicRoughness || {};
+    const f = pbr.baseColorFactor || [1, 1, 1, 1];
+    m.color = [toSrgb(f[0]), toSrgb(f[1]), toSrgb(f[2])];
+    m.alphaMode = (g.alphaMode || "OPAQUE").toLowerCase();
+    m.alpha = m.alphaMode === "opaque" ? 1 : f[3];
+    m.alphaCutoff = g.alphaCutoff !== void 0 ? g.alphaCutoff : 0.5;
+    m.twoSided = Boolean(g.doubleSided);
+    m.fullbright = Boolean(g.extensions && g.extensions.KHR_materials_unlit);
+    m.shininess = Math.max(0, Math.min(1, 1 - (pbr.roughnessFactor !== void 0 ? pbr.roughnessFactor : 1)));
+    m.texture = this.texture(pbr.baseColorTexture);
+    m.name = g.name || "";
+    this.materials.set(index, m);
+    return m;
+  }
+  // Which UV set the base colour texture reads, and its transform.
+  uvSetup(index) {
+    const g = index >= 0 ? this.json.materials[index] : {};
+    const info = g.pbrMetallicRoughness && g.pbrMetallicRoughness.baseColorTexture;
+    if (!info) return { set: 0, transform: null };
+    const tt = info.extensions && info.extensions.KHR_texture_transform;
+    const set = tt && tt.texCoord !== void 0 ? tt.texCoord : info.texCoord || 0;
+    const transform = tt && (tt.offset || tt.rotation || tt.scale) ? tt : null;
+    return { set, transform };
+  }
+  // -------------------------------------------------------------- meshes
+  mesh(index) {
+    const g = this.json.meshes[index];
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const colors = [];
+    const indices = [];
+    const submeshes = [];
+    const materials = [];
+    let hasColors = false;
+    for (const prim of g.primitives) {
+      const mode = prim.mode === void 0 ? 4 : prim.mode;
+      if (mode < 4) {
+        this.warnOnce("mode", "points and lines in the model are left out (only triangles are drawn)");
+        continue;
+      }
+      if (prim.targets) this.warnOnce("morph", "the model has morph targets, which PolyBasic does not play yet: it shows its base shape");
+      const attr = prim.attributes;
+      if (attr.POSITION === void 0) continue;
+      const pos = this.accessor(attr.POSITION);
+      const count = pos.length / 3;
+      let tri = prim.indices !== void 0 ? Array.from(this.accessor(prim.indices)) : Array.from({ length: count }, (_, i) => i);
+      tri = toTriangles(tri, mode);
+      const matIndex = prim.material !== void 0 ? prim.material : -1;
+      const { set, transform } = this.uvSetup(matIndex);
+      const uvKey = `TEXCOORD_${set}`;
+      const uv = attr[uvKey] !== void 0 ? this.accessor(attr[uvKey]) : null;
+      const nor = attr.NORMAL !== void 0 ? this.accessor(attr.NORMAL) : null;
+      const col = attr.COLOR_0 !== void 0 ? this.accessor(attr.COLOR_0) : null;
+      const colSize = col ? SIZES[this.json.accessors[attr.COLOR_0].type] : 0;
+      if (col) hasColors = true;
+      const flat = !nor;
+      const corners = flat ? tri : null;
+      const vertexOf = flat ? (i) => corners[i] : (i) => i;
+      const vertexCount = flat ? tri.length : count;
+      const base = positions.length / 3;
+      for (let i = 0; i < vertexCount; i++) {
+        const v = vertexOf(i);
+        positions.push(-pos[v * 3], pos[v * 3 + 1], pos[v * 3 + 2]);
+        if (nor) normals.push(-nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]);
+        let u = uv ? uv[v * 2] : 0;
+        let w = uv ? uv[v * 2 + 1] : 0;
+        if (transform) {
+          const [sx, sy] = transform.scale || [1, 1];
+          const r = transform.rotation || 0;
+          const [ox, oy] = transform.offset || [0, 0];
+          const c = Math.cos(r);
+          const s = Math.sin(r);
+          const tu = c * sx * u + s * sy * w + ox;
+          const tw = -s * sx * u + c * sy * w + oy;
+          u = tu;
+          w = tw;
+        }
+        uvs.push(u, w);
+        if (col) colors.push(col[v * colSize], col[v * colSize + 1], col[v * colSize + 2], colSize === 4 ? col[v * colSize + 3] : 1);
+        else colors.push(1, 1, 1, 1);
+      }
+      const start = indices.length;
+      if (flat) {
+        for (let i = 0; i < tri.length; i += 3) {
+          indices.push(base + i, base + i + 2, base + i + 1);
+          const [nx, ny, nz] = faceNormal(positions, base + i, base + i + 2, base + i + 1);
+          for (let k = 0; k < 3; k++) normals.push(nx, ny, nz);
+        }
+      } else {
+        for (let i = 0; i < tri.length; i += 3) indices.push(base + tri[i], base + tri[i + 2], base + tri[i + 1]);
+      }
+      let slot = materials.indexOf(matIndex);
+      if (slot < 0) {
+        slot = materials.length;
+        materials.push(matIndex);
+      }
+      submeshes.push({ start, count: indices.length - start, material: slot });
+    }
+    const data = new MeshData(positions, normals, uvs, indices);
+    data.submeshes = submeshes.length ? submeshes : data.submeshes;
+    if (hasColors) data.colors = Float32Array.from(colors);
+    const mats = materials.map((i) => {
+      const m = this.material(i).clone();
+      m.vertexColors = hasColors;
+      return m;
+    });
+    data.name = g.name || "";
+    return { mesh: data, materials: mats.length ? mats : [new Material()] };
+  }
+  // --------------------------------------------------------------- nodes
+  node(n, index) {
+    const position = new Vec3();
+    const rotation = new Quat();
+    const scale = new Vec3(1, 1, 1);
+    if (n.matrix) {
+      const m = new Mat4().fromArray(n.matrix);
+      for (const i of [1, 2, 3, 4, 8, 12]) m.e[i] = -m.e[i];
+      m.decompose(position, rotation, scale);
+    } else {
+      const t = n.translation || [0, 0, 0];
+      const r = n.rotation || [0, 0, 0, 1];
+      const s = n.scale || [1, 1, 1];
+      position.set(-t[0], t[1], t[2]);
+      rotation.set(r[0], -r[1], -r[2], r[3]).normalize();
+      scale.set(s[0], s[1], s[2]);
+    }
+    if (n.skin !== void 0) this.warnOnce("skin", "the model is skinned, which PolyBasic does not play yet: it shows in its rest pose");
+    return {
+      name: n.name || "",
+      position,
+      rotation,
+      scale,
+      mesh: n.mesh !== void 0 ? n.mesh : -1,
+      children: n.children || [],
+      index
+    };
+  }
+  // ---------------------------------------------------------- animations
+  animation(a, index) {
+    const channels = [];
+    let duration = 0;
+    for (const ch of a.channels) {
+      const path = ch.target.path;
+      if (ch.target.node === void 0) continue;
+      if (path === "weights") {
+        this.warnOnce("weights", "morph target animations are left out");
+        continue;
+      }
+      const sampler = a.samplers[ch.sampler];
+      const times = Float32Array.from(this.accessor(sampler.input));
+      const values = Float32Array.from(this.accessor(sampler.output));
+      if (path === "translation") for (let i = 0; i < values.length; i += 3) values[i] = -values[i];
+      else if (path === "rotation") {
+        for (let i = 0; i < values.length; i += 4) {
+          values[i + 1] = -values[i + 1];
+          values[i + 2] = -values[i + 2];
+        }
+      }
+      if (times.length) duration = Math.max(duration, times[times.length - 1]);
+      channels.push({ node: ch.target.node, path, interpolation: sampler.interpolation || "LINEAR", times, values });
+    }
+    return { name: a.name || `animation ${index + 1}`, duration, channels };
+  }
+  read() {
+    const json = this.json;
+    const meshes = (json.meshes || []).map((_, i) => this.mesh(i));
+    const nodes = (json.nodes || []).map((n, i) => this.node(n, i));
+    let roots;
+    const sceneIndex = json.scene !== void 0 ? json.scene : 0;
+    if (json.scenes && json.scenes[sceneIndex]) roots = json.scenes[sceneIndex].nodes || [];
+    else {
+      const child = new Set(nodes.flatMap((n) => n.children));
+      roots = nodes.map((_, i) => i).filter((i) => !child.has(i));
+    }
+    const animations = (json.animations || []).map((a, i) => this.animation(a, i));
+    return { nodes, roots, meshes, animations };
+  }
+};
+function toTriangles(idx, mode) {
+  if (mode === 4) return idx.slice(0, idx.length - idx.length % 3);
+  const out = [];
+  if (mode === 5) {
+    for (let i = 0; i + 2 < idx.length; i++) {
+      if (i % 2 === 0) out.push(idx[i], idx[i + 1], idx[i + 2]);
+      else out.push(idx[i + 1], idx[i], idx[i + 2]);
+    }
+  } else if (mode === 6) {
+    for (let i = 1; i + 1 < idx.length; i++) out.push(idx[i], idx[i + 1], idx[0]);
+  }
+  return out;
+}
+function faceNormal(p, a, b, c) {
+  const ux = p[b * 3] - p[a * 3];
+  const uy = p[b * 3 + 1] - p[a * 3 + 1];
+  const uz = p[b * 3 + 2] - p[a * 3 + 2];
+  const vx = p[c * 3] - p[a * 3];
+  const vy = p[c * 3 + 1] - p[a * 3 + 1];
+  const vz = p[c * 3 + 2] - p[a * 3 + 2];
+  const n = new Vec3(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx).normalize();
+  return [n.x, n.y, n.z];
+}
+
+// src/engine/model/model.js
+var Models = class {
+  constructor(engine) {
+    this.engine = engine;
+    this.chain = Promise.resolve();
+    this.animated = /* @__PURE__ */ new Set();
+  }
+  load(file, url, parent) {
+    const engine = this.engine;
+    const root = engine.world.createEntity("pivot", parent);
+    root.model = { data: null, nodes: [], state: null, loaded: false, failed: false };
+    const fail2 = (message) => {
+      root.model.failed = true;
+      engine.warn(`LoadMesh: could not load "${file}": ${message}`);
+    };
+    if (!engine.loadFile) {
+      fail2("this platform cannot read files");
+      return root;
+    }
+    const io = {
+      loadFile: engine.loadFile,
+      loadImage: engine.loadImage,
+      decodeImage: engine.decodeImage,
+      track: (p) => engine.track(p),
+      warn: (text) => engine.warn(`LoadMesh "${file}": ${text}`)
+    };
+    const reading = engine.loadFile(url).then((bytes) => readGltf(bytes, url, io));
+    reading.catch(() => {
+    });
+    const build = this.chain.then(() => reading).then((data) => {
+      if (!root.alive) return;
+      this.build(root, data);
+    }, (err) => fail2(err && err.message ? err.message : String(err)));
+    this.chain = build;
+    engine.track(build);
+    return root;
+  }
+  build(root, data) {
+    const world = this.engine.world;
+    const nodes = new Array(data.nodes.length).fill(null);
+    const make = (index, parent) => {
+      const n = data.nodes[index];
+      let e;
+      if (n.mesh >= 0) {
+        const m = data.meshes[n.mesh];
+        e = world.createMesh(m.mesh, parent);
+        e.materials = m.materials.map((mat) => mat.clone());
+      } else e = world.createEntity("pivot", parent);
+      e.name = n.name;
+      e.position.copy(n.position);
+      e.rotation.copy(n.rotation);
+      e.scale.copy(n.scale);
+      e.worldDirty = false;
+      e.touch();
+      nodes[index] = e;
+      for (const c of n.children) make(c, e);
+    };
+    for (const r of data.roots) make(r, root);
+    root.model.data = data;
+    root.model.nodes = nodes;
+    root.model.loaded = true;
+  }
+  // CopyEntity of a model pivot: the copy gets the same model, with its
+  // own nodes (found by their place in the tree) and no animation playing.
+  copy(src, dst) {
+    const m = src.model;
+    dst.model = { data: m.data, nodes: [], state: null, loaded: m.loaded, failed: m.failed };
+    dst.model.nodes = m.nodes.map((node) => {
+      if (!node) return null;
+      const path = [];
+      for (let e2 = node; e2 && e2 !== src; e2 = e2.parent) path.unshift(e2.parent.children.indexOf(e2));
+      let e = dst;
+      for (const i of path) e = e ? e.children[i] : null;
+      return e || null;
+    });
+  }
+  play(root, index, mode, speed) {
+    const m = root.model;
+    if (mode === ANIM_STOP || index === 0) {
+      m.state = null;
+      this.animated.delete(root);
+      return;
+    }
+    m.state = { index, mode, speed, time: speed < 0 ? m.data.animations[index - 1].duration : 0, direction: 1, playing: true };
+    this.animated.add(root);
+    pose(m, m.data.animations[index - 1], m.state.time);
+  }
+  setTime(root, time) {
+    const m = root.model;
+    const anim = m.data.animations[(m.state ? m.state.index : 1) - 1];
+    if (!anim) return;
+    const t = Math.max(0, Math.min(anim.duration, time));
+    if (m.state) m.state.time = t;
+    pose(m, anim, t);
+  }
+  // One step of dt seconds for every playing animation.
+  step(dt) {
+    for (const root of this.animated) {
+      const m = root.model;
+      if (!root.alive || !m.state) {
+        this.animated.delete(root);
+        continue;
+      }
+      const anim = m.data.animations[m.state.index - 1];
+      const going = advance(m.state, anim, dt);
+      pose(m, anim, m.state.time);
+      if (!going) {
+        m.state.playing = false;
+        this.animated.delete(root);
+      }
+    }
+  }
+};
+
 // src/engine/engine.js
 var DEFAULT_WIDTH = 800;
 var DEFAULT_HEIGHT = 600;
@@ -5982,6 +6742,7 @@ var Engine = class {
     this.world = new World();
     this.collisions = new Collisions(this.world);
     this.physics = new Physics(this.world, options.loadPhysics || null);
+    this.models = new Models(this);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
@@ -6064,6 +6825,11 @@ var Engine = class {
     else this.track(Promise.resolve().then(() => done(null)));
     return t;
   }
+  // Starts loading a glTF model; returns its pivot at once (see
+  // model/model.js).
+  loadMesh(file, parent) {
+    return this.models.load(file, resolveUrl(this.baseUrl, file), parent);
+  }
   // ----------------------------------------------------- runner hooks
   // Called before main with the commands the program uses. Returns a
   // promise when something must be loaded first, or null.
@@ -6083,9 +6849,10 @@ var Engine = class {
     if (this.steps++ === 0) this.collisions.resetAll();
     this.input.sample();
   }
-  // After each Update: the world moves on by one step. Physics first, so
-  // collisions see where bodies ended up.
+  // After each Update: the world moves on by one step. Animations, then
+  // physics, then collisions, which see where bodies ended up.
   endStep() {
+    this.models.step(STEP_MS / 1e3);
     this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
   }
@@ -6431,7 +7198,7 @@ function warnOnce(...params) {
   warn(...params);
 }
 function probeAsync(gl, sync, interval) {
-  return new Promise(function(resolve, reject) {
+  return new Promise(function(resolve2, reject) {
     function probe() {
       switch (gl.clientWaitSync(sync, gl.SYNC_FLUSH_COMMANDS_BIT, 0)) {
         case gl.WAIT_FAILED:
@@ -6441,7 +7208,7 @@ function probeAsync(gl, sync, interval) {
           setTimeout(probe, interval);
           break;
         default:
-          resolve();
+          resolve2();
       }
     }
     setTimeout(probe, interval);
@@ -20289,8 +21056,8 @@ var Loader = class {
    */
   loadAsync(url, onProgress) {
     const scope = this;
-    return new Promise(function(resolve, reject) {
-      scope.load(url, resolve, onProgress, reject);
+    return new Promise(function(resolve2, reject) {
+      scope.load(url, resolve2, onProgress, reject);
     });
   }
   /**
@@ -25622,11 +26389,11 @@ var StructuredUniform = class {
   }
 };
 var RePathPart = /(\w+)(\])?(\[|\.)?/g;
-function addUniform(container, uniformObject) {
-  container.seq.push(uniformObject);
-  container.map[uniformObject.id] = uniformObject;
+function addUniform(container2, uniformObject) {
+  container2.seq.push(uniformObject);
+  container2.map[uniformObject.id] = uniformObject;
 }
-function parseUniform(activeInfo, addr, container) {
+function parseUniform(activeInfo, addr, container2) {
   const path = activeInfo.name, pathLength = path.length;
   RePathPart.lastIndex = 0;
   while (true) {
@@ -25635,16 +26402,16 @@ function parseUniform(activeInfo, addr, container) {
     const idIsIndex = match[2] === "]", subscript = match[3];
     if (idIsIndex) id = id | 0;
     if (subscript === void 0 || subscript === "[" && matchEnd + 2 === pathLength) {
-      addUniform(container, subscript === void 0 ? new SingleUniform(id, activeInfo, addr) : new PureArrayUniform(id, activeInfo, addr));
+      addUniform(container2, subscript === void 0 ? new SingleUniform(id, activeInfo, addr) : new PureArrayUniform(id, activeInfo, addr));
       break;
     } else {
-      const map = container.map;
+      const map = container2.map;
       let next = map[id];
       if (next === void 0) {
         next = new StructuredUniform(id);
-        addUniform(container, next);
+        addUniform(container2, next);
       }
-      container = next;
+      container2 = next;
     }
   }
 }
@@ -30161,7 +30928,7 @@ var WebXRManager = class extends EventDispatcher {
     let referenceSpaceType = "local-floor";
     let foveation = 1;
     let customReferenceSpace = null;
-    let pose = null;
+    let pose2 = null;
     let glBinding = null;
     let glProjLayer = null;
     let glBaseLayer = null;
@@ -30554,10 +31321,10 @@ var WebXRManager = class extends EventDispatcher {
     };
     let onAnimationFrameCallback = null;
     function onAnimationFrame(time, frame) {
-      pose = frame.getViewerPose(customReferenceSpace || referenceSpace);
+      pose2 = frame.getViewerPose(customReferenceSpace || referenceSpace);
       xrFrame = frame;
-      if (pose !== null) {
-        const views = pose.views;
+      if (pose2 !== null) {
+        const views = pose2.views;
         if (glBaseLayer !== null) {
           renderer.setRenderTargetFramebuffer(newRenderTarget, glBaseLayer.framebuffer);
           renderer.setRenderTarget(newRenderTarget);
@@ -32322,7 +33089,7 @@ var WebGLRenderer = class {
     };
     this.compileAsync = function(scene, camera, targetScene = null) {
       const materials2 = this.compile(scene, camera, targetScene);
-      return new Promise((resolve) => {
+      return new Promise((resolve2) => {
         function checkMaterialsReady() {
           materials2.forEach(function(material) {
             const materialProperties = properties.get(material);
@@ -32332,7 +33099,7 @@ var WebGLRenderer = class {
             }
           });
           if (materials2.size === 0) {
-            resolve(scene);
+            resolve2(scene);
             return;
           }
           setTimeout(checkMaterialsReady, 10);
@@ -33401,6 +34168,11 @@ function mirrorInto(target, world) {
 function srgb(color, rgb) {
   return color.setRGB(rgb[0], rgb[1], rgb[2], SRGBColorSpace);
 }
+var WRAP = {
+  repeat: RepeatWrapping,
+  clamp: ClampToEdgeWrapping,
+  mirror: MirroredRepeatWrapping
+};
 var LIGHT_SCALE = Math.PI;
 var ThreeBackend = class extends RenderBackend {
   constructor() {
@@ -33511,6 +34283,7 @@ var ThreeBackend = class extends RenderBackend {
     g.setAttribute("position", new BufferAttribute(positions, 3));
     g.setAttribute("normal", new BufferAttribute(normals, 3));
     g.setAttribute("uv", new BufferAttribute(Float32Array.from(mesh.uvs), 2));
+    if (mesh.colors) g.setAttribute("color", new BufferAttribute(Float32Array.from(mesh.colors), 4));
     g.setIndex(new BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     g.computeBoundingSphere();
@@ -33523,11 +34296,14 @@ var ThreeBackend = class extends RenderBackend {
     const known = this.materials.get(m.id);
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
+    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1;
     const options = {
       color: srgb(new Color(), m.color),
       map: tex,
-      transparent: m.alpha < 1,
-      opacity: m.alpha,
+      transparent: blend,
+      opacity: m.alphaMode === "opaque" ? 1 : m.alpha,
+      alphaTest: m.alphaMode === "mask" ? m.alphaCutoff : 0,
+      vertexColors: m.vertexColors,
       side: m.twoSided ? DoubleSide : FrontSide
     };
     let material;
@@ -33553,14 +34329,13 @@ var ThreeBackend = class extends RenderBackend {
     if (known) known.texture.dispose();
     let texture;
     if (t.image) texture = new Texture2(t.image);
-    else {
-      texture = new DataTexture(new Uint8Array(t.pixels), t.width, t.height, RGBAFormat);
-      texture.magFilter = NearestFilter;
-    }
+    else if (t.pixels) texture = new DataTexture(new Uint8Array(t.pixels), t.width, t.height, RGBAFormat);
+    else return null;
+    if (t.nearest) texture.magFilter = NearestFilter;
     texture.flipY = false;
     texture.colorSpace = SRGBColorSpace;
-    texture.wrapS = RepeatWrapping;
-    texture.wrapT = RepeatWrapping;
+    texture.wrapS = WRAP[t.wrapU] || RepeatWrapping;
+    texture.wrapT = WRAP[t.wrapV] || RepeatWrapping;
     texture.repeat.set(t.scaleU, t.scaleV);
     texture.generateMipmaps = true;
     texture.minFilter = LinearMipmapLinearFilter;
@@ -33721,7 +34496,7 @@ function attachDomInput(input, element, toLogical) {
 
 // src/engine/browser.js
 var MAX_PIXEL_RATIO = 2;
-function createScreen(container) {
+function createScreen(container2) {
   const box = document.createElement("div");
   box.className = "polybasic-screen";
   box.style.cssText = "position: relative; flex: none;";
@@ -33733,7 +34508,7 @@ function createScreen(container) {
   overlayCanvas.style.pointerEvents = "none";
   gl.tabIndex = 0;
   box.append(gl, overlayCanvas);
-  container.append(box);
+  container2.append(box);
   const backend = new ThreeBackend();
   backend.init(gl);
   const overlay = new CanvasOverlay(overlayCanvas);
@@ -33741,7 +34516,7 @@ function createScreen(container) {
   let width = 800;
   let height = 600;
   const fit = () => {
-    const area = container.getBoundingClientRect();
+    const area = container2.getBoundingClientRect();
     if (area.width <= 0 || area.height <= 0) return;
     const scale = Math.min(area.width / width, area.height / height);
     const cssW = Math.max(1, Math.floor(width * scale));
@@ -33752,16 +34527,16 @@ function createScreen(container) {
     backend.resize(width, height, ratio);
     overlay.resize(width, height, ratio);
   };
-  new ResizeObserver(fit).observe(container);
+  new ResizeObserver(fit).observe(container2);
   const toLogical = (clientX, clientY) => {
     const r = box.getBoundingClientRect();
     return [(clientX - r.left) * width / r.width, (clientY - r.top) * height / r.height];
   };
   attachDomInput(input, gl, toLogical);
-  const loadImage = (url) => new Promise((resolve, reject) => {
+  const loadImage = (url) => new Promise((resolve2, reject) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
+    img.onload = () => resolve2(img);
     img.onerror = () => reject(new Error(`Cannot load ${url}`));
     img.src = url;
   });

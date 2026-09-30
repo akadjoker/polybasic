@@ -28,6 +28,12 @@ function srgb(color, rgb)
   return color.setRGB(rgb[0], rgb[1], rgb[2], THREE.SRGBColorSpace);
 }
 
+const WRAP = {
+  repeat: THREE.RepeatWrapping,
+  clamp: THREE.ClampToEdgeWrapping,
+  mirror: THREE.MirroredRepeatWrapping
+};
+
 // three.js lights are physically based; π makes an intensity of "1" light
 // a white surface facing the light to full white, as the commands promise.
 const LIGHT_SCALE = Math.PI;
@@ -170,6 +176,7 @@ export class ThreeBackend extends RenderBackend
     g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(Float32Array.from(mesh.uvs), 2));
+    if (mesh.colors) g.setAttribute('color', new THREE.BufferAttribute(Float32Array.from(mesh.colors), 4));
     g.setIndex(new THREE.BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     g.computeBoundingSphere();
@@ -185,11 +192,15 @@ export class ThreeBackend extends RenderBackend
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
 
+    // Built-in shapes go by `alpha`; model materials say how alpha is used.
+    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1;
     const options = {
       color: srgb(new THREE.Color(), m.color),
       map: tex,
-      transparent: m.alpha < 1,
-      opacity: m.alpha,
+      transparent: blend,
+      opacity: m.alphaMode === 'opaque' ? 1 : m.alpha,
+      alphaTest: m.alphaMode === 'mask' ? m.alphaCutoff : 0,
+      vertexColors: m.vertexColors,
       side: m.twoSided ? THREE.DoubleSide : THREE.FrontSide
     };
     let material;
@@ -219,17 +230,15 @@ export class ThreeBackend extends RenderBackend
     if (known) known.texture.dispose();
     let texture;
     if (t.image) texture = new THREE.Texture(t.image);
-    else
-    {
-      texture = new THREE.DataTexture(new Uint8Array(t.pixels), t.width, t.height, THREE.RGBAFormat);
-      // Small generated textures are usually pixel patterns: keep them sharp.
-      texture.magFilter = THREE.NearestFilter;
-    }
+    else if (t.pixels) texture = new THREE.DataTexture(new Uint8Array(t.pixels), t.width, t.height, THREE.RGBAFormat);
+    else return null;
+    // Generated textures are usually pixel patterns, kept sharp.
+    if (t.nearest) texture.magFilter = THREE.NearestFilter;
     // Our rows start at the top, like the images: no flipping.
     texture.flipY = false;
     texture.colorSpace = THREE.SRGBColorSpace;
-    texture.wrapS = THREE.RepeatWrapping;
-    texture.wrapT = THREE.RepeatWrapping;
+    texture.wrapS = WRAP[t.wrapU] || THREE.RepeatWrapping;
+    texture.wrapT = WRAP[t.wrapV] || THREE.RepeatWrapping;
     texture.repeat.set(t.scaleU, t.scaleV);
     texture.generateMipmaps = true;
     texture.minFilter = THREE.LinearMipmapLinearFilter;
