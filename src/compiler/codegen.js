@@ -104,8 +104,8 @@ class Generator
     for (const fn of sem.functions) this.functionDecl(fn);
     this.mainDecl(sem.main);
     this.pos = null;
-    const update = sem.update ? sem.update.js : 'null';
-    const draw = sem.draw ? sem.draw.js : 'null';
+    const update = this.frameEntry(sem.update);
+    const draw = this.frameEntry(sem.draw);
     this.emit('');
     this.emit(`return { main: $main, update: ${update}, draw: ${draw} };`);
     this.indent = 0;
@@ -138,6 +138,16 @@ class Generator
     js += `export const $map = { files: ${JSON.stringify(files)}, lines: ${JSON.stringify(lineMap)}`;
     js += files.length > 1 ? `, fileOf: ${JSON.stringify(fileMap)} };\n` : ' };\n';
     return js;
+  }
+
+  // The host calls Update and Draw with no arguments; parameters with
+  // defaults (the only kind they may have) get their values here.
+  frameEntry(fn)
+  {
+    if (!fn) return 'null';
+    if (!fn.params.length) return fn.js;
+    const defaults = fn.params.map((p) => this.expr(p.def)).join(', ');
+    return `() => ${fn.js}(${defaults})`;
   }
 
   typeDecl(t)

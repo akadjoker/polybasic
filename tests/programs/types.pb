@@ -96,3 +96,19 @@ For item = Each Vec
   Write item\x + " "
 Next
 Print
+
+; Deleting the current object and the next one inside For Each
+Delete Each Vec
+For i = 1 To 6
+  v = New Vec
+  v\x = i
+Next
+For v.Vec = Each Vec
+  Write v\x + " "
+  If v\x = 2
+    following.Vec = After v
+    Delete v
+    Delete following
+  EndIf
+Next
+Print
