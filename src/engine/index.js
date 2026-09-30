@@ -2,6 +2,7 @@
 
 export { Engine, DEFAULT_WIDTH, DEFAULT_HEIGHT } from './engine.js';
 export { ENGINE_COMMANDS, ENGINE_CONSTANTS, createEngineCommands } from './commands.js';
+export { PHYSICS_KEYS } from './physics/commands.js';
 export { RenderBackend } from './render/backend.js';
 export { NullBackend } from './render/null/null-backend.js';
 export { NullOverlay, CanvasOverlay } from './overlay/overlay.js';

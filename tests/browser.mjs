@@ -18,7 +18,8 @@
 //     mirrored);
 //   - playground projects: saved examples run from their own files,
 //     several files with uploads and Include, errors in the right file,
-//     everything kept across reloads;
+//     everything kept across reloads; .zip out and back in; an exported
+//     page that plays alone, from a server or opened from the disk;
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
@@ -864,6 +865,101 @@ End Function
     assert(await project(page, async (pid) => (await window.polybasicPlayground.getStore().get(pid)) === null, id), 'the project was not deleted');
     noConsoleErrors(page);
     await page.close();
+  });
+
+  await check('playground: a project downloads as .zip and comes back as the same project', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    answer('Spin to zip');
+    await page.click('#saveAsProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const first = await project(page, () => window.polybasicPlayground.getProject());
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#exportZipBtn')]);
+    assert(download.suggestedFilename() === 'spin-to-zip.zip', download.suggestedFilename());
+    const zipPath = join(SHOTS, 'spin-to-zip.zip');
+    await download.saveAs(zipPath);
+    const bytes = Array.from(readFileSync(zipPath));
+    const secondId = await project(page, (b) => window.polybasicPlayground.importZip('spin-to-zip.zip', new Uint8Array(b)), bytes);
+    const second = await project(page, () => window.polybasicPlayground.getProject());
+    assert(secondId && second.id !== first.id && second.name === 'Spin to zip' && second.main === first.main, JSON.stringify(second));
+    assert(second.paths.join() === first.paths.join(), `${second.paths} vs ${first.paths}`);
+    const same = await project(page, async ([a, b]) =>
+    {
+      const store = window.polybasicPlayground.getStore();
+      const fa = await store.readAll(a);
+      const fb = await store.readAll(b);
+      return [...fa].every(([p, d]) => fb.get(p) && fb.get(p).join() === d.join());
+    }, [first.id, second.id]);
+    assert(same, 'the imported files differ');
+    await page.waitForFunction(() =>
+    {
+      const s = window.polybasicPlayground.getSession();
+      return s && s.engine.frames > 5;
+    }, null, { timeout: 20000 });
+    for (const id of [first.id, second.id]) await project(page, (x) => window.polybasicPlayground.getStore().remove(x), id);
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('playground: an exported page plays on its own, from a server or from the disk, physics included', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=crates`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'crates', null, { timeout: 20000 });
+    answer('Crates page');
+    await page.click('#saveAsProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const id = await project(page, () => window.polybasicPlayground.getProjectId());
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#exportPageBtn')]);
+    assert(download.suggestedFilename() === 'crates-page.html', download.suggestedFilename());
+    const htmlPath = join(SHOTS, 'crates-page.html');
+    await download.saveAs(htmlPath);
+    await project(page, (x) => window.polybasicPlayground.getStore().remove(x), id);
+    noConsoleErrors(page);
+    await page.close();
+    const size = readFileSync(htmlPath).length;
+
+    const results = [];
+    for (const url of [`${base}/tests/output/crates-page.html`, `file://${htmlPath}`])
+    {
+      const game = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      const problems = [];
+      game.on('console', (m) =>
+      {
+        if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`);
+      });
+      game.on('pageerror', (e) => problems.push(e.message));
+      // Only the page itself may be fetched.
+      const fetched = [];
+      await game.route('**/*', (route) =>
+      {
+        const u = route.request().url();
+        if (u === url) return route.continue();
+        if (u.startsWith('blob:') || u.startsWith('data:')) return route.continue();
+        fetched.push(u);
+        return route.abort();
+      });
+      await game.goto(url);
+      await game.waitForFunction(() => window.polybasicPage && window.polybasicPage.engine && window.polybasicPage.engine.frames > 30, null, { timeout: 30000 });
+      const state = await game.evaluate(() => ({
+        status: window.polybasicPage.status,
+        bodies: window.polybasicPage.engine.physics.bodies.size,
+        colours: 0
+      }));
+      const stats = await game.evaluate(`(${canvasStats})(window.polybasicPage.screen.canvas)`);
+      await game.screenshot({ path: join(SHOTS, url.startsWith('file:') ? 'exported-page-file.png' : 'exported-page.png') });
+      assert(state.status === 'running', `status ${state.status} at ${url}`);
+      assert(state.bodies > 20, `${state.bodies} bodies at ${url}`);
+      assert(stats.colours > 30, `blank page at ${url}`);
+      assert(fetched.length === 0, `fetched: ${fetched.join(', ')}`);
+      assert(problems.length === 0, `console at ${url}:\n${problems.join('\n')}`);
+      results.push(url.startsWith('file:') ? 'from the disk' : 'from a server');
+      await game.close();
+    }
+    facts.exportedPage = `${(size / 1024 / 1024).toFixed(2)} MB page with physics, plays ${results.join(' and ')}`;
+    console.log(`      ${facts.exportedPage}`);
   });
 
   await check('playground: a program kept by an earlier playground becomes a project', async () =>

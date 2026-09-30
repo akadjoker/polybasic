@@ -21,10 +21,11 @@ import {
   setDiagnostics
 } from './vendor/codemirror.js';
 import {
-  compile, CompileError, loadProgram, runProgram, BrowserHost, createScreen, PROJECT_SCHEME
+  compile, CompileError, loadProgram, runProgram, BrowserHost, createScreen, PROJECT_SCHEME, PHYSICS_KEYS
 } from '../dist/polybasic.js';
 import { polybasicLanguage, toDiagnostic } from './polybasic-language.js';
 import { ProjectStore, cleanPath } from './projects.js';
+import { projectToZip, projectFromZip, projectPage } from './export.js';
 
 const MANIFEST_URL = 'programs/manifest.json';
 // Static hosting caches files; revalidate so a new deploy shows up.
@@ -1035,21 +1036,94 @@ function updateStats()
   if (session && session.engine) el.stats.textContent = `${session.engine.fps} fps · ${session.engine.world.entities.length} entities`;
 }
 
-// ── Export and import (see F4-5) ────────────────────────────────────────
+// ── Export and import ───────────────────────────────────────────────────
+
+// Hands the browser a file to save.
+function download(bytes, name, type)
+{
+  const url = URL.createObjectURL(new Blob([bytes], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// A file name made from a project name ("My Game!" -> "my-game").
+function slug(name)
+{
+  return name.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'project';
+}
 
 async function exportZip()
 {
-  toast('Not ready yet');
+  await saveNow();
+  download(await projectToZip(project, files), `${slug(project.name)}.zip`, 'application/zip');
+  toast('Project downloaded as .zip');
 }
 
+// One page with the engine, the compiled program and all the project's
+// files; the physics engine too when the program uses physics.
 async function exportPage()
 {
-  toast('Not ready yet');
+  await saveNow();
+  let compiled;
+  try
+  {
+    compiled = compile(textOf(project.main) ?? '', { file: project.main, readFile: readProjectFile });
+  }
+  catch (err)
+  {
+    if (!(err instanceof CompileError)) throw err;
+    await showCompileError(err);
+    toast('Fix the program first: it does not compile');
+    return;
+  }
+  const uses = (await loadProgram(compiled.js)).$uses || [];
+  const needsPhysics = uses.some((name) => PHYSICS_KEYS.has(name));
+  let engine;
+  let physics = null;
+  try
+  {
+    const get = async (url) =>
+    {
+      const response = await fetch(url, FETCH_OPTIONS);
+      if (!response.ok) throw new Error(`${url}: ${response.status}`);
+      return response.text();
+    };
+    engine = await get('../dist/polybasic.js');
+    if (needsPhysics) physics = await get('../dist/physics.js');
+  }
+  catch (err)
+  {
+    logLine(`Could not export the page: ${err.message}`, 'error');
+    return;
+  }
+  const html = projectPage({ name: project.name, main: project.main, files, js: compiled.js, engine, physics });
+  download(encoder.encode(html), `${slug(project.name)}.html`, 'text/html');
+  toast(`Page exported (${formatSize(html.length)})`);
 }
 
 async function importZip(file)
 {
-  toast(`Not ready yet: ${file.name}`);
+  let imported;
+  try
+  {
+    imported = await projectFromZip(new Uint8Array(await file.arrayBuffer()), file.name);
+  }
+  catch (err)
+  {
+    logLine(`Could not import ${file.name}: ${err.message}`, 'error');
+    toast('Import failed');
+    return null;
+  }
+  const record = await store.create(imported.name, Object.fromEntries(imported.files), imported.main);
+  await openProject(record.id);
+  if (imported.skipped.length) logLine(`Left out of the import (not usable file names): ${imported.skipped.join(', ')}`, 'warn');
+  toast(`Imported ${imported.name}`);
+  return record.id;
 }
 
 // ── Full screen ─────────────────────────────────────────────────────────
@@ -1247,6 +1321,7 @@ window.polybasicPlayground = {
   newProject: (name) => newProject(name),
   // [{ name, bytes }] as if chosen with Upload.
   upload: (list) => uploadFiles(list.map(({ name, bytes }) => new File([bytes], name))),
+  importZip: (name, bytes) => importZip(new File([bytes], name)),
   saveNow: () => saveNow(),
   run: () => run(),
   buildShareUrl: () => buildShareUrl(),
