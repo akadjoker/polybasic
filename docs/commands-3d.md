@@ -82,6 +82,7 @@ that take an `isGlobal` flag work in world coordinates when it is `True`.
 | `CreateLight%(kind = LIGHT_DIRECTIONAL, parent = 0)` | A directional light shines along its entity's forward axis, like the sun: turn it with `RotateEntity`. A point light (`LIGHT_POINT`) shines in every direction from where it is. |
 | `LightColor light, r, g, b` | Colour and brightness (default white). |
 | `LightRange light, range#` | How far a point light reaches (default 10). |
+| `LightShadows light, on = True, area# = 40` | The light casts shadows (off by default). A directional light's shadows cover a square `area` units wide around what the camera looks at, moving with it: smaller is sharper, larger reaches further. A point light's reach as far as its `LightRange`. Every shape casts and receives shadows unless its `EntityFX` says otherwise. |
 | `AmbientLight r, g, b` | Light that comes from everywhere, so unlit sides are not black (default 64, 64, 64). |
 
 ## Shapes and pivots
@@ -106,7 +107,7 @@ the same kind share their geometry, so a thousand cubes cost little.
 | `EntityColor entity, r, g, b` | The surface colour (default white). |
 | `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible. |
 | `EntityShininess entity, shininess#` | 0 matte to 1 very shiny. |
-| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too). |
+| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
 | `EntityOrder entity, order` | Lower orders draw first (cameras too). |
 
@@ -465,6 +466,7 @@ the top-left; text stays sharp at any page size.
 | `MOUSE_LEFT` `MOUSE_RIGHT` `MOUSE_MIDDLE` | 1 2 3 |
 | `LIGHT_DIRECTIONAL` `LIGHT_POINT` | 1 2 |
 | `FX_FULLBRIGHT` `FX_FLAT` `FX_TWOSIDED` | 1 4 16 |
+| `FX_NOSHADOWCAST` `FX_NOSHADOWRECV` | 131072 262144 |
 | `PICK_NONE` `PICK_SPHERE` `PICK_POLYGON` `PICK_BOX` | 0 1 2 3 |
 | `COLLIDE_SPHERE` `COLLIDE_POLYGON` `COLLIDE_BOX` | 1 2 3 |
 | `RESPONSE_STOP` `RESPONSE_SLIDE` `RESPONSE_SLIDE_NO_DOWNHILL` | 1 2 3 |

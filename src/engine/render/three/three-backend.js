@@ -38,6 +38,11 @@ const WRAP = {
 // a white surface facing the light to full white, as the commands promise.
 const LIGHT_SCALE = Math.PI;
 
+// Shadow maps: texels a side, for a directional light and for each of the
+// six faces of a point light's.
+const SUN_MAP = 2048;
+const POINT_MAP = 1024;
+
 export class ThreeBackend extends RenderBackend
 {
   constructor()
@@ -58,6 +63,10 @@ export class ThreeBackend extends RenderBackend
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
+    // Only lights that cast shadows cost anything (three.js leaves the
+    // shadow code out of the shaders while none does).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.scene = new THREE.Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new THREE.AmbientLight(0xffffff, 0);
@@ -123,7 +132,9 @@ export class ThreeBackend extends RenderBackend
       r.setScissor(x, gy, w, h);
       r.setClearColor(srgb(new THREE.Color(), cam.clearColor), 1);
       r.clear(true, true, true);
-      r.render(this.scene, this.syncCamera(cam, w / h));
+      const camera = this.syncCamera(cam, w / h);
+      this.fitShadows(camera);
+      r.render(this.scene, camera);
     }
   }
 
@@ -148,6 +159,8 @@ export class ThreeBackend extends RenderBackend
     obj.material = material;
     obj.visible = true;
     obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
     mirrorInto(obj.matrix, item.world);
     obj.matrixWorldNeedsUpdate = true;
   }
@@ -275,14 +288,25 @@ export class ThreeBackend extends RenderBackend
       light.intensity = LIGHT_SCALE;
       light.visible = true;
       light.position.set(w[12], w[13], -w[14]);
+      light.castShadow = l.shadows > 0;
       if (l.type === 2)
       {
         light.distance = l.range;
         light.decay = 0;
+        if (light.castShadow)
+        {
+          light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
+          light.shadow.camera.near = 0.05;
+          light.shadow.camera.far = l.range > 0 ? l.range : 100;
+          light.shadow.bias = -0.002;
+          light.shadow.normalBias = 0.02;
+        }
       }
       else
       {
         // A directional light shines along its entity's forward axis.
+        light.userData.direction = new THREE.Vector3(w[8], w[9], -w[10]).normalize();
+        light.userData.area = l.shadows;
         light.target.position.set(w[12] + w[8], w[13] + w[9], -(w[14] + w[10]));
         light.target.updateMatrixWorld();
       }
@@ -290,6 +314,49 @@ export class ThreeBackend extends RenderBackend
     for (const [id, light] of this.lights)
     {
       if (!seen.has(id)) light.visible = false;
+    }
+  }
+
+  // A directional light's shadows cover a square of `area` units around
+  // what the camera looks at. Its centre moves in steps of one shadow texel
+  // (in the light's own view), so the shadows' edges do not crawl as the
+  // camera moves.
+  fitShadows(camera)
+  {
+    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const forward = new THREE.Vector3(0, 0, -1).transformDirection(camera.matrixWorld);
+    for (const light of this.lights.values())
+    {
+      if (!light.visible || !light.castShadow || light.type !== 'DirectionalLight') continue;
+      const area = light.userData.area;
+      const dir = light.userData.direction;
+      const shadow = light.shadow;
+      if (shadow.mapSize.x !== SUN_MAP) shadow.mapSize.set(SUN_MAP, SUN_MAP);
+      const cam = shadow.camera;
+      cam.left = -area / 2;
+      cam.right = area / 2;
+      cam.top = area / 2;
+      cam.bottom = -area / 2;
+      cam.near = 0.1;
+      cam.far = area * 2;
+      cam.updateProjectionMatrix();
+      const texel = area / SUN_MAP;
+      shadow.bias = -0.0005;
+      shadow.normalBias = texel * 1.5;
+
+      // The centre, a little ahead of the camera, snapped in light space.
+      const centre = eye.clone().addScaledVector(forward, area * 0.35);
+      const up = Math.abs(dir.y) > 0.99 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      const basis = new THREE.Matrix4().lookAt(new THREE.Vector3(), dir, up);
+      const inverse = basis.clone().invert();
+      centre.applyMatrix4(inverse);
+      centre.x = Math.round(centre.x / texel) * texel;
+      centre.y = Math.round(centre.y / texel) * texel;
+      centre.applyMatrix4(basis);
+      light.target.position.copy(centre);
+      light.position.copy(centre).addScaledVector(dir, -area);
+      light.target.updateMatrixWorld();
+      light.updateMatrixWorld();
     }
   }
 

@@ -161,6 +161,39 @@ End Function
   near(w[10], Math.cos(Math.PI / 3), 1e-9, 'forward z');
 });
 
+test('shadows reach the backend: lights that cast them, entities that cast and receive', async () =>
+{
+  const module = await load(`
+Global sun, lamp, box, ground, copy
+cam = CreateCamera()
+sun = CreateLight()
+LightShadows sun, True, 25
+lamp = CreateLight(LIGHT_POINT)
+LightShadows lamp
+box = CreateCube()
+ground = CreatePlane()
+EntityFX ground, FX_NOSHADOWCAST
+EntityFX box, FX_FULLBRIGHT Or FX_NOSHADOWRECV
+copy = CopyEntity(box)
+Function Update()
+  If FrameCount() = 2 Then LightShadows lamp, False
+End Function
+`);
+  const backend = new NullBackend();
+  backend.init(null);
+  const engine = new Engine({ backend });
+  await runProgram(module, new CaptureHost(), { engine, maxUpdates: 3 });
+  const f = backend.lastFrame;
+  const [sun, lamp] = f.lights;
+  assert(sun.shadows === 25 && lamp.shadows === 0, `lights: ${JSON.stringify(f.lights.map((l) => l.shadows))}`);
+  const [box, ground, copy] = f.items;
+  assert(box.castShadow && !box.receiveShadow, `box: ${JSON.stringify(box)}`);
+  assert(!ground.castShadow && ground.receiveShadow, 'ground');
+  assert(copy.castShadow && !copy.receiveShadow, 'a copy keeps the shadow flags');
+  const result = await runProgram(await load('l = CreateLight()\nLightShadows l, True, 0\n'), new CaptureHost(), { engine: new Engine() });
+  assert(result.status === 'error' && /area above 0/.test(result.error.message), JSON.stringify(result));
+});
+
 test('a program with a scene but no Update still renders one frame', async () =>
 {
   const module = await load('CreateCamera()\nCreateCube()\n');

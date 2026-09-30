@@ -16,8 +16,11 @@
 //     clearColor: [r, g, b],             used when there is no camera
 //     ambient: [r, g, b],
 //     cameras: [{ id, world, fov, near, far, clearColor, viewport }],
-//     lights:  [{ id, world, type, color, range }],  type 1 directional, 2 point
-//     items:   [{ id, world, mesh, materials }],      mesh: MeshData, materials: [Material]
+//     lights:  [{ id, world, type, color, range, shadows }],  type 1 directional, 2 point;
+//              shadows 0: none, otherwise the width of the square around the
+//              camera a directional light's shadows cover
+//     items:   [{ id, world, mesh, materials, castShadow, receiveShadow }],
+//              mesh: MeshData, materials: [Material]
 //              (submesh s of the mesh uses materials[s.material])
 //     freedEntities: [id],  freedTextures: [Texture] }
 //

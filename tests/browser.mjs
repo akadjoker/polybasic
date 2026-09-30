@@ -36,6 +36,7 @@ import { nodeEngineOptions } from '../src/node.js';
 import { projectPoint } from '../src/engine/collide/camera.js';
 import { hear } from '../src/engine/audio/spatial.js';
 import { Mat4, Vec3, Quat } from '../src/engine/math/index.js';
+import { World } from '../src/engine/scene/world.js';
 import { makeWav } from './unit/audio.mjs';
 import { projectPage } from '../web/export.js';
 
@@ -1147,6 +1148,98 @@ End Function
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // Where the box's shadow falls: from its centre along the sun's
+    // forward axis down to the ground.
+    const sunEntity = new World().createEntity('light');
+    sunEntity.setRotation(60, -35, 0, false);
+    const d = sunEntity.worldMatrix.e;
+    const t = -3 / d[9];
+    const spot = [d[8] * t, 0, 5 + d[10] * t];
+    const scene = (lighting, extra) => `Graphics3D 640, 480
+Global cam, box, ground
+cam = CreateCamera()
+PositionEntity cam, 0, 7, -5
+target = CreatePivot()
+PositionEntity target, 0, 0, 5
+PointEntity cam, target
+ground = CreatePlane(8)
+ScaleEntity ground, 12, 1, 12
+EntityColor ground, 210, 210, 210
+box = CreateCube()
+PositionEntity box, 0, 3, 5
+EntityColor box, 230, 80, 60
+AmbientLight 50, 50, 50
+${lighting}
+${extra}
+Function Update()
+  If FrameCount() = 1
+    CameraProject cam, ${spot.join(', ')}
+    Print "shade " + ProjectedX() + " " + ProjectedY()
+    CameraProject cam, 0, 0, 5
+    Print "under " + ProjectedX() + " " + ProjectedY()
+    CameraProject cam, 4, 0, 1
+    Print "lit " + ProjectedX() + " " + ProjectedY()
+  EndIf
+End Function
+`;
+    const sun = 'sun = CreateLight()\nRotateEntity sun, 60, -35, 0';
+    const lamp = 'lamp = CreateLight(LIGHT_POINT)\nPositionEntity lamp, 0, 8, 5\nLightRange lamp, 40';
+    // Brightness of the ground at two points: in the shadow and in the open.
+    const measure = async (text, where) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('lit'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      const log = await consoleText(page);
+      const point = (name) => /(-?[\d.]+) (-?[\d.]+)/.exec(log.slice(log.indexOf(name) + name.length)).slice(1).map(Number);
+      const levels = await page.evaluate(([a, b]) =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const at = ([x, y]) =>
+        {
+          const px = ctx.getImageData(Math.round(x * canvas.width / 640), Math.round(y * canvas.height / 480), 1, 1).data;
+          return (px[0] + px[1] + px[2]) / 3;
+        };
+        return [at(a), at(b)];
+      }, [point(where), point('lit')]);
+      return levels[0] / levels[1];
+    };
+    const ratios = {
+      sun: await measure(scene(sun, 'LightShadows sun'), 'shade'),
+      off: await measure(scene(sun, ''), 'shade'),
+      noCast: await measure(scene(sun, 'LightShadows sun\nEntityFX box, FX_NOSHADOWCAST'), 'shade'),
+      noReceive: await measure(scene(sun, 'LightShadows sun\nEntityFX ground, FX_NOSHADOWRECV'), 'shade'),
+      lamp: await measure(scene(lamp, 'LightShadows lamp'), 'under'),
+      lampOff: await measure(scene(lamp, ''), 'under')
+    };
+    await measure(scene(sun, 'LightShadows sun'), 'shade');
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'shadows.png') });
+    const text = Object.entries(ratios).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ');
+    assert(ratios.sun < 0.6 && ratios.lamp < 0.6, `no shadow where it should fall: ${text}`);
+    for (const name of ['off', 'noCast', 'noReceive'])
+    {
+      assert(ratios[name] > 0.9, `a shadow that should not be there (${name}): ${text}`);
+    }
+    // The point light is right above the spot, the open ground further off:
+    // without shadows the spot is at least as bright.
+    assert(ratios.lampOff > 0.9, `lamp without shadows: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    facts.shadows = `shadow / open ground: ${text}`;
+    console.log(`      ${facts.shadows}`);
   });
 
   await check('sound: Web Audio plays made sounds and songs; a 3D sound comes from the side it is drawn on', async () =>

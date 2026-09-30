@@ -30,7 +30,9 @@ export class World
     {
       e.camera = { fov: 60, near: 0.1, far: 1000, clearColor: [0, 0, 0], viewport: null };
     }
-    if (kind === 'light') e.light = { type: 1, color: [1, 1, 1], range: 10 };
+    // shadows: 0 casts none; otherwise, for a directional light, the size of
+    // the square around the camera its shadows cover.
+    if (kind === 'light') e.light = { type: 1, color: [1, 1, 1], range: 10, shadows: 0 };
     if (parent) e.setParent(parent, false);
     return e;
   }
@@ -92,6 +94,8 @@ export class World
     e.scale.copy(src.scale);
     e.visible = src.visible;
     e.order = src.order;
+    e.castShadow = src.castShadow;
+    e.receiveShadow = src.receiveShadow;
     e.mesh = src.mesh;
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
@@ -126,7 +130,7 @@ export class World
       const world = e.worldMatrix.e;
       if (e.kind === 'camera') cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials });
+      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);

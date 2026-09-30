@@ -38,6 +38,7 @@ export const ENGINE_COMMANDS = [
   'CreateLight%(kind = 1, parent = 0)',
   'LightColor(light, r, g, b)',
   'LightRange(light, range#)',
+  'LightShadows(light, on = 1, area# = 40)',
   'AmbientLight(r, g, b)',
 
   // Shapes and pivots
@@ -135,6 +136,8 @@ export const ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
+  FX_NOSHADOWCAST: 0x20000,
+  FX_NOSHADOWRECV: 0x40000,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
@@ -221,6 +224,11 @@ export function createEngineCommands(engine)
     {
       ofKind(light, 'light', 'light').light.range = Math.max(0, range);
     },
+    lightshadows(light, on, area)
+    {
+      if (on && !(area > 0)) throw runtimeError(`LightShadows needs an area above 0, not ${area}`);
+      ofKind(light, 'light', 'light').light.shadows = on ? area : 0;
+    },
     ambientlight(r, g, b)
     {
       world.ambient = [unit(r), unit(g), unit(b)];
@@ -269,6 +277,9 @@ export function createEngineCommands(engine)
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
       m.changed();
+      const e = entity(handle);
+      e.castShadow = (flags & 0x20000) === 0;
+      e.receiveShadow = (flags & 0x40000) === 0;
     },
     entitytexture(handle, tex)
     {

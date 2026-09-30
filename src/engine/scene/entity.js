@@ -27,6 +27,10 @@ export class Entity
     this.scale = new Vec3(1, 1, 1);
     this.visible = true;
     this.order = 0;         // draw order: lower first; cameras render in this order
+    // Shadows (for lights that cast them): does it cast one, and do the
+    // others fall on it? EntityFX FX_NOSHADOWCAST / FX_NOSHADOWRECV.
+    this.castShadow = true;
+    this.receiveShadow = true;
     this.alive = true;
     this.mesh = null;
     this.materials = [];

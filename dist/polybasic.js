@@ -3357,6 +3357,8 @@ var Entity = class {
     this.scale = new Vec3(1, 1, 1);
     this.visible = true;
     this.order = 0;
+    this.castShadow = true;
+    this.receiveShadow = true;
     this.alive = true;
     this.mesh = null;
     this.materials = [];
@@ -3624,7 +3626,7 @@ var World = class {
     if (kind === "camera") {
       e.camera = { fov: 60, near: 0.1, far: 1e3, clearColor: [0, 0, 0], viewport: null };
     }
-    if (kind === "light") e.light = { type: 1, color: [1, 1, 1], range: 10 };
+    if (kind === "light") e.light = { type: 1, color: [1, 1, 1], range: 10, shadows: 0 };
     if (parent) e.setParent(parent, false);
     return e;
   }
@@ -3672,6 +3674,8 @@ var World = class {
     e.scale.copy(src.scale);
     e.visible = src.visible;
     e.order = src.order;
+    e.castShadow = src.castShadow;
+    e.receiveShadow = src.receiveShadow;
     e.mesh = src.mesh;
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
@@ -3701,7 +3705,7 @@ var World = class {
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials });
+      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -3774,8 +3778,8 @@ var NullBackend = class extends RenderBackend {
     for (const t of frame.freedTextures) this.textures.delete(t.id);
     this.lastFrame = {
       cameras: frame.cameras.map((c) => ({ id: c.id, world: Array.from(c.world), fov: c.fov })),
-      lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world) })),
-      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world) }))
+      lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world), shadows: l.shadows })),
+      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow }))
     };
     if (this.calls.length < 1e3) this.calls.push(["render", frame.cameras.length, frame.lights.length, frame.items.length]);
   }
@@ -6658,6 +6662,7 @@ var ENGINE_COMMANDS = [
   "CreateLight%(kind = 1, parent = 0)",
   "LightColor(light, r, g, b)",
   "LightRange(light, range#)",
+  "LightShadows(light, on = 1, area# = 40)",
   "AmbientLight(r, g, b)",
   // Shapes and pivots
   "CreatePivot%(parent = 0)",
@@ -6746,6 +6751,8 @@ var ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
+  FX_NOSHADOWCAST: 131072,
+  FX_NOSHADOWRECV: 262144,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
@@ -6813,6 +6820,10 @@ function createEngineCommands(engine) {
     lightrange(light, range2) {
       ofKind(light, "light", "light").light.range = Math.max(0, range2);
     },
+    lightshadows(light, on, area) {
+      if (on && !(area > 0)) throw runtimeError(`LightShadows needs an area above 0, not ${area}`);
+      ofKind(light, "light", "light").light.shadows = on ? area : 0;
+    },
     ambientlight(r, g, b) {
       world.ambient = [unit(r), unit(g), unit(b)];
     },
@@ -6848,6 +6859,9 @@ function createEngineCommands(engine) {
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
       m.changed();
+      const e = entity(handle);
+      e.castShadow = (flags & 131072) === 0;
+      e.receiveShadow = (flags & 262144) === 0;
     },
     entitytexture(handle, tex) {
       const m = material(handle);
@@ -35227,6 +35241,8 @@ var WRAP = {
   mirror: MirroredRepeatWrapping
 };
 var LIGHT_SCALE = Math.PI;
+var SUN_MAP = 2048;
+var POINT_MAP = 1024;
 var ThreeBackend = class extends RenderBackend {
   constructor() {
     super();
@@ -35243,6 +35259,8 @@ var ThreeBackend = class extends RenderBackend {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFSoftShadowMap;
     this.scene = new Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new AmbientLight(16777215, 0);
@@ -35294,7 +35312,9 @@ var ThreeBackend = class extends RenderBackend {
       r.setScissor(x, gy, w, h);
       r.setClearColor(srgb(new Color(), cam.clearColor), 1);
       r.clear(true, true, true);
-      r.render(this.scene, this.syncCamera(cam, w / h));
+      const camera = this.syncCamera(cam, w / h);
+      this.fitShadows(camera);
+      r.render(this.scene, camera);
     }
   }
   // ------------------------------------------------------------ meshes
@@ -35313,6 +35333,8 @@ var ThreeBackend = class extends RenderBackend {
     obj.material = material;
     obj.visible = true;
     obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
     mirrorInto(obj.matrix, item.world);
     obj.matrixWorldNeedsUpdate = true;
   }
@@ -35419,16 +35441,64 @@ var ThreeBackend = class extends RenderBackend {
       light.intensity = LIGHT_SCALE;
       light.visible = true;
       light.position.set(w[12], w[13], -w[14]);
+      light.castShadow = l.shadows > 0;
       if (l.type === 2) {
         light.distance = l.range;
         light.decay = 0;
+        if (light.castShadow) {
+          light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
+          light.shadow.camera.near = 0.05;
+          light.shadow.camera.far = l.range > 0 ? l.range : 100;
+          light.shadow.bias = -2e-3;
+          light.shadow.normalBias = 0.02;
+        }
       } else {
+        light.userData.direction = new Vector3(w[8], w[9], -w[10]).normalize();
+        light.userData.area = l.shadows;
         light.target.position.set(w[12] + w[8], w[13] + w[9], -(w[14] + w[10]));
         light.target.updateMatrixWorld();
       }
     }
     for (const [id, light] of this.lights) {
       if (!seen.has(id)) light.visible = false;
+    }
+  }
+  // A directional light's shadows cover a square of `area` units around
+  // what the camera looks at. Its centre moves in steps of one shadow texel
+  // (in the light's own view), so the shadows' edges do not crawl as the
+  // camera moves.
+  fitShadows(camera) {
+    const eye = new Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const forward = new Vector3(0, 0, -1).transformDirection(camera.matrixWorld);
+    for (const light of this.lights.values()) {
+      if (!light.visible || !light.castShadow || light.type !== "DirectionalLight") continue;
+      const area = light.userData.area;
+      const dir = light.userData.direction;
+      const shadow = light.shadow;
+      if (shadow.mapSize.x !== SUN_MAP) shadow.mapSize.set(SUN_MAP, SUN_MAP);
+      const cam = shadow.camera;
+      cam.left = -area / 2;
+      cam.right = area / 2;
+      cam.top = area / 2;
+      cam.bottom = -area / 2;
+      cam.near = 0.1;
+      cam.far = area * 2;
+      cam.updateProjectionMatrix();
+      const texel = area / SUN_MAP;
+      shadow.bias = -5e-4;
+      shadow.normalBias = texel * 1.5;
+      const centre = eye.clone().addScaledVector(forward, area * 0.35);
+      const up = Math.abs(dir.y) > 0.99 ? new Vector3(0, 0, 1) : new Vector3(0, 1, 0);
+      const basis = new Matrix4().lookAt(new Vector3(), dir, up);
+      const inverse = basis.clone().invert();
+      centre.applyMatrix4(inverse);
+      centre.x = Math.round(centre.x / texel) * texel;
+      centre.y = Math.round(centre.y / texel) * texel;
+      centre.applyMatrix4(basis);
+      light.target.position.copy(centre);
+      light.position.copy(centre).addScaledVector(dir, -area);
+      light.target.updateMatrixWorld();
+      light.updateMatrixWorld();
     }
   }
   syncCamera(cam, aspect2) {
