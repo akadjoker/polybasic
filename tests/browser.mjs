@@ -1919,6 +1919,104 @@ End Function
     console.log(`      ${facts.shadows}`);
   });
 
+  await check('tutorials respond: the tank drives, a jump plays once, dragging looks round, N shows the next model', async () =>
+  {
+    const facts = [];
+    // 1. Up drives the tank forward, along its own +Z (it starts facing +Z).
+    let page = await openPage(browser, `${base}/web/player.html?src=../examples/t01-move.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const tankZ = () => page.evaluate(() =>
+    {
+      const t = window.polybasicPlayer.state.engine.world.entities.find((e) => e.kind === 'mesh' && e.children.some((c) => c.mesh && c.mesh.primitive === 'cylinder'));
+      return t.worldPosition().z;
+    });
+    const z0 = await tankZ();
+    await page.keyboard.down('ArrowUp');
+    await page.waitForFunction((z) =>
+    {
+      const t = window.polybasicPlayer.state.engine.world.entities.find((e) => e.kind === 'mesh' && e.children.some((c) => c.mesh && c.mesh.primitive === 'cylinder'));
+      return t.worldPosition().z > z + 1;
+    }, z0, { timeout: 20000 });
+    await page.keyboard.up('ArrowUp');
+    facts.push(`tank z ${z0.toFixed(1)} -> ${(await tankZ()).toFixed(1)}`);
+    noConsoleErrors(page);
+    await page.close();
+
+    // 2. Space plays the jump once, then the idle loop again.
+    page = await openPage(browser, `${base}/web/player.html?src=../examples/t02-animation.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const anim = () => page.evaluate(() =>
+    {
+      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
+      return m ? { index: m.model.state.index, mode: m.model.state.mode, playing: m.model.state.playing } : null;
+    });
+    await page.keyboard.press('Space');
+    await page.waitForFunction(() =>
+    {
+      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
+      return m && m.model.state.index === 4;
+    }, null, { timeout: 20000 });
+    const jumping = await anim();
+    await page.waitForFunction(() =>
+    {
+      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
+      return m && m.model.state.index === 2 && m.model.state.playing;
+    }, null, { timeout: 20000 });
+    assert(jumping.mode === 2, `the jump did not play once: ${JSON.stringify(jumping)}`);
+    facts.push('jump played once, then idle');
+    noConsoleErrors(page);
+    await page.close();
+
+    // 4. Dragging turns the first-person view (without taking the mouse).
+    page = await openPage(browser, `${base}/web/player.html?src=../examples/t04-fps.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const yaw = () => page.evaluate(() =>
+    {
+      const b = window.polybasicPlayer.state.engine.world.entities.find((e) => e.kind === 'pivot' && e.radiusY === 0.85);
+      return b.rotation.toEuler().yaw;
+    });
+    const box = await page.locator('canvas').first().boundingBox();
+    // Moving over the page without a button does not turn it.
+    await page.mouse.move(box.x + box.width * 0.3, box.y + box.height * 0.5, { steps: 5 });
+    await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5, { steps: 5 });
+    await page.waitForTimeout(300);
+    const still = await yaw();
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.9, box.y + box.height * 0.5, { steps: 10 });
+    await page.waitForTimeout(300);
+    await page.mouse.up();
+    const turned = await yaw();
+    assert(Math.abs(still) < 0.01, `the view turned without a drag: yaw ${still}`);
+    assert(turned < -5, `dragging right did not turn the view right: yaw ${turned}`);
+    facts.push(`drag turned the view to ${turned.toFixed(0)} degrees`);
+    noConsoleErrors(page);
+    await page.close();
+
+    // 6. N shows the next model, and the camera stands back by its size.
+    page = await openPage(browser, `${base}/web/player.html?src=../examples/t06-orbit.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const distance = () => page.evaluate(() =>
+    {
+      const cam = window.polybasicPlayer.state.engine.world.entities.find((e) => e.kind === 'camera');
+      return -cam.position.z;
+    });
+    await page.waitForTimeout(500);
+    const first = await distance();
+    await page.keyboard.press('KeyN');
+    await page.waitForFunction((d) =>
+    {
+      const cam = window.polybasicPlayer.state.engine.world.entities.find((e) => e.kind === 'camera');
+      return Math.abs(-cam.position.z - d) > 0.3;
+    }, first, { timeout: 20000 });
+    const second = await distance();
+    // The coin (0.41 across) is seen from closer than the character (1.2).
+    assert(second < first, `the camera did not come closer for the smaller model: ${first} -> ${second}`);
+    facts.push(`orbit distance ${first.toFixed(2)} -> ${second.toFixed(2)}`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${facts.join('; ')}`);
+  });
+
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/meadow.pb`, { width: 800, height: 600 });
