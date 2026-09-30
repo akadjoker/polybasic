@@ -175,6 +175,13 @@ class Parser
       const stmt = this.parseStatement(mode, list);
       if (stmt === null) return list;
       if (stmt !== undefined) list.push(stmt);
+      // Two statements on one line need a ':' between them.
+      const t = this.tok;
+      const lineIfEnd = mode === 'line' && (this.isKw('else', t) || this.isKw('elseif', t));
+      if (!this.atStatementEnd(t) && !lineIfEnd)
+      {
+        throw this.error(`Expected the end of the statement (a new line or ':') but found ${this.describe(t)}`);
+      }
     }
   }
 

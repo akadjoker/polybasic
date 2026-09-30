@@ -1,0 +1,1 @@
+err_two_statements.pb:1:7: error: Expected the end of the statement (a new line or ':') but found 'y'
