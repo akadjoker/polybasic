@@ -11,6 +11,7 @@ what the tests use).
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
+- [Terrain](#terrain)
 - [Trees](#trees)
 - [Grass](#grass)
 - [Ribbon trails](#ribbon-trails)
@@ -127,6 +128,39 @@ which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
 
 Try it: **Sprites** in the playground's Visual effects (`examples/sprites.pb`).
+
+## Terrain
+
+Hills from a heightmap, as in Blitz3D. A terrain is a grid of `size` x
+`size` heights from 0 to 1 over x and z from 0 to `size`, standing on its
+entity's position; `ScaleEntity` gives it its size in the world. It is
+drawn, picked and collided with like a mesh, grass can be painted onto it,
+and `EntityBody` gives it a static body (made from its heights at that
+moment).
+
+```
+land = LoadTerrain("heightmap.png")
+ScaleEntity land, 4, 100, 4             ; 4 units a cell, 100 high
+EntityTexture land, LoadTexture("grass.jpg")
+TerrainShading land, True
+y# = TerrainY(land, x, 0, z)            ; the ground under x, z
+```
+
+| Command | What it does |
+|---------|--------------|
+| `LoadTerrain%(file$, parent = 0)` | A terrain from a square PNG or BMP image whose side is a power of 2: each pixel's brightest channel (red, green or blue) is its height, the image's top row the far side. A file named in quotes is read before the program starts, so `TerrainSize` is known at once; a name made at run time arrives later (until then `TerrainSize` is 0). |
+| `CreateTerrain%(size, parent = 0)` | A flat terrain, `size` a power of 2 (64, 128, 256...). |
+| `TerrainSize%(terrain)` | The grid's size. |
+| `TerrainHeight#(terrain, x, z)` | The height at grid point x, z, from 0 to 1. The grid wraps: point `size` is point 0. Outside 0..size, 0. |
+| `ModifyTerrain terrain, x, z, height#, realtime = False` | Sets a grid point's height. Heights are kept in steps of 1/255 (rounded down), as in Blitz3D. Changes show from the next step on, however many are made; `realtime` is accepted for Blitz3D programs. |
+| `TerrainY#(terrain, x#, y#, z#)` | The world height of the ground at world x, z (between grid points, the four round it are blended). `TerrainX` and `TerrainZ` give that point's x and z. |
+| `TerrainShading terrain, on` | With shading, slopes are lit by how they face; without (the default, as in Blitz3D), the whole terrain is lit as flat ground. |
+| `TerrainDetail terrain, detail, morph = False` | Accepted for Blitz3D programs: the whole grid is always drawn. |
+
+A texture is laid once over each cell; `ScaleTexture tex, 32, 32` spreads
+it over 32 x 32 cells.
+
+Try it: **Terrain** in the playground's Visual effects (`examples/terrain.pb`).
 
 ## Trees
 

@@ -103,6 +103,15 @@ The models in examples/assets/kenney (and their texture) are by Kenney
 (www.kenney.nl), CC0 1.0 Universal (public domain), from Kenney's Starter
 Kit 3D Platformer. See examples/assets/kenney/License.txt.
 
+Blitz3D sample files
+--------------------
+
+The files in examples/assets/blitz3d come from the samples of the Blitz3D
+open source release (https://github.com/blitz-research/blitz3d,
+_release/samples), Copyright (c) 2013 Blitz Research Ltd, under the same
+zlib/libpng licence as the Blitz3D compiler above. Models among them were
+converted to glTF for PolyBasic.
+
 The playground's page layout and scripts follow the DivJS playground
 (https://github.com/akadjoker/divjs-playground), by the same author, MIT.
 

@@ -54,6 +54,8 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.pb': 'text/plain; charset=utf-8',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.bmp': 'image/bmp',
   '.wav': 'audio/wav'
 };
 
@@ -2015,6 +2017,48 @@ End Function
     noConsoleErrors(page);
     await page.close();
     console.log(`      ${facts.join('; ')}`);
+  });
+
+  await check('terrain.pb: a heightmap drawn and textured, raised under the pointer, shading off makes every normal point up', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/terrain.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const state = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.terrain);
+      const n = e.terrain.mesh.normals;
+      let up = 0;
+      for (let i = 1; i < n.length; i += 3) if (n[i] === 1) up++;
+      return { size: e.terrain.size, sum: e.terrain.heights.reduce((a, b) => a + b, 0), up, vertices: n.length / 3 };
+    });
+    await page.waitForTimeout(500);
+    const before = await state();
+    const colours = await playerStats(page);
+    const box = await page.locator('canvas').first().boundingBox();
+    await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.6);
+    await page.mouse.down();
+    await page.waitForFunction((sum) =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.terrain);
+      return e.terrain.heights.reduce((a, b) => a + b, 0) > sum + 200;
+    }, before.sum, { timeout: 20000 });
+    await page.mouse.up();
+    const raised = await state();
+    await page.keyboard.press('KeyL');
+    await page.waitForFunction(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.terrain);
+      const n = e.terrain.mesh.normals;
+      for (let i = 1; i < n.length; i += 3) if (n[i] !== 1) return false;
+      return true;
+    }, null, { timeout: 20000 });
+    await page.screenshot({ path: join(SHOTS, 'terrain.png') });
+    assert(before.size === 256, `size ${before.size}`);
+    assert(before.up < before.vertices / 2, `shading on, yet ${before.up} of ${before.vertices} normals point straight up`);
+    assert(colours.colours > 200, `the terrain is not textured: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      heights ${before.sum} -> ${raised.sum}; ${colours.colours} colours; with shading ${before.up} of ${before.vertices} normals straight up, without all`);
   });
 
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>

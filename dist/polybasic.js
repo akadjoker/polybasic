@@ -1816,6 +1816,7 @@ var Generator = class {
     this.pos = null;
     this.helpers = /* @__PURE__ */ new Set();
     this.commands = /* @__PURE__ */ new Map();
+    this.files = /* @__PURE__ */ new Set();
   }
   // ---------------------------------------------------------------- output
   emit(text, pos = this.pos) {
@@ -1894,6 +1895,8 @@ var Generator = class {
     js += files.length > 1 ? `, fileOf: ${JSON.stringify(fileMap)} };
 ` : " };\n";
     js += `export const $uses = ${JSON.stringify([...this.commands.keys()].sort())};
+`;
+    js += `export const $files = [${[...this.files].sort().join(", ")}];
 `;
     return js;
   }
@@ -2238,6 +2241,7 @@ var Generator = class {
     return `${this.expr(e)} !== 0`;
   }
   call(e) {
+    if (!e.fn && e.args.length && e.args[0].kind === "string") this.files.add(JSON.stringify([e.cmd.key, e.args[0].value]));
     const args = e.args.map((a) => bare(this.expr(a)));
     if (e.fn) return `${e.fn.js}(${args.join(", ")})`;
     if (e.cmd.inline) return e.cmd.inline.replace(/\$(\d)/g, (m, i) => wrap(args[Number(i)]));
@@ -2736,7 +2740,7 @@ async function run(module, host, options) {
   };
   let program;
   try {
-    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || []) : null;
+    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || [], module.$files || []) : null;
     if (preparing && !await wait(preparing)) return result;
     program = module.create(rt);
     program.main();
@@ -5697,6 +5701,7 @@ function slabAxis(lo, hi, origin, inv) {
   return range[0] <= range[1];
 }
 function meshBvh(mesh) {
+  if (mesh.grid) return mesh.grid;
   if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version) {
     mesh.bvhCache = { version: mesh.version, bvh: new MeshBvh(mesh.positions, mesh.indices) };
   }
@@ -8359,6 +8364,347 @@ function createMeshCommands(engine) {
   };
 }
 
+// src/engine/scene/terrain.js
+var Terrain = class {
+  constructor(size) {
+    this.size = size;
+    this.mask = size - 1;
+    this.heights = new Uint8Array(size * size);
+    this.shading = false;
+    this.detail = 0;
+    this.dirty = [];
+    const n = size + 1;
+    const positions = new Float32Array(n * n * 3);
+    const normals = new Float32Array(n * n * 3);
+    const uvs = new Float32Array(n * n * 2);
+    for (let z = 0; z <= size; z++) {
+      for (let x = 0; x <= size; x++) {
+        const v = z * n + x;
+        positions[v * 3] = x;
+        positions[v * 3 + 2] = z;
+        normals[v * 3 + 1] = 1;
+        uvs[v * 2] = x;
+        uvs[v * 2 + 1] = size - z;
+      }
+    }
+    const indices = new Uint32Array(size * size * 6);
+    let i = 0;
+    for (let z = 0; z < size; z++) {
+      for (let x = 0; x < size; x++) {
+        const v = z * n + x;
+        indices.set([v, v + n, v + n + 1, v, v + n + 1, v + 1], i);
+        i += 6;
+      }
+    }
+    this.mesh = new MeshData([], [], [], []);
+    this.mesh.positions = positions;
+    this.mesh.normals = normals;
+    this.mesh.uvs = uvs;
+    this.mesh.indices = indices;
+    this.mesh.submeshes = [{ start: 0, count: indices.length, material: 0 }];
+    this.mesh.bounds = new Aabb().fromPositions(positions);
+    this.mesh.grid = new TerrainGrid(this);
+    this.dirty = [];
+  }
+  // Blitz3D's getHeight: 0 outside 0..size, wrapped inside.
+  height(x, z) {
+    if (x < 0 || z < 0 || x > this.size || z > this.size) return 0;
+    return this.heights[(z & this.mask) * this.size + (x & this.mask)] / 255;
+  }
+  // Stored as Blitz3D does: h * 255 into a byte, so it reads back in steps
+  // of 1/255, rounded down.
+  setHeight(x, z, h) {
+    if (x < 0 || z < 0 || x > this.size || z > this.size) return;
+    this.heights[(z & this.mask) * this.size + (x & this.mask)] = Math.floor(Math.max(0, Math.min(1, h)) * 255);
+    const xs = x % this.size === 0 ? [0, this.size] : [x];
+    const zs = z % this.size === 0 ? [0, this.size] : [z];
+    for (const vx of xs) for (const vz of zs) this.touch(vx - 1, vz - 1, vx + 1, vz + 1);
+  }
+  touch(x0, z0, x1, z1) {
+    if (this.dirty.length > 64) this.dirty = [[0, 0, this.size, this.size]];
+    else this.dirty.push([Math.max(0, x0), Math.max(0, z0), Math.min(this.size, x1), Math.min(this.size, z1)]);
+  }
+  // The height between grid points, as TerrainY works it out (bilinear).
+  heightAt(x, z) {
+    const ix = Math.floor(x);
+    const iz = Math.floor(z);
+    const tx = x - ix;
+    const tz = z - iz;
+    const h0 = this.height(ix, iz);
+    const h1 = this.height(ix + 1, iz);
+    const h2 = this.height(ix, iz + 1);
+    const h3 = this.height(ix + 1, iz + 1);
+    const ha = (h1 - h0) * tx + h0;
+    const hb = (h3 - h2) * tx + h2;
+    return (hb - ha) * tz + ha;
+  }
+  setShading(on) {
+    this.shading = on;
+    this.touch(0, 0, this.size, this.size);
+  }
+  // Brings the changed part of the mesh up to date with the heights (once
+  // a step, however many were changed). Normals point straight up without
+  // shading, as in Blitz3D; with it, each is the sum of the normals of the
+  // four faces round the vertex (terrainrep.cpp, getNormal).
+  update() {
+    if (!this.dirty.length) return;
+    const { size, mesh } = this;
+    const n = size + 1;
+    const p = mesh.positions;
+    const nr = mesh.normals;
+    for (const [x0, z0, x1, z1] of this.dirty) {
+      for (let z = z0; z <= z1; z++) {
+        for (let x = x0; x <= x1; x++) {
+          const v = (z * n + x) * 3;
+          const h = this.height(x, z);
+          p[v + 1] = h;
+          if (!this.shading) {
+            nr[v] = 0;
+            nr[v + 1] = 1;
+            nr[v + 2] = 0;
+            continue;
+          }
+          const e = this.height(x + 1, z) - h;
+          const no = this.height(x, z + 1) - h;
+          const w = this.height(x - 1, z) - h;
+          const so = this.height(x, z - 1) - h;
+          const a = 1 / Math.hypot(e, 1, so);
+          const b = 1 / Math.hypot(e, 1, no);
+          const c = 1 / Math.hypot(w, 1, no);
+          const d = 1 / Math.hypot(w, 1, so);
+          const sx = -e * (a + b) + w * (c + d);
+          const sy = a + b + c + d;
+          const sz = so * (a + d) - no * (b + c);
+          const len = Math.hypot(sx, sy, sz);
+          nr[v] = sx / len;
+          nr[v + 1] = sy / len;
+          nr[v + 2] = sz / len;
+        }
+      }
+    }
+    this.dirty = [];
+    let top = 0;
+    for (let i = 0; i < this.heights.length; i++) if (this.heights[i] > top) top = this.heights[i];
+    mesh.bounds = new Aabb();
+    mesh.bounds.min.set(0, 0, 0);
+    mesh.bounds.max.set(size, top / 255, size);
+    mesh.version++;
+  }
+  // Heights from an image: the brightest of red, green and blue, with the
+  // image's top row at the far side (z = size - 1), as LoadTerrain reads it.
+  fromImage(img) {
+    const { width, data } = img;
+    for (let y = 0; y < width; y++) {
+      for (let x = 0; x < width; x++) {
+        const o = (y * width + x) * 4;
+        this.heights[(width - 1 - y) * this.size + x] = Math.max(data[o], data[o + 1], data[o + 2]);
+      }
+    }
+    this.touch(0, 0, this.size, this.size);
+  }
+};
+var TerrainGrid = class {
+  constructor(terrain) {
+    this.terrain = terrain;
+  }
+  // Triangle t is the (t & 1)th of cell t >> 1 (cells row by row in z).
+  corners(t, out) {
+    const { positions, indices } = this.terrain.mesh;
+    for (let k = 0; k < 3; k++) {
+      const v = indices[t * 3 + k] * 3;
+      out[k * 3] = positions[v];
+      out[k * 3 + 1] = positions[v + 1];
+      out[k * 3 + 2] = positions[v + 2];
+    }
+    return out;
+  }
+  // The lowest and highest corner of cell (x, z).
+  cellRange(x, z) {
+    const t = this.terrain;
+    const a = t.height(x, z);
+    const b = t.height(x + 1, z);
+    const c = t.height(x, z + 1);
+    const d = t.height(x + 1, z + 1);
+    return [Math.min(a, b, c, d), Math.max(a, b, c, d)];
+  }
+  queryBox(minX, minY, minZ, maxX, maxY, maxZ, visit) {
+    const size = this.terrain.size;
+    const x0 = Math.max(0, Math.floor(minX));
+    const z0 = Math.max(0, Math.floor(minZ));
+    const x1 = Math.min(size - 1, Math.floor(maxX));
+    const z1 = Math.min(size - 1, Math.floor(maxZ));
+    for (let z = z0; z <= z1; z++) {
+      for (let x = x0; x <= x1; x++) {
+        const [lo, hi] = this.cellRange(x, z);
+        if (lo > maxY || hi < minY) continue;
+        const c = (z * size + x) * 2;
+        visit(c);
+        visit(c + 1);
+      }
+    }
+  }
+  // Walks the cells under the ray from origin + s * dir, s from 0 to maxS
+  // (Amanatides and Woo's grid traversal in x and z). visit may return a
+  // smaller maxS (the nearest hit so far) to stop early.
+  queryRay(ox, oy, oz, dx, dy, dz, maxS, visit) {
+    const size = this.terrain.size;
+    let s0 = 0;
+    let s1 = maxS;
+    for (const [o, d] of [[ox, dx], [oz, dz]]) {
+      if (d === 0) {
+        if (o < 0 || o > size) return;
+        continue;
+      }
+      let a = (0 - o) / d;
+      let b = (size - o) / d;
+      if (a > b) [a, b] = [b, a];
+      s0 = Math.max(s0, a);
+      s1 = Math.min(s1, b);
+    }
+    if (s0 > s1) return;
+    const eps = 1e-9;
+    let x = Math.min(size - 1, Math.max(0, Math.floor(ox + dx * (s0 + eps))));
+    let z = Math.min(size - 1, Math.max(0, Math.floor(oz + dz * (s0 + eps))));
+    const stepX = dx > 0 ? 1 : -1;
+    const stepZ = dz > 0 ? 1 : -1;
+    const nextX = dx === 0 ? Infinity : ((dx > 0 ? x + 1 : x) - ox) / dx;
+    const nextZ = dz === 0 ? Infinity : ((dz > 0 ? z + 1 : z) - oz) / dz;
+    const deltaX = dx === 0 ? Infinity : Math.abs(1 / dx);
+    const deltaZ = dz === 0 ? Infinity : Math.abs(1 / dz);
+    let tx = nextX;
+    let tz = nextZ;
+    let limit = s1;
+    let enter = s0;
+    while (x >= 0 && z >= 0 && x < size && z < size && enter <= limit) {
+      const leave = Math.min(tx, tz, s1);
+      const ya = oy + dy * enter;
+      const yb = oy + dy * leave;
+      const [lo, hi] = this.cellRange(x, z);
+      if (Math.min(ya, yb) <= hi && Math.max(ya, yb) >= lo) {
+        const c = (z * size + x) * 2;
+        for (const t of [c, c + 1]) {
+          const s = visit(t);
+          if (typeof s === "number" && s < limit) limit = s;
+        }
+      }
+      if (tx < tz) {
+        enter = tx;
+        tx += deltaX;
+        x += stepX;
+      } else {
+        enter = tz;
+        tz += deltaZ;
+        z += stepZ;
+      }
+    }
+  }
+};
+function isPowerOfTwo(n) {
+  return n >= 2 && (n & n - 1) === 0;
+}
+
+// src/engine/scene/terrain-commands.js
+var TERRAIN_COMMANDS = [
+  "CreateTerrain%(size, parent = 0)",
+  "LoadTerrain%(file$, parent = 0)",
+  "TerrainSize%(terrain)",
+  "TerrainHeight#(terrain, x, z)",
+  "ModifyTerrain(terrain, x, z, height#, realtime = 0)",
+  "TerrainX#(terrain, x#, y#, z#)",
+  "TerrainY#(terrain, x#, y#, z#)",
+  "TerrainZ#(terrain, x#, y#, z#)",
+  "TerrainDetail(terrain, detail, morph = 0)",
+  "TerrainShading(terrain, on)"
+];
+function createTerrainCommands(engine) {
+  const world = engine.world;
+  const { entity, parentOf } = handleHelpers(world);
+  const terrainEntity = (parent) => {
+    engine.autoGraphics();
+    const e = world.createEntity("mesh", parent);
+    engine.terrains.push(e);
+    return e;
+  };
+  const give = (e, size) => {
+    e.terrain = new Terrain(size);
+    e.mesh = e.terrain.mesh;
+    return e.terrain;
+  };
+  const checkImage = (img) => {
+    if (img.width !== img.height) throw new Error(`the heightmap is ${img.width} x ${img.height}; a terrain must be square`);
+    if (!isPowerOfTwo(img.width)) throw new Error(`the heightmap is ${img.width} across; a terrain's size must be a power of 2 (64, 128, 256...)`);
+  };
+  const terrain = (handle) => {
+    const e = entity(handle);
+    if (!e.terrain) {
+      if (engine.terrains.includes(e)) throw runtimeError(`Terrain ${handle} is still loading its heightmap`);
+      throw runtimeError(`Entity ${handle} is not a terrain`);
+    }
+    return e.terrain;
+  };
+  const onto = (handle, x, y, z) => {
+    const e = entity(handle);
+    const t = terrain(handle);
+    const inv = e.worldMatrix.clone();
+    inv.invert();
+    const local = new Vec3(x, y, z).applyMat4(inv);
+    return new Vec3(local.x, t.heightAt(local.x, local.z), local.z).applyMat4(e.worldMatrix);
+  };
+  return {
+    createterrain(size, parent) {
+      if (!isPowerOfTwo(size)) throw runtimeError(`CreateTerrain needs a size that is a power of 2 (64, 128, 256...), not ${size}`);
+      const e = terrainEntity(parentOf(parent));
+      give(e, size).update();
+      return e.id;
+    },
+    loadterrain(file, parent) {
+      const e = terrainEntity(parentOf(parent));
+      const url = engine.resolve(file);
+      const known = engine.heightmaps.get(url);
+      if (known) {
+        if (known.error) throw runtimeError(`LoadTerrain: could not load "${file}": ${known.error.message}`);
+        try {
+          checkImage(known.image);
+        } catch (err) {
+          throw runtimeError(`LoadTerrain: ${err.message}`);
+        }
+        const t = give(e, known.image.width);
+        t.fromImage(known.image);
+        t.update();
+        return e.id;
+      }
+      if (engine.loadFile) {
+        engine.track(engine.loadHeightmap(url).then((image) => {
+          checkImage(image);
+          if (!e.alive) return;
+          const t = give(e, image.width);
+          t.fromImage(image);
+          t.update();
+        }).catch((err) => engine.warn(`LoadTerrain: could not load "${file}": ${err.message}`)));
+      }
+      return e.id;
+    },
+    terrainsize(handle) {
+      const e = entity(handle);
+      if (!e.terrain && !engine.terrains.includes(e)) throw runtimeError(`Entity ${handle} is not a terrain`);
+      return e.terrain ? e.terrain.size : 0;
+    },
+    terrainheight: (handle, x, z) => terrain(handle).height(x, z),
+    modifyterrain(handle, x, z, h) {
+      terrain(handle).setHeight(x, z, h);
+    },
+    terrainx: (handle, x, y, z) => onto(handle, x, y, z).x,
+    terrainy: (handle, x, y, z) => onto(handle, x, y, z).y,
+    terrainz: (handle, x, y, z) => onto(handle, x, y, z).z,
+    terraindetail(handle, detail) {
+      terrain(handle).detail = detail;
+    },
+    terrainshading(handle, on) {
+      terrain(handle).setShading(on !== 0);
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -8483,6 +8829,7 @@ var ENGINE_COMMANDS = [
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
   ...MESH_COMMANDS,
+  ...TERRAIN_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
@@ -8582,6 +8929,7 @@ function createEngineCommands(engine) {
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
     ...createMeshCommands(engine),
+    ...createTerrainCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -8989,6 +9337,177 @@ function primitive(mesh, kind) {
 }
 function clampSegments(n) {
   return Math.max(3, Math.min(128, n));
+}
+
+// src/engine/image/decode.js
+async function decodeImage(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (b[0] === 66 && b[1] === 77) return decodeBmp(b);
+  if (b[0] === 137 && b[1] === 80 && b[2] === 78 && b[3] === 71) return decodePng(b);
+  throw new Error("only BMP and PNG images can be read here");
+}
+function decodeBmp(b) {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const offset = v.getUint32(10, true);
+  const header = v.getUint32(14, true);
+  const width = v.getInt32(18, true);
+  const rawHeight = v.getInt32(22, true);
+  const bits = v.getUint16(28, true);
+  const compression = header >= 40 ? v.getUint32(30, true) : 0;
+  if (compression !== 0 && !(compression === 3 && bits === 32)) throw new Error("compressed BMP files cannot be read; save it uncompressed");
+  if (![1, 4, 8, 24, 32].includes(bits)) throw new Error(`BMP files with ${bits} bits per pixel cannot be read`);
+  const height = Math.abs(rawHeight);
+  const topDown = rawHeight < 0;
+  let palette = null;
+  if (bits <= 8) {
+    const used = v.getUint32(46, true) || 1 << bits;
+    palette = new Uint8Array(used * 4);
+    const at = 14 + header;
+    for (let i = 0; i < used; i++) {
+      palette[i * 4] = b[at + i * 4 + 2];
+      palette[i * 4 + 1] = b[at + i * 4 + 1];
+      palette[i * 4 + 2] = b[at + i * 4];
+      palette[i * 4 + 3] = 255;
+    }
+  }
+  const stride = width * bits + 31 >> 5 << 2;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    const row = offset + (topDown ? y : height - 1 - y) * stride;
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 4;
+      if (palette) {
+        const perByte = 8 / bits;
+        const byte2 = b[row + Math.floor(x / perByte)];
+        const shift = 8 - bits * (x % perByte + 1);
+        const p = (byte2 >> shift & (1 << bits) - 1) * 4;
+        data[o] = palette[p];
+        data[o + 1] = palette[p + 1];
+        data[o + 2] = palette[p + 2];
+        data[o + 3] = 255;
+      } else {
+        const p = row + x * (bits / 8);
+        data[o] = b[p + 2];
+        data[o + 1] = b[p + 1];
+        data[o + 2] = b[p];
+        data[o + 3] = bits === 32 ? b[p + 3] : 255;
+      }
+    }
+  }
+  return { width, height, data };
+}
+var CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+async function decodePng(b) {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let pos = 8;
+  let width = 0;
+  let height = 0;
+  let depth = 0;
+  let type = 0;
+  let palette = null;
+  let alpha = null;
+  const idat = [];
+  while (pos < b.length) {
+    const length2 = v.getUint32(pos);
+    const name = String.fromCharCode(b[pos + 4], b[pos + 5], b[pos + 6], b[pos + 7]);
+    const body = b.subarray(pos + 8, pos + 8 + length2);
+    if (name === "IHDR") {
+      width = v.getUint32(pos + 8);
+      height = v.getUint32(pos + 12);
+      depth = body[8];
+      type = body[9];
+      if (body[12] !== 0) throw new Error("interlaced PNG files cannot be read; save it without interlacing");
+    } else if (name === "PLTE") palette = body;
+    else if (name === "tRNS") alpha = body;
+    else if (name === "IDAT") idat.push(body);
+    else if (name === "IEND") break;
+    pos += 12 + length2;
+  }
+  if (!(type in CHANNELS)) throw new Error(`PNG colour type ${type} cannot be read`);
+  const packed = await inflate(idat);
+  const channels = CHANNELS[type];
+  const bitsPerPixel = channels * depth;
+  const stride = Math.ceil(width * bitsPerPixel / 8);
+  const step = Math.max(1, bitsPerPixel >> 3);
+  const rows = unfilter(packed, height, stride, step);
+  const data = new Uint8ClampedArray(width * height * 4);
+  const sample2 = (row, x, c) => {
+    if (depth === 8) return rows[row + x * channels + c];
+    if (depth === 16) return rows[row + (x * channels + c) * 2];
+    const perByte = 8 / depth;
+    const byte2 = rows[row + Math.floor(x / perByte)];
+    const value = byte2 >> 8 - depth * (x % perByte + 1) & (1 << depth) - 1;
+    return type === 3 ? value : Math.round(value * 255 / ((1 << depth) - 1));
+  };
+  for (let y = 0; y < height; y++) {
+    const row = y * stride;
+    for (let x = 0; x < width; x++) {
+      const o = (y * width + x) * 4;
+      if (type === 3) {
+        const i = sample2(row, x, 0);
+        data[o] = palette[i * 3];
+        data[o + 1] = palette[i * 3 + 1];
+        data[o + 2] = palette[i * 3 + 2];
+        data[o + 3] = alpha && i < alpha.length ? alpha[i] : 255;
+      } else if (type === 0 || type === 4) {
+        const g = sample2(row, x, 0);
+        data[o] = data[o + 1] = data[o + 2] = g;
+        data[o + 3] = type === 4 ? sample2(row, x, 1) : 255;
+      } else {
+        data[o] = sample2(row, x, 0);
+        data[o + 1] = sample2(row, x, 1);
+        data[o + 2] = sample2(row, x, 2);
+        data[o + 3] = type === 6 ? sample2(row, x, 3) : 255;
+      }
+    }
+  }
+  return { width, height, data };
+}
+async function inflate(parts) {
+  const stream = new Blob(parts).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+function unfilter(src, height, stride, step) {
+  const out = new Uint8Array(height * stride);
+  for (let y = 0; y < height; y++) {
+    const filter = src[y * (stride + 1)];
+    const inRow = y * (stride + 1) + 1;
+    const row = y * stride;
+    const up = row - stride;
+    for (let i = 0; i < stride; i++) {
+      const x = src[inRow + i];
+      const a = i >= step ? out[row + i - step] : 0;
+      const c = y > 0 && i >= step ? out[up + i - step] : 0;
+      const bUp = y > 0 ? out[up + i] : 0;
+      let value;
+      switch (filter) {
+        case 0:
+          value = x;
+          break;
+        case 1:
+          value = x + a;
+          break;
+        case 2:
+          value = x + bUp;
+          break;
+        case 3:
+          value = x + (a + bUp >> 1);
+          break;
+        case 4: {
+          const p = a + bUp - c;
+          const pa = Math.abs(p - a);
+          const pb = Math.abs(p - bUp);
+          const pc = Math.abs(p - c);
+          value = x + (pa <= pb && pa <= pc ? a : pb <= pc ? bUp : c);
+          break;
+        }
+        default:
+          throw new Error(`bad PNG filter ${filter}`);
+      }
+      out[row + i] = value & 255;
+    }
+  }
+  return out;
 }
 
 // src/engine/model/gltf.js
@@ -9779,6 +10298,8 @@ var Engine = class {
     this.loadFile = options.loadFile || null;
     this.decodeImage = options.decodeImage || null;
     this.pending = /* @__PURE__ */ new Set();
+    this.terrains = [];
+    this.heightmaps = /* @__PURE__ */ new Map();
     this.baseUrl = options.baseUrl || "";
     this.onResize = options.onResize || ((w, h) => this.backend.resize(w, h, 1));
     this.width = DEFAULT_WIDTH;
@@ -9868,9 +10389,28 @@ var Engine = class {
   // ----------------------------------------------------- runner hooks
   // Called before main with the commands the program uses. Returns a
   // promise when something must be loaded first, or null.
-  prepare(uses) {
-    if (uses.some((name) => PHYSICS_KEYS.has(name))) return this.physics.prepare();
-    return null;
+  prepare(uses, files = []) {
+    const jobs = [];
+    if (uses.some((name) => PHYSICS_KEYS.has(name))) jobs.push(this.physics.prepare());
+    for (const [command, file] of files) {
+      if (command !== "loadterrain" || !this.loadFile) continue;
+      const url = resolveUrl(this.baseUrl, file);
+      if (this.heightmaps.has(url)) continue;
+      this.heightmaps.set(url, null);
+      jobs.push(this.loadHeightmap(url).then(
+        (image) => this.heightmaps.set(url, { image }),
+        (error2) => this.heightmaps.set(url, { error: error2 })
+      ));
+    }
+    const waiting = jobs.filter(Boolean);
+    return waiting.length ? Promise.all(waiting) : null;
+  }
+  // A file name as the program wrote it, relative to its .pb file.
+  resolve(file) {
+    return resolveUrl(this.baseUrl, file);
+  }
+  async loadHeightmap(url) {
+    return decodeImage(await this.loadFile(url));
   }
   // After main: a promise that settles once every file started so far has
   // arrived (or failed), or null when nothing is loading. Loads can start
@@ -9888,6 +10428,7 @@ var Engine = class {
   // physics, then collisions, which see where bodies ended up; then sounds
   // placed in the world follow where everything is now.
   endStep() {
+    this.updateTerrains();
     this.models.step(STEP_MS / 1e3);
     this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
@@ -9901,7 +10442,12 @@ var Engine = class {
     this.physics.dispose();
     this.audio.stopAll();
   }
+  updateTerrains() {
+    this.terrains = this.terrains.filter((e) => e.alive);
+    for (const e of this.terrains) e.terrain.update();
+  }
   renderFrame() {
+    this.updateTerrains();
     const frame = this.world.buildFrame(this.width, this.height);
     frame.time = this.steps * STEP_MS / 1e3;
     this.backend.render(frame);
@@ -38538,7 +39084,7 @@ function createScreen(container2) {
     if (!response.ok) throw new Error(`Cannot load ${url} (${response.status})`);
     return response.arrayBuffer();
   };
-  const decodeImage = (bytes, mimeType) => createImageBitmap(new Blob([bytes], { type: mimeType }), {
+  const decodeImage2 = (bytes, mimeType) => createImageBitmap(new Blob([bytes], { type: mimeType }), {
     imageOrientation: "none",
     premultiplyAlpha: "none",
     colorSpaceConversion: "none"
@@ -38600,10 +39146,10 @@ function createScreen(container2) {
           const bytes = own(url);
           if (!bytes) return loadImage(url);
           const ext = url.split(".").pop().toLowerCase();
-          return decodeImage(bytes, IMAGE_TYPES[ext] || "application/octet-stream");
+          return decodeImage2(bytes, IMAGE_TYPES[ext] || "application/octet-stream");
         },
         loadFile: async (url) => own(url) || loadFile(url),
-        decodeImage,
+        decodeImage: decodeImage2,
         loadPhysics: options.loadPhysics || loadPhysics,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) => {

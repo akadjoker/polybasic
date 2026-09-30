@@ -220,6 +220,18 @@
       "assets": []
     },
     {
+      "id": "terrain",
+      "title": "Terrain",
+      "category": "effects",
+      "file": "../examples/terrain.pb",
+      "description": "Hills from a heightmap (LoadTerrain, from Blitz3D's driver sample): fly over them, raise and dig the ground under the pointer (ModifyTerrain), turn shading on and off.",
+      "controls": "Right drag look, WASD fly, Q/E down and up, left button raise, Shift + left or middle button dig, L shading",
+      "assets": [
+        "assets/blitz3d/driver/heightmap_256.bmp",
+        "assets/blitz3d/driver/terrain-1.jpg"
+      ]
+    },
+    {
       "id": "trees",
       "title": "Trees",
       "category": "effects",

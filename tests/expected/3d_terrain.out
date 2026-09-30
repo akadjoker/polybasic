@@ -1,0 +1,10 @@
+size 8, flat: 0.0
+heights: 1.0 0.498039
+halfway between them: 0.74902
+the grid wraps: 0.247059 = 0.247059, outside: 0.0
+scaled and moved: TerrainY at the peak 20.0, TerrainX -20.0
+loaded 256 x 256, corner 0.0, middle 1.0
+a pick lands at y 1.0
+the ball rests at 628.0, 1.5, 128.0 (the ground under it is 1.0)
+not a power of 2:
+Runtime error (3d_terrain.pb, line 41): CreateTerrain needs a size that is a power of 2 (64, 128, 256...), not 100

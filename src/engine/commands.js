@@ -29,6 +29,7 @@ import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './ph
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
 import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
 import { MESH_COMMANDS, MESH_CONSTANTS, createMeshCommands } from './scene/mesh-commands.js';
+import { TERRAIN_COMMANDS, createTerrainCommands } from './scene/terrain-commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -166,6 +167,7 @@ export const ENGINE_COMMANDS = [
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
   ...MESH_COMMANDS,
+  ...TERRAIN_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 
@@ -290,6 +292,7 @@ export function createEngineCommands(engine)
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
     ...createMeshCommands(engine),
+    ...createTerrainCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
