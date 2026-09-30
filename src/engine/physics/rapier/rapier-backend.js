@@ -68,7 +68,7 @@ export class RapierBackend extends PhysicsBackend
     const collider = this.world.createCollider(colliderDesc, body);
 
     const id = this.nextId++;
-    this.bodies.set(id, { body, collider, type });
+    this.bodies.set(id, { body, collider, type, locked: [false, false, false] });
     this.byCollider.set(collider.handle, id);
     return id;
   }
@@ -116,7 +116,10 @@ export class RapierBackend extends PhysicsBackend
 
   setAngularVelocity(id, w)
   {
-    this.bodies.get(id).body.setAngvel(vec(w), true);
+    // Rapier's locks act on forces and contacts; a speed set directly
+    // would still turn a locked axis, so it is left out here.
+    const b = this.bodies.get(id);
+    b.body.setAngvel(vec(w.map((v, i) => (b.locked[i] ? 0 : v))), true);
   }
 
   angularVelocity(id)
@@ -168,7 +171,9 @@ export class RapierBackend extends PhysicsBackend
 
   lockRotation(id, x, y, z)
   {
-    this.bodies.get(id).body.setEnabledRotations(!x, !y, !z, true);
+    const b = this.bodies.get(id);
+    b.locked = [x, y, z];
+    b.body.setEnabledRotations(!x, !y, !z, true);
   }
 
   step(dt)
