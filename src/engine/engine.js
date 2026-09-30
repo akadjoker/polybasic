@@ -21,6 +21,7 @@ import { Collisions } from './collide/collisions.js';
 import { Physics } from './physics/physics.js';
 import { decodeImage } from './image/decode.js';
 import { Models } from './model/model.js';
+import { Md2Models } from './model/md2-commands.js';
 import { PHYSICS_KEYS } from './physics/commands.js';
 import { Audio } from './audio/audio.js';
 import { NullAudio } from './audio/null/null-audio.js';
@@ -54,6 +55,7 @@ export class Engine
     this.collisions = new Collisions(this.world);
     this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
+    this.md2Models = new Md2Models(this);
     this.steps = 0;
     this.audio = new Audio(this, options.audio || new NullAudio());
     this.trails = [];
@@ -196,6 +198,11 @@ export class Engine
         jobs.push(this.models.preload(file, this.resolve(file)));
         continue;
       }
+      if (command === 'loadmd2')
+      {
+        jobs.push(this.md2Models.preload(this.resolve(file)));
+        continue;
+      }
       if (command !== 'loadterrain' || !this.loadFile) continue;
       const url = resolveUrl(this.baseUrl, file);
       if (this.heightmaps.has(url)) continue;
@@ -244,6 +251,7 @@ export class Engine
   endStep()
   {
     this.updateTerrains();
+    this.md2Models.step();
     this.models.step(STEP_MS / 1000);
     this.physics.step(STEP_MS / 1000);
     this.collisions.update();

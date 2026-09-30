@@ -34,7 +34,9 @@
 // `world` is a column-major 4x4 matrix (Float64Array) in PolyBasic space:
 // left-handed, X right, Y up, Z forward; cameras look along their +Z.
 // Colours are 0..1. Meshes, materials and textures carry `id` and
-// `version`: re-upload when the version changes. Triangles are clockwise
+// `version`: re-upload when the version changes. A mesh with a `pose`
+// count (MD2 models) changes only its positions and normals when the pose
+// changes, and `bounds` covers every pose. Triangles are clockwise
 // when seen from the front; texture UV (0, 0) is the top-left pixel.
 
 export class RenderBackend

@@ -358,7 +358,11 @@ uniform vec4 pbPushers[8];`)
   geometry(mesh)
   {
     const known = this.geometries.get(mesh.id);
-    if (known && known.version === mesh.version) return known.geometry;
+    if (known && known.version === mesh.version)
+    {
+      if (known.pose !== mesh.pose) this.pose(known, mesh);
+      return known.geometry;
+    }
     if (known) known.geometry.dispose();
 
     const positions = Float32Array.from(mesh.positions);
@@ -382,9 +386,37 @@ uniform vec4 pbPushers[8];`)
     if (mesh.colors) g.setAttribute('color', new THREE.BufferAttribute(Float32Array.from(mesh.colors), 4));
     g.setIndex(new THREE.BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
-    g.computeBoundingSphere();
-    this.geometries.set(mesh.id, { geometry: g, version: mesh.version });
+    // A mesh that changes its pose (MD2) is culled by the box round all
+    // its frames, not by the one it was first drawn in.
+    if (mesh.pose === undefined) g.computeBoundingSphere();
+    else
+    {
+      const b = mesh.bounds;
+      const c = new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, -(b.min.z + b.max.z) / 2);
+      g.boundingSphere = new THREE.Sphere(c, Math.hypot(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2);
+    }
+    this.geometries.set(mesh.id, { geometry: g, version: mesh.version, pose: mesh.pose });
     return g;
+  }
+
+  // New positions and normals into the same buffers: nothing else of the
+  // mesh changed.
+  pose(known, mesh)
+  {
+    const position = known.geometry.getAttribute('position');
+    const normal = known.geometry.getAttribute('normal');
+    const p = position.array;
+    const n = normal.array;
+    p.set(mesh.positions);
+    n.set(mesh.normals);
+    for (let i = 2; i < p.length; i += 3)
+    {
+      p[i] = -p[i];
+      n[i] = -n[i];
+    }
+    position.needsUpdate = true;
+    normal.needsUpdate = true;
+    known.pose = mesh.pose;
   }
 
   material(m)

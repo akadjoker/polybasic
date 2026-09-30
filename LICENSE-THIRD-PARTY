@@ -10,6 +10,11 @@ and src/compiler/semant.js) are derived from the Blitz3D compiler,
 and changed substantially; the tokenising rules, the statement and expression
 parser structure and the typing rules come from it.
 
+The MD2 reader and player (src/engine/model/md2.js) follow Blitz3D's
+md2rep.cpp and md2model.cpp, translated to JavaScript; the table of MD2
+normals (src/engine/model/md2-normals.js) is copied from its md2norms.cpp
+(it is the table of the Quake 2 MD2 format).
+
 The Blitz3D sources carry this licence:
 
   This software is provided 'as-is', without any express or implied
