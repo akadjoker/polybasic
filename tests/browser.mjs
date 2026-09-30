@@ -783,12 +783,14 @@ try
     await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
     const id = await project(page, () => window.polybasicPlayground.getProjectId());
 
-    // An image and a program file, as if chosen with Upload.
+    // An image and a program file, as if chosen with Upload. The program
+    // loads the image: a path relative to the main program, not to itself.
+    const TILE = 'Function Tile()\n  Return LoadTexture("assets/tile.png")\nEnd Function\n';
     const tile = Array.from(readFileSync(join(ROOT, 'examples/assets/tile.png')));
-    await project(page, (bytes) => window.polybasicPlayground.upload([
+    await project(page, ({ bytes, helpers }) => window.polybasicPlayground.upload([
       { name: 'tile.png', bytes: new Uint8Array(bytes) },
-      { name: 'helpers.pb', bytes: new TextEncoder().encode('Function Twice(x)\n  Return x * 2\nEnd Function\n') }
-    ]), tile);
+      { name: 'helpers.pb', bytes: new TextEncoder().encode(helpers) }
+    ]), { bytes: tile, helpers: 'Function Twice(x)\n  Return x * 2\nEnd Function\n' + TILE });
     let info = await project(page, () => window.polybasicPlayground.getProject());
     assert(info.paths.join() === 'assets/tile.png,helpers.pb,main.pb', info.paths.join());
     // The image is shown with how to use it.
@@ -808,7 +810,7 @@ Global tex, cube
 cube = CreateCube()
 camera = CreateCamera()
 PositionEntity camera, 0, 0, -4
-tex = LoadTexture("assets/tile.png")
+tex = Tile()
 EntityTexture cube, tex
 Print "twice 21 = " + Twice(21)
 Function Update()
@@ -823,13 +825,13 @@ End Function
 
     // An error in the included file opens that file and marks the line.
     await project(page, () => window.polybasicPlayground.openFile('lib/helpers.pb'));
-    await project(page, () => window.polybasicPlayground.setText('Function Twice(x)\n  Return x * \nEnd Function\n'));
+    await project(page, (text) => window.polybasicPlayground.setText(text), 'Function Twice(x)\n  Return x * \nEnd Function\n' + TILE);
     await project(page, () => window.polybasicPlayground.openFile('main.pb'));
     await page.click('#runBtn');
     await page.waitForFunction(() => window.polybasicPlayground.getOpenPath() === 'lib/helpers.pb', null, { timeout: 5000 });
     await page.waitForSelector('.cm-lint-marker-error', { timeout: 5000 });
     assert(/Compile error: .*\(lib\/helpers\.pb, line 2/.test(await consoleText(page)), await consoleText(page));
-    await project(page, () => window.polybasicPlayground.setText('Function Twice(x)\n  Return x * 2\nEnd Function\n'));
+    await project(page, (text) => window.polybasicPlayground.setText(text), 'Function Twice(x)\n  Return x * 2\nEnd Function\n' + TILE);
 
     // Make another program the main one, then delete the old main.
     answer('other.pb');
@@ -1065,6 +1067,15 @@ End Function
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('the site root leads to the playground', async () =>
+  {
+    const page = await openPage(browser, `${base}/`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId(), null, { timeout: 20000 });
+    assert(new URL(page.url()).pathname === '/web/', page.url());
+    noConsoleErrors(page);
+    await page.close();
   });
 }
 finally
