@@ -111,6 +111,21 @@ function scaleTri(tri, s)
   return out;
 }
 
+// Where the line from `origin` along `line` first meets entity `e` (a mesh,
+// or a model's parts), whatever its pick mode: a pick, or null.
+export function rayOnto(e, origin, line)
+{
+  const best = newHit(1);
+  best.entity = null;
+  for (const part of meshParts(e))
+  {
+    const before = best.t;
+    rayMesh(part, origin, line, best);
+    if (best.t < before) best.entity = e;
+  }
+  return best.entity ? best : null;
+}
+
 // A thin ray against a mesh: the ray goes into the mesh's own space, where
 // the triangle tree lives, and the hit comes back out. The fraction t is
 // the same in both spaces.

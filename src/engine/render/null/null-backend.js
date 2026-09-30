@@ -55,7 +55,8 @@ export class NullBackend extends RenderBackend
     this.lastFrame = {
       cameras: frame.cameras.map((c) => ({ id: c.id, world: Array.from(c.world), fov: c.fov })),
       lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world), shadows: l.shadows })),
-      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow }))
+      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow, tufts: i.grass ? i.grass.count : 0 })),
+      time: frame.time
     };
     if (this.calls.length < 1000) this.calls.push(['render', frame.cameras.length, frame.lights.length, frame.items.length]);
   }

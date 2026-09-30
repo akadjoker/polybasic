@@ -12,6 +12,7 @@ what the tests use).
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
 - [Trees](#trees)
+- [Grass](#grass)
 - [Ribbon trails](#ribbon-trails)
 - [Building meshes](#building-meshes)
 - [Looks](#looks)
@@ -144,6 +145,39 @@ milliseconds; for a forest, grow one of each kind and `CopyEntity` it:
 copies share the meshes, so a hundred trees cost little more to keep than
 one. Sizes, in units: a shrub is about 1 high, an oak 8, a willow 6, an ash
 8, a poplar 13, a beech 10 and a sequoia 38; `ScaleEntity` to taste.
+
+## Grass
+
+A field of grass is many tufts, each three crossed cards of blades, drawn
+all at once. The wind sways them, and things that walk through lean them
+aside, without the program doing anything each step: the tufts are placed
+once and the renderer bends them as it draws.
+
+```
+meadow = CreateGrass()
+PaintGrass meadow, 0, 0, 20, 5000, ground     ; 5000 tufts on `ground`, 20 around
+GrassPush meadow, player, 1                   ; the player parts the grass
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateGrass%(parent = 0)` | An empty field. Its tufts are placed in the field entity's own space, so moving the entity moves the field. |
+| `PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)` | Spreads `count` tufts evenly over a disc around x, z. With `onto` (an entity: a floor, a terrain, a model) each tuft stands where that entity's surface is below it, and none grows where there is none or where the ground is steeper than 60 degrees; without it they stand at the field's height 0. Returns how many were planted. |
+| `PlantGrass grass, x#, y#, z#, size# = 1` | One tuft there. |
+| `GrassSize grass, height#, width# = 0.6` | The size of a tuft (default 0.6 high); each tuft varies a little around it. |
+| `GrassWind grass, strength#` | How much the wind sways it: 0 none, 1 a breeze (default), more a gale. |
+| `GrassPush grass, entity, radius# = 1` | The grass within `radius` of the entity leans away from it (up to 8 entities; `GrassPush grass, 0` stops them all). |
+| `ClearGrass grass` `CountGrass%(grass)` | Removes every tuft; how many there are. |
+
+The blades are drawn by code (`EntityTexture` changes them: use a
+`TEX_MASKED` texture with the blades at the top); `EntityColor` tints them.
+Grass casts no shadow by default (`EntityFX` with no `FX_NOSHADOWCAST`
+turns it on, at a cost, and that shadow does not sway), and shadows fall on
+it. How many tufts a
+computer draws smoothly depends on its graphics card: start with a few
+thousand. (Measured in the test browser, which draws without a graphics
+card, 2000 tufts ran at 12 frames a second; a graphics card was not
+available to measure.)
 
 ## Ribbon trails
 

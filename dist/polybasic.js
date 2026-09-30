@@ -2369,7 +2369,7 @@ var RND_Q = 44488;
 var RND_R = 3399;
 function createCoreCommands(rt) {
   let seed = 4660;
-  const random = () => {
+  const random2 = () => {
     seed = RND_A * (seed % RND_Q) - RND_R * Math.floor(seed / RND_Q);
     if (seed < 0) seed += RND_M;
     return (seed & 65535) / 65536 + 0.5 / 65536;
@@ -2462,12 +2462,12 @@ function createCoreCommands(rt) {
     log10: Math.log10,
     // Rnd(10) gives 0 to 10, Rnd(5, 10) gives 5 to 10.
     rnd(from, to) {
-      return random() * (to - from) + from;
+      return random2() * (to - from) + from;
     },
     // Rand(6) gives 1 to 6, Rand(-3, 3) gives -3 to 3.
     rand(from, to) {
       if (to < from) [from, to] = [to, from];
-      return Math.floor(random() * (to - from + 1)) + from | 0;
+      return Math.floor(random2() * (to - from + 1)) + from | 0;
     },
     seedrnd(value) {
       seed = value & 2147483647 || 1;
@@ -3367,6 +3367,7 @@ var Entity = class {
     this.sprite = null;
     this.decal = false;
     this.trail = null;
+    this.grass = null;
     this.pickMode = 0;
     this.obscurer = true;
     this.collisionType = 0;
@@ -4206,6 +4207,7 @@ var World = class {
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     e.sprite = src.sprite ? { ...src.sprite } : null;
     e.decal = src.decal;
+    e.grass = src.grass;
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
@@ -4220,6 +4222,28 @@ var World = class {
   get entities() {
     return [...this.handles.values()].filter((h) => h instanceof Entity);
   }
+  // A field of grass for the frame: its tufts, and where what pushes it is
+  // now (world x, y, z and radius, four numbers each).
+  grassItem(e, world) {
+    const g = e.grass;
+    const pushers = [];
+    g.pushers = g.pushers.filter((p) => p.entity.alive);
+    for (const p of g.pushers) {
+      const w = p.entity.worldMatrix.e;
+      pushers.push(w[12], w[13], w[14], p.radius);
+    }
+    return {
+      id: e.id,
+      order: e.order,
+      world,
+      mesh: g.mesh,
+      materials: e.materials,
+      castShadow: e.castShadow,
+      receiveShadow: e.receiveShadow,
+      sprite: null,
+      grass: { tufts: g.tufts, count: g.count, version: g.version, height: g.height, width: g.width, wind: g.wind, pushers }
+    };
+  }
   // Everything the backend needs to draw one frame. World matrices are
   // brought up to date here, once per frame.
   buildFrame(width, height) {
@@ -4231,6 +4255,7 @@ var World = class {
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
+      else if (e.kind === "grass" && e.grass.count) items.push(this.grassItem(e, world));
       else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -4305,7 +4330,8 @@ var NullBackend = class extends RenderBackend {
     this.lastFrame = {
       cameras: frame.cameras.map((c) => ({ id: c.id, world: Array.from(c.world), fov: c.fov })),
       lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world), shadows: l.shadows })),
-      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow }))
+      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow, tufts: i.grass ? i.grass.count : 0 })),
+      time: frame.time
     };
     if (this.calls.length < 1e3) this.calls.push(["render", frame.cameras.length, frame.lights.length, frame.items.length]);
   }
@@ -5014,7 +5040,7 @@ var Branch = class _Branch {
     const s = p.branchFactor * dot(v, vec);
     return [vec[0] - v[0] * s, vec[1] - v[1] * s, vec[2] - v[2] * s];
   }
-  split(level, steps, p, random, l1 = 1, l2 = 1) {
+  split(level, steps, p, random2, l1 = 1, l2 = 1) {
     const rLevel = p.levels - level;
     let po;
     if (this.parent) po = this.parent.head;
@@ -5026,7 +5052,7 @@ var Branch = class _Branch {
     const dir = normalize2(sub(so, po));
     const normal = cross2(dir, [dir[2], dir[0], dir[1]]);
     const tangent = cross2(dir, normal);
-    const r = random(rLevel * 10 + l1 * 5 + l2 + p.seed);
+    const r = random2(rLevel * 10 + l1 * 5 + l2 + p.seed);
     let adj = add(scale(normal, r), scale(tangent, 1 - r));
     if (r > 0.5) adj = scale(adj, -1);
     const clump = (p.clumpMax - p.clumpMin) * r + p.clumpMin;
@@ -5055,9 +5081,9 @@ var Branch = class _Branch {
         this.child0.head = add(this.head, [(r - 0.5) * 2 * p.trunkKink, p.climbRate, (r - 0.5) * 2 * p.trunkKink]);
         this.child0.type = "trunk";
         this.child0.length = this.length * p.taperRate;
-        this.child0.split(level, steps - 1, p, random, l1 + 1, l2);
-      } else this.child0.split(level - 1, 0, p, random, l1 + 1, l2);
-      this.child1.split(level - 1, 0, p, random, l1, l2 + 1);
+        this.child0.split(level, steps - 1, p, random2, l1 + 1, l2);
+      } else this.child0.split(level - 1, 0, p, random2, l1 + 1, l2);
+      this.child1.split(level - 1, 0, p, random2, l1, l2 + 1);
     }
   }
 };
@@ -5074,8 +5100,8 @@ var Builder2 = class {
     this.twigUvs = [];
     this.root = new Branch([0, p.trunkLength, 0]);
     this.root.length = p.initialBranchLength;
-    const random = (a) => Math.abs(Math.cos(a + a * a));
-    this.root.split(p.levels, p.treeSteps, p, random);
+    const random2 = (a) => Math.abs(Math.cos(a + a * a));
+    this.root.split(p.levels, p.treeSteps, p, random2);
     this.createForks(this.root, p.maxRadius);
     this.createTwigs(this.root);
     this.doFaces(this.root);
@@ -5395,6 +5421,114 @@ function leafPixels(style = 0, size = 128) {
     const x = Math.round(size * (0.5 + 0.02 * Math.sin(y / size * 6)));
     put(x, y, ...stem);
     put(x + 1, y, ...stem);
+  }
+  return px;
+}
+
+// src/engine/scene/grass.js
+var TUFT_FLOATS = 5;
+var MAX_PUSHERS = 8;
+function createTuft() {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  for (let k = 0; k < 3; k++) {
+    const a = k * Math.PI / 3;
+    const dx = Math.cos(a) * 0.5;
+    const dz = Math.sin(a) * 0.5;
+    const base = positions.length / 3;
+    positions.push(-dx, 1, -dz, dx, 1, dz, dx, 0, dz, -dx, 0, -dz);
+    for (let i = 0; i < 4; i++) normals.push(0, 1, 0);
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  return new MeshData(positions, normals, uvs, indices);
+}
+function random(seed) {
+  let a = seed >>> 0 || 2654435769;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+var Grass = class {
+  constructor(seed) {
+    this.tufts = new Float32Array(TUFT_FLOATS * 64);
+    this.count = 0;
+    this.version = 0;
+    this.height = 0.6;
+    this.width = 0.6;
+    this.wind = 1;
+    this.pushers = [];
+    this.random = random(seed);
+  }
+  plant(x, y, z, size) {
+    if ((this.count + 1) * TUFT_FLOATS > this.tufts.length) {
+      const grown = new Float32Array(this.tufts.length * 2);
+      grown.set(this.tufts);
+      this.tufts = grown;
+    }
+    const o = this.count * TUFT_FLOATS;
+    this.tufts[o] = x;
+    this.tufts[o + 1] = y;
+    this.tufts[o + 2] = z;
+    this.tufts[o + 3] = size * (0.75 + 0.5 * this.random());
+    this.tufts[o + 4] = this.random() * Math.PI * 2;
+    this.count++;
+    this.version++;
+  }
+  // Up to `count` tufts spread evenly over a disc around (x, z). `ground(x,
+  // z)` gives the height and the surface's facing there ({ y, ny }), or null
+  // where there is no ground; steep ground (facing less than half up) gets
+  // none. Returns how many were planted.
+  paint(x, z, radius, count, size, ground) {
+    let planted = 0;
+    for (let i = 0; i < count; i++) {
+      const r = radius * Math.sqrt(this.random());
+      const a = this.random() * Math.PI * 2;
+      const px = x + Math.cos(a) * r;
+      const pz = z + Math.sin(a) * r;
+      const at = ground(px, pz);
+      if (!at || at.ny < 0.5) continue;
+      this.plant(px, at.y, pz, size);
+      planted++;
+    }
+    return planted;
+  }
+  clear() {
+    this.count = 0;
+    this.version++;
+  }
+};
+function bladePixels(size = 64) {
+  const px = new Uint8ClampedArray(size * size * 4);
+  const next = random(7);
+  for (let k = 0; k < 14; k++) {
+    const root = 0.08 + 0.84 * next();
+    const lean = (next() - 0.5) * 0.5;
+    const tall = 0.55 + 0.45 * next();
+    const width = 0.035 + 0.03 * next();
+    const shade = 0.8 + 0.35 * next();
+    for (let y = 0; y < size; y++) {
+      const h = 1 - y / size;
+      if (h > tall) continue;
+      const along = h / tall;
+      const cx = root + lean * along * along;
+      const half = width * (1 - along) * size;
+      const light = shade * (0.55 + 0.45 * along);
+      for (let x = Math.floor(cx * size - half); x <= Math.ceil(cx * size + half); x++) {
+        if (x < 0 || x >= size || Math.abs(x - cx * size) > half) continue;
+        const i = (y * size + x) * 4;
+        px[i] = 70 * light;
+        px[i + 1] = 140 * light;
+        px[i + 2] = 50 * light;
+        px[i + 3] = 255;
+      }
+    }
   }
   return px;
 }
@@ -5967,6 +6101,16 @@ function scaleTri(tri, s) {
   const out = new Float64Array(9);
   for (let i = 0; i < 9; i++) out[i] = tri[i] * s;
   return out;
+}
+function rayOnto(e, origin, line) {
+  const best = newHit(1);
+  best.entity = null;
+  for (const part of meshParts(e)) {
+    const before = best.t;
+    rayMesh(part, origin, line, best);
+    if (best.t < before) best.entity = e;
+  }
+  return best.entity ? best : null;
 }
 function rayMesh(e, origin, line, best) {
   const inv = e.worldMatrix.clone();
@@ -7283,9 +7427,9 @@ function synthesize(recipe) {
   const length2 = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
   const out = new Float32Array(length2);
   const attack = Math.max(1, Math.round(SAMPLE_RATE * attackMs / 1e3));
-  const random = makeRandom(seed);
+  const random2 = makeRandom(seed);
   let phase = 0;
-  let noiseValue = random() * 2 - 1;
+  let noiseValue = random2() * 2 - 1;
   let filtered = 0;
   for (let i = 0; i < length2; i++) {
     const t = i / length2;
@@ -7295,7 +7439,7 @@ function synthesize(recipe) {
     phase += Math.max(1, f) / SAMPLE_RATE;
     if (phase >= 1) {
       phase -= Math.floor(phase);
-      noiseValue = random() * 2 - 1;
+      noiseValue = random2() * 2 - 1;
     }
     let s;
     switch (wave) {
@@ -8224,8 +8368,16 @@ var ENGINE_COMMANDS = [
   "CreateCone%(segments = 16, solid = 1, parent = 0)",
   "CreatePlane%(divisions = 1, parent = 0)",
   "CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)",
-  // Trees
+  // Trees and grass
   "CreateTree%(kind = 1, seed = 0, parent = 0)",
+  "CreateGrass%(parent = 0)",
+  "PlantGrass(grass, x#, y#, z#, size# = 1)",
+  "PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)",
+  "GrassSize(grass, height#, width# = 0.6)",
+  "GrassWind(grass, strength#)",
+  "GrassPush(grass, entity, radius# = 1)",
+  "ClearGrass(grass)",
+  "CountGrass%(grass)",
   // Ribbon trails
   "CreateTrail%(first, second)",
   "TrailPoint(trail, entity)",
@@ -8393,6 +8545,11 @@ function createEngineCommands(engine) {
     }
     return t;
   };
+  const grass = (handle) => {
+    const e = entity(handle);
+    if (!e.grass) throw runtimeError(`Entity ${handle} is not grass (CreateGrass makes grass)`);
+    return e;
+  };
   const trail = (handle) => {
     const e = entity(handle);
     if (!e.trail) throw runtimeError(`Entity ${handle} is not a trail (CreateTrail makes trails)`);
@@ -8479,6 +8636,69 @@ function createEngineCommands(engine) {
       t.material.changed();
       return e.id;
     },
+    creategrass(parent) {
+      engine.autoGraphics();
+      const e = world.createEntity("grass", parentOf(parent));
+      e.grass = new Grass(e.id);
+      e.grass.mesh = engine.sharedMesh("tuft", createTuft);
+      e.material = new Material();
+      e.material.texture = treeTexture("blades", 64, 64, () => bladePixels(), TEX_MASKED);
+      e.material.twoSided = true;
+      e.castShadow = false;
+      return e.id;
+    },
+    plantgrass(handle, x, y, z, size) {
+      grass(handle).grass.plant(x, y, z, Math.max(0, size));
+    },
+    paintgrass(handle, x, z, radius, count, onto, size) {
+      const e = grass(handle);
+      if (!(radius > 0)) throw runtimeError(`PaintGrass needs a radius above 0, not ${radius}`);
+      if (count < 0 || count > 1e6) throw runtimeError(`PaintGrass plants 0 to 1000000 tufts at a time, not ${count}`);
+      let ground = () => ({ y: 0, ny: 1 });
+      if (onto) {
+        const target = entity(onto);
+        const b = target.worldBounds ? target.worldBounds() : null;
+        const top = b && !b.isEmpty() ? b.max.y + 1 : 1e3;
+        const drop = b && !b.isEmpty() ? b.max.y - b.min.y + 2 : 2e3;
+        const inv = e.worldMatrix.clone();
+        if (!inv.invert()) return 0;
+        const w = e.worldMatrix;
+        ground = (px, pz) => {
+          const at = new Vec3(px, 0, pz).applyMat4(w);
+          const hit = rayOnto(target, new Vec3(at.x, top, at.z), new Vec3(0, -drop, 0));
+          if (!hit) return null;
+          return { y: new Vec3(hit.x, hit.y, hit.z).applyMat4(inv).y, ny: hit.ny };
+        };
+      }
+      return e.grass.paint(x, z, radius, count, Math.max(0, size), ground);
+    },
+    grasssize(handle, height, width) {
+      const g = grass(handle).grass;
+      g.height = Math.max(0, height);
+      g.width = Math.max(0, width);
+      g.version++;
+    },
+    grasswind(handle, strength) {
+      grass(handle).grass.wind = Math.max(0, strength);
+    },
+    grasspush(handle, pusher, radius) {
+      const g = grass(handle).grass;
+      if (pusher === 0) {
+        g.pushers.length = 0;
+        return;
+      }
+      const e = entity(pusher);
+      const known = g.pushers.find((p) => p.entity === e);
+      if (known) known.radius = Math.max(0, radius);
+      else {
+        if (g.pushers.length >= MAX_PUSHERS) throw runtimeError(`Grass is pushed by at most ${MAX_PUSHERS} entities`);
+        g.pushers.push({ entity: e, radius: Math.max(0, radius) });
+      }
+    },
+    cleargrass(handle) {
+      grass(handle).grass.clear();
+    },
+    countgrass: (handle) => grass(handle).grass.count,
     createtrail(first, second) {
       const blade = [entity(first), entity(second)];
       if (blade[0] === blade[1]) throw runtimeError("CreateTrail needs two different entities for the ends of its blade");
@@ -9660,6 +9880,7 @@ var Engine = class {
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
+    frame.time = this.steps * STEP_MS / 1e3;
     this.backend.render(frame);
     this.frames++;
     const now = this.now();
@@ -22024,6 +22245,242 @@ var DataTexture = class extends Texture2 {
     this.generateMipmaps = false;
     this.flipY = false;
     this.unpackAlignment = 1;
+  }
+};
+var InstancedBufferAttribute = class extends BufferAttribute {
+  /**
+   * Constructs a new instanced buffer attribute.
+   *
+   * @param {TypedArray} array - The array holding the attribute data.
+   * @param {number} itemSize - The item size.
+   * @param {boolean} [normalized=false] - Whether the data are normalized or not.
+   * @param {number} [meshPerAttribute=1] - How often a value of this buffer attribute should be repeated.
+   */
+  constructor(array, itemSize, normalized, meshPerAttribute = 1) {
+    super(array, itemSize, normalized);
+    this.isInstancedBufferAttribute = true;
+    this.meshPerAttribute = meshPerAttribute;
+  }
+  copy(source) {
+    super.copy(source);
+    this.meshPerAttribute = source.meshPerAttribute;
+    return this;
+  }
+  toJSON() {
+    const data = super.toJSON();
+    data.meshPerAttribute = this.meshPerAttribute;
+    data.isInstancedBufferAttribute = true;
+    return data;
+  }
+};
+var _instanceLocalMatrix = /* @__PURE__ */ new Matrix4();
+var _instanceWorldMatrix = /* @__PURE__ */ new Matrix4();
+var _instanceIntersects = [];
+var _box3 = /* @__PURE__ */ new Box3();
+var _identity = /* @__PURE__ */ new Matrix4();
+var _mesh$1 = /* @__PURE__ */ new Mesh();
+var _sphere$4 = /* @__PURE__ */ new Sphere();
+var InstancedMesh = class extends Mesh {
+  /**
+   * Constructs a new instanced mesh.
+   *
+   * @param {BufferGeometry} [geometry] - The mesh geometry.
+   * @param {Material|Array<Material>} [material] - The mesh material.
+   * @param {number} count - The number of instances.
+   */
+  constructor(geometry, material, count) {
+    super(geometry, material);
+    this.isInstancedMesh = true;
+    this.instanceMatrix = new InstancedBufferAttribute(new Float32Array(count * 16), 16);
+    this.instanceColor = null;
+    this.morphTexture = null;
+    this.count = count;
+    this.boundingBox = null;
+    this.boundingSphere = null;
+    for (let i = 0; i < count; i++) {
+      this.setMatrixAt(i, _identity);
+    }
+  }
+  /**
+   * Computes the bounding box of the instanced mesh, and updates {@link InstancedMesh#boundingBox}.
+   * The bounding box is not automatically computed by the engine; this method must be called by your app.
+   * You may need to recompute the bounding box if an instance is transformed via {@link InstancedMesh#setMatrixAt}.
+   */
+  computeBoundingBox() {
+    const geometry = this.geometry;
+    const count = this.count;
+    if (this.boundingBox === null) {
+      this.boundingBox = new Box3();
+    }
+    if (geometry.boundingBox === null) {
+      geometry.computeBoundingBox();
+    }
+    this.boundingBox.makeEmpty();
+    for (let i = 0; i < count; i++) {
+      this.getMatrixAt(i, _instanceLocalMatrix);
+      _box3.copy(geometry.boundingBox).applyMatrix4(_instanceLocalMatrix);
+      this.boundingBox.union(_box3);
+    }
+  }
+  /**
+   * Computes the bounding sphere of the instanced mesh, and updates {@link InstancedMesh#boundingSphere}
+   * The engine automatically computes the bounding sphere when it is needed, e.g., for ray casting or view frustum culling.
+   * You may need to recompute the bounding sphere if an instance is transformed via {@link InstancedMesh#setMatrixAt}.
+   */
+  computeBoundingSphere() {
+    const geometry = this.geometry;
+    const count = this.count;
+    if (this.boundingSphere === null) {
+      this.boundingSphere = new Sphere();
+    }
+    if (geometry.boundingSphere === null) {
+      geometry.computeBoundingSphere();
+    }
+    this.boundingSphere.makeEmpty();
+    for (let i = 0; i < count; i++) {
+      this.getMatrixAt(i, _instanceLocalMatrix);
+      _sphere$4.copy(geometry.boundingSphere).applyMatrix4(_instanceLocalMatrix);
+      this.boundingSphere.union(_sphere$4);
+    }
+  }
+  copy(source, recursive) {
+    super.copy(source, recursive);
+    this.instanceMatrix.copy(source.instanceMatrix);
+    if (source.morphTexture !== null) this.morphTexture = source.morphTexture.clone();
+    if (source.instanceColor !== null) this.instanceColor = source.instanceColor.clone();
+    this.count = source.count;
+    if (source.boundingBox !== null) this.boundingBox = source.boundingBox.clone();
+    if (source.boundingSphere !== null) this.boundingSphere = source.boundingSphere.clone();
+    return this;
+  }
+  /**
+   * Gets the color of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Color} color - The target object that is used to store the method's result.
+   * @return {Color} A reference to the target color.
+   */
+  getColorAt(index, color) {
+    if (this.instanceColor === null) {
+      return color.setRGB(1, 1, 1);
+    } else {
+      return color.fromArray(this.instanceColor.array, index * 3);
+    }
+  }
+  /**
+   * Gets the local transformation matrix of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Matrix4} matrix - The target object that is used to store the method's result.
+   * @return {Matrix4} A reference to the target matrix.
+   */
+  getMatrixAt(index, matrix) {
+    return matrix.fromArray(this.instanceMatrix.array, index * 16);
+  }
+  /**
+   * Gets the morph target weights of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Mesh} object - The target object that is used to store the method's result.
+   */
+  getMorphAt(index, object) {
+    const objectInfluences = object.morphTargetInfluences;
+    const array = this.morphTexture.source.data.data;
+    const len = objectInfluences.length + 1;
+    const dataIndex = index * len + 1;
+    for (let i = 0; i < objectInfluences.length; i++) {
+      objectInfluences[i] = array[dataIndex + i];
+    }
+  }
+  raycast(raycaster, intersects) {
+    const matrixWorld = this.matrixWorld;
+    const raycastTimes = this.count;
+    _mesh$1.geometry = this.geometry;
+    _mesh$1.material = this.material;
+    if (_mesh$1.material === void 0) return;
+    if (this.boundingSphere === null) this.computeBoundingSphere();
+    _sphere$4.copy(this.boundingSphere);
+    _sphere$4.applyMatrix4(matrixWorld);
+    if (raycaster.ray.intersectsSphere(_sphere$4) === false) return;
+    for (let instanceId = 0; instanceId < raycastTimes; instanceId++) {
+      this.getMatrixAt(instanceId, _instanceLocalMatrix);
+      _instanceWorldMatrix.multiplyMatrices(matrixWorld, _instanceLocalMatrix);
+      _mesh$1.matrixWorld = _instanceWorldMatrix;
+      _mesh$1.raycast(raycaster, _instanceIntersects);
+      for (let i = 0, l = _instanceIntersects.length; i < l; i++) {
+        const intersect = _instanceIntersects[i];
+        intersect.instanceId = instanceId;
+        intersect.object = this;
+        intersects.push(intersect);
+      }
+      _instanceIntersects.length = 0;
+    }
+  }
+  /**
+   * Sets the given color to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#instanceColor} to `true` after updating all the colors.
+   *
+   * @param {number} index - The instance index.
+   * @param {Color} color - The instance color.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setColorAt(index, color) {
+    if (this.instanceColor === null) {
+      this.instanceColor = new InstancedBufferAttribute(new Float32Array(this.instanceMatrix.count * 3).fill(1), 3);
+    }
+    color.toArray(this.instanceColor.array, index * 3);
+    return this;
+  }
+  /**
+   * Sets the given local transformation matrix to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#instanceMatrix} to `true` after updating all the matrices.
+   *
+   * @param {number} index - The instance index.
+   * @param {Matrix4} matrix - The local transformation.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setMatrixAt(index, matrix) {
+    matrix.toArray(this.instanceMatrix.array, index * 16);
+    return this;
+  }
+  /**
+   * Sets the morph target weights to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#morphTexture} to `true` after updating all the influences.
+   *
+   * @param {number} index - The instance index.
+   * @param {Mesh} object -  A mesh which `morphTargetInfluences` property containing the morph target weights
+   * of a single instance.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setMorphAt(index, object) {
+    const objectInfluences = object.morphTargetInfluences;
+    const len = objectInfluences.length + 1;
+    if (this.morphTexture === null) {
+      this.morphTexture = new DataTexture(new Float32Array(len * this.count), len, this.count, RedFormat, FloatType);
+    }
+    const array = this.morphTexture.source.data.data;
+    let morphInfluencesSum = 0;
+    for (let i = 0; i < objectInfluences.length; i++) {
+      morphInfluencesSum += objectInfluences[i];
+    }
+    const morphBaseInfluence = this.geometry.morphTargetsRelative ? 1 : 1 - morphInfluencesSum;
+    const dataIndex = len * index;
+    array[dataIndex] = morphBaseInfluence;
+    array.set(objectInfluences, dataIndex + 1);
+    return this;
+  }
+  updateMorphTargets() {
+  }
+  /**
+   * Frees the GPU-related resources allocated by this instance. Call this
+   * method whenever this instance is no longer used in your app.
+   */
+  dispose() {
+    super.dispose();
+    if (this.morphTexture !== null) {
+      this.morphTexture.dispose();
+      this.morphTexture = null;
+    }
   }
 };
 var _sphere$3 = /* @__PURE__ */ new Sphere();
@@ -37051,6 +37508,7 @@ var ThreeBackend = class extends RenderBackend {
     this.ambient.intensity = LIGHT_SCALE;
     const seen = /* @__PURE__ */ new Set();
     this.sprites.length = 0;
+    this.time = frame.time || 0;
     for (const item of frame.items) {
       seen.add(item.id);
       this.syncItem(item);
@@ -37082,6 +37540,10 @@ var ThreeBackend = class extends RenderBackend {
   }
   // ------------------------------------------------------------ meshes
   syncItem(item) {
+    if (item.grass) {
+      this.syncGrass(item);
+      return;
+    }
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
     const materials = item.materials.map((m) => this.material(m));
@@ -37103,6 +37565,116 @@ var ThreeBackend = class extends RenderBackend {
       mirrorInto(obj.matrix, item.world);
       obj.matrixWorldNeedsUpdate = true;
     }
+  }
+  // A field of grass: one tuft mesh drawn once per tuft. The tufts' matrices
+  // are only worked out again when the field changes; the wind and the
+  // pushing happen in the vertex shader.
+  syncGrass(item) {
+    const g = item.grass;
+    let obj = this.objects.get(item.id);
+    if (obj && (!obj.isInstancedMesh || obj.userData.grassVersion !== g.version || obj.count !== g.count)) {
+      this.scene.remove(obj);
+      if (obj.isInstancedMesh) obj.dispose();
+      obj = null;
+    }
+    const material = this.grassMaterial(item.materials[0]);
+    if (!obj) {
+      obj = new InstancedMesh(this.geometry(item.mesh), material, g.count);
+      obj.matrixAutoUpdate = false;
+      const local = new Matrix4();
+      const turn = new Matrix4();
+      const size = new Matrix4();
+      const t = g.tufts;
+      for (let i = 0; i < g.count; i++) {
+        const o = i * 5;
+        const k = t[o + 3];
+        local.makeTranslation(t[o], t[o + 1], t[o + 2]);
+        local.multiply(turn.makeRotationY(t[o + 4]));
+        local.multiply(size.makeScale(g.width * k, g.height * k, g.width * k));
+        const e = local.elements;
+        for (const m of MIRRORED) e[m] = -e[m];
+        obj.setMatrixAt(i, local);
+      }
+      obj.instanceMatrix.needsUpdate = true;
+      obj.computeBoundingSphere();
+      obj.userData.grassVersion = g.version;
+      this.objects.set(item.id, obj);
+      this.scene.add(obj);
+    }
+    obj.material = material;
+    obj.visible = true;
+    obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
+    mirrorInto(obj.matrix, item.world);
+    obj.matrixWorldNeedsUpdate = true;
+    const u = material.userData.grass;
+    u.time.value = this.time;
+    u.wind.value = g.wind;
+    u.height.value = g.height;
+    u.count.value = Math.min(8, g.pushers.length / 4);
+    for (let i = 0; i < u.count.value; i++) {
+      const p = g.pushers;
+      u.pushers.value[i].set(p[i * 4], p[i * 4 + 1], -p[i * 4 + 2], p[i * 4 + 3]);
+    }
+  }
+  // The material of a grass entity, with the wind and the pushing added to
+  // its vertex shader.
+  grassMaterial(m) {
+    const material = this.material(m);
+    if (material.userData.grass) return material;
+    const grass = {
+      time: { value: 0 },
+      wind: { value: 1 },
+      height: { value: 1 },
+      count: { value: 0 },
+      pushers: { value: Array.from({ length: 8 }, () => new Vector4()) }
+    };
+    material.userData.grass = grass;
+    material.customProgramCacheKey = () => "polybasic-grass";
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.pbTime = grass.time;
+      shader.uniforms.pbWind = grass.wind;
+      shader.uniforms.pbHeight = grass.height;
+      shader.uniforms.pbPushCount = grass.count;
+      shader.uniforms.pbPushers = grass.pushers;
+      shader.vertexShader = shader.vertexShader.replace("#include <common>", `#include <common>
+uniform float pbTime;
+uniform float pbWind;
+uniform float pbHeight;
+uniform int pbPushCount;
+uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin_vertex>
+#ifdef USE_INSTANCING
+  mat4 pbTuft = modelMatrix * instanceMatrix;
+#else
+  mat4 pbTuft = modelMatrix;
+#endif
+  vec3 pbRoot = (pbTuft * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  // Only the tops move: nothing at the root, most at the tips.
+  float pbBend = transformed.y * transformed.y;
+  // Gusts rolling across the field.
+  float pbPhase = pbTime * 1.6 + pbRoot.x * 0.35 + pbRoot.z * 0.27;
+  vec3 pbMove = vec3(sin(pbPhase) * 0.6 + sin(pbPhase * 2.3 + 1.7) * 0.25, 0.0, cos(pbPhase * 0.8 + 0.5) * 0.35);
+  pbMove *= pbWind * 0.15 * pbHeight * pbBend;
+  // Leaning away from what pushes through it.
+  for (int i = 0; i < 8; i++)
+  {
+    if (i >= pbPushCount) break;
+    vec3 pbAway = pbRoot - pbPushers[i].xyz;
+    pbAway.y = 0.0;
+    float pbDist = length(pbAway);
+    float pbReach = pbPushers[i].w;
+    if (pbDist < pbReach && pbDist > 0.0001)
+    {
+      float pbPush = 1.0 - pbDist / pbReach;
+      pbMove += normalize(pbAway) * pbPush * pbBend * pbHeight;
+      pbMove.y -= pbPush * pbBend * pbHeight * 0.4;
+    }
+  }
+  transformed += inverse(mat3(pbTuft)) * pbMove;`);
+    };
+    material.needsUpdate = true;
+    return material;
   }
   // Sprites turn to each camera that draws them.
   faceSprites(cameraWorld) {

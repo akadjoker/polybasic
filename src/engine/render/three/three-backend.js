@@ -148,6 +148,7 @@ export class ThreeBackend extends RenderBackend
 
     const seen = new Set();
     this.sprites.length = 0;
+    this.time = frame.time || 0;
     for (const item of frame.items)
     {
       seen.add(item.id);
@@ -188,6 +189,11 @@ export class ThreeBackend extends RenderBackend
 
   syncItem(item)
   {
+    if (item.grass)
+    {
+      this.syncGrass(item);
+      return;
+    }
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
     // One three.js material per submesh group; a single one when all the
@@ -213,6 +219,130 @@ export class ThreeBackend extends RenderBackend
       mirrorInto(obj.matrix, item.world);
       obj.matrixWorldNeedsUpdate = true;
     }
+  }
+
+  // A field of grass: one tuft mesh drawn once per tuft. The tufts' matrices
+  // are only worked out again when the field changes; the wind and the
+  // pushing happen in the vertex shader.
+  syncGrass(item)
+  {
+    const g = item.grass;
+    let obj = this.objects.get(item.id);
+    if (obj && (!obj.isInstancedMesh || obj.userData.grassVersion !== g.version || obj.count !== g.count))
+    {
+      this.scene.remove(obj);
+      if (obj.isInstancedMesh) obj.dispose();
+      obj = null;
+    }
+    const material = this.grassMaterial(item.materials[0]);
+    if (!obj)
+    {
+      obj = new THREE.InstancedMesh(this.geometry(item.mesh), material, g.count);
+      obj.matrixAutoUpdate = false;
+      const local = new THREE.Matrix4();
+      const turn = new THREE.Matrix4();
+      const size = new THREE.Matrix4();
+      const t = g.tufts;
+      for (let i = 0; i < g.count; i++)
+      {
+        const o = i * 5;
+        const k = t[o + 3];
+        // In PolyBasic's space: moved, turned about Y, sized; then mirrored
+        // like every other matrix.
+        local.makeTranslation(t[o], t[o + 1], t[o + 2]);
+        local.multiply(turn.makeRotationY(t[o + 4]));
+        local.multiply(size.makeScale(g.width * k, g.height * k, g.width * k));
+        const e = local.elements;
+        for (const m of MIRRORED) e[m] = -e[m];
+        obj.setMatrixAt(i, local);
+      }
+      obj.instanceMatrix.needsUpdate = true;
+      // Around all the tufts, for culling: only changes with the field.
+      obj.computeBoundingSphere();
+      obj.userData.grassVersion = g.version;
+      this.objects.set(item.id, obj);
+      this.scene.add(obj);
+    }
+    obj.material = material;
+    obj.visible = true;
+    obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
+    mirrorInto(obj.matrix, item.world);
+    obj.matrixWorldNeedsUpdate = true;
+    const u = material.userData.grass;
+    u.time.value = this.time;
+    u.wind.value = g.wind;
+    u.height.value = g.height;
+    u.count.value = Math.min(8, g.pushers.length / 4);
+    for (let i = 0; i < u.count.value; i++)
+    {
+      const p = g.pushers;
+      u.pushers.value[i].set(p[i * 4], p[i * 4 + 1], -p[i * 4 + 2], p[i * 4 + 3]);
+    }
+  }
+
+  // The material of a grass entity, with the wind and the pushing added to
+  // its vertex shader.
+  grassMaterial(m)
+  {
+    const material = this.material(m);
+    if (material.userData.grass) return material;
+    const grass = {
+      time: { value: 0 },
+      wind: { value: 1 },
+      height: { value: 1 },
+      count: { value: 0 },
+      pushers: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }
+    };
+    material.userData.grass = grass;
+    material.customProgramCacheKey = () => 'polybasic-grass';
+    material.onBeforeCompile = (shader) =>
+    {
+      shader.uniforms.pbTime = grass.time;
+      shader.uniforms.pbWind = grass.wind;
+      shader.uniforms.pbHeight = grass.height;
+      shader.uniforms.pbPushCount = grass.count;
+      shader.uniforms.pbPushers = grass.pushers;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+uniform float pbTime;
+uniform float pbWind;
+uniform float pbHeight;
+uniform int pbPushCount;
+uniform vec4 pbPushers[8];`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+#ifdef USE_INSTANCING
+  mat4 pbTuft = modelMatrix * instanceMatrix;
+#else
+  mat4 pbTuft = modelMatrix;
+#endif
+  vec3 pbRoot = (pbTuft * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  // Only the tops move: nothing at the root, most at the tips.
+  float pbBend = transformed.y * transformed.y;
+  // Gusts rolling across the field.
+  float pbPhase = pbTime * 1.6 + pbRoot.x * 0.35 + pbRoot.z * 0.27;
+  vec3 pbMove = vec3(sin(pbPhase) * 0.6 + sin(pbPhase * 2.3 + 1.7) * 0.25, 0.0, cos(pbPhase * 0.8 + 0.5) * 0.35);
+  pbMove *= pbWind * 0.15 * pbHeight * pbBend;
+  // Leaning away from what pushes through it.
+  for (int i = 0; i < 8; i++)
+  {
+    if (i >= pbPushCount) break;
+    vec3 pbAway = pbRoot - pbPushers[i].xyz;
+    pbAway.y = 0.0;
+    float pbDist = length(pbAway);
+    float pbReach = pbPushers[i].w;
+    if (pbDist < pbReach && pbDist > 0.0001)
+    {
+      float pbPush = 1.0 - pbDist / pbReach;
+      pbMove += normalize(pbAway) * pbPush * pbBend * pbHeight;
+      pbMove.y -= pbPush * pbBend * pbHeight * 0.4;
+    }
+  }
+  transformed += inverse(mat3(pbTuft)) * pbMove;`);
+    };
+    material.needsUpdate = true;
+    return material;
   }
 
   // Sprites turn to each camera that draws them.

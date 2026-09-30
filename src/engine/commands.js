@@ -19,6 +19,10 @@ import { createSpriteQuad, newSprite, SPRITE_FREE, SPRITE_UPRIGHT2 } from './sce
 import { Trail, MAX_BLADE } from './scene/trail.js';
 import { buildTree, TREE_KINDS, TREE_OAK, TREE_WILLOW, TREE_SHRUB, TREE_ASH, TREE_POPLAR, TREE_SEQUOIA, TREE_BEECH } from './scene/tree.js';
 import { barkPixels, leafPixels } from './scene/tree-textures.js';
+import { Grass, createTuft, bladePixels, MAX_PUSHERS } from './scene/grass.js';
+import { Material } from './scene/material.js';
+import { rayOnto } from './collide/picking.js';
+import { Vec3 } from './math/vec3.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
@@ -56,8 +60,16 @@ export const ENGINE_COMMANDS = [
   'CreatePlane%(divisions = 1, parent = 0)',
   'CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)',
 
-  // Trees
+  // Trees and grass
   'CreateTree%(kind = 1, seed = 0, parent = 0)',
+  'CreateGrass%(parent = 0)',
+  'PlantGrass(grass, x#, y#, z#, size# = 1)',
+  'PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)',
+  'GrassSize(grass, height#, width# = 0.6)',
+  'GrassWind(grass, strength#)',
+  'GrassPush(grass, entity, radius# = 1)',
+  'ClearGrass(grass)',
+  'CountGrass%(grass)',
 
   // Ribbon trails
   'CreateTrail%(first, second)',
@@ -256,6 +268,12 @@ export function createEngineCommands(engine)
     }
     return t;
   };
+  const grass = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.grass) throw runtimeError(`Entity ${handle} is not grass (CreateGrass makes grass)`);
+    return e;
+  };
   const trail = (handle) =>
   {
     const e = entity(handle);
@@ -365,6 +383,82 @@ export function createEngineCommands(engine)
       t.material.changed();
       return e.id;
     },
+    creategrass(parent)
+    {
+      engine.autoGraphics();
+      const e = world.createEntity('grass', parentOf(parent));
+      e.grass = new Grass(e.id);
+      e.grass.mesh = engine.sharedMesh('tuft', createTuft);
+      e.material = new Material();
+      e.material.texture = treeTexture('blades', 64, 64, () => bladePixels(), TEX_MASKED);
+      e.material.twoSided = true;
+      e.castShadow = false;
+      return e.id;
+    },
+    plantgrass(handle, x, y, z, size)
+    {
+      grass(handle).grass.plant(x, y, z, Math.max(0, size));
+    },
+    paintgrass(handle, x, z, radius, count, onto, size)
+    {
+      const e = grass(handle);
+      if (!(radius > 0)) throw runtimeError(`PaintGrass needs a radius above 0, not ${radius}`);
+      if (count < 0 || count > 1000000) throw runtimeError(`PaintGrass plants 0 to 1000000 tufts at a time, not ${count}`);
+      let ground = () => ({ y: 0, ny: 1 });
+      if (onto)
+      {
+        // Straight down from above `onto`, in the world; back into the
+        // grass's own space.
+        const target = entity(onto);
+        const b = target.worldBounds ? target.worldBounds() : null;
+        const top = b && !b.isEmpty() ? b.max.y + 1 : 1000;
+        const drop = b && !b.isEmpty() ? b.max.y - b.min.y + 2 : 2000;
+        const inv = e.worldMatrix.clone();
+        if (!inv.invert()) return 0;
+        const w = e.worldMatrix;
+        ground = (px, pz) =>
+        {
+          const at = new Vec3(px, 0, pz).applyMat4(w);
+          const hit = rayOnto(target, new Vec3(at.x, top, at.z), new Vec3(0, -drop, 0));
+          if (!hit) return null;
+          return { y: new Vec3(hit.x, hit.y, hit.z).applyMat4(inv).y, ny: hit.ny };
+        };
+      }
+      return e.grass.paint(x, z, radius, count, Math.max(0, size), ground);
+    },
+    grasssize(handle, height, width)
+    {
+      const g = grass(handle).grass;
+      g.height = Math.max(0, height);
+      g.width = Math.max(0, width);
+      g.version++;
+    },
+    grasswind(handle, strength)
+    {
+      grass(handle).grass.wind = Math.max(0, strength);
+    },
+    grasspush(handle, pusher, radius)
+    {
+      const g = grass(handle).grass;
+      if (pusher === 0)
+      {
+        g.pushers.length = 0;
+        return;
+      }
+      const e = entity(pusher);
+      const known = g.pushers.find((p) => p.entity === e);
+      if (known) known.radius = Math.max(0, radius);
+      else
+      {
+        if (g.pushers.length >= MAX_PUSHERS) throw runtimeError(`Grass is pushed by at most ${MAX_PUSHERS} entities`);
+        g.pushers.push({ entity: e, radius: Math.max(0, radius) });
+      }
+    },
+    cleargrass(handle)
+    {
+      grass(handle).grass.clear();
+    },
+    countgrass: (handle) => grass(handle).grass.count,
     createtrail(first, second)
     {
       const blade = [entity(first), entity(second)];

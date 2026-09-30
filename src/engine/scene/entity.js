@@ -39,6 +39,7 @@ export class Entity
     this.sprite = null;     // a sprite's settings (scene/sprite.js); its mesh is the square
     this.decal = false;     // made by CreateDecal: other decals do not stick to it
     this.trail = null;      // a ribbon trail (scene/trail.js): its mesh is rebuilt every step
+    this.grass = null;      // a field of grass (scene/grass.js), for entities of kind 'grass'
     // Picking and collisions (src/engine/collide): how the entity is seen
     // by rays and by moving spheres.
     this.pickMode = 0;        // 0 none, 1 sphere, 2 polygon, 3 box

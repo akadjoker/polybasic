@@ -226,6 +226,8 @@ export class Engine
   renderFrame()
   {
     const frame = this.world.buildFrame(this.width, this.height);
+    // Seconds of simulated time, for what moves on its own (grass in the wind).
+    frame.time = this.steps * STEP_MS / 1000;
     this.backend.render(frame);
     this.frames++;
     const now = this.now();

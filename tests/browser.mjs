@@ -1621,6 +1621,75 @@ End Function
     console.log(`      leaves ${(lit.leaves * 100).toFixed(1)}%, bark ${(lit.bark * 100).toFixed(2)}%, shade ${(lit.shade * 100).toFixed(2)}% (without shadows ${(flat.shade * 100).toFixed(2)}%)`);
   });
 
+  await check('grass: the wind moves it, and it leans away from what pushes through it', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const scene = (wind, push) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 150, 190, 230
+PositionEntity cam, 0, 2.5, -5
+RotateEntity cam, 25, 0, 0
+ground = CreatePlane()
+ScaleEntity ground, 20, 1, 20
+EntityColor ground, 90, 120, 60
+EntityFX ground, FX_FULLBRIGHT
+meadow = CreateGrass()
+GrassSize meadow, 0.8
+EntityFX meadow, FX_FULLBRIGHT
+PaintGrass meadow, 0, 1, 4, 600
+GrassWind meadow, ${wind}
+stone = CreatePivot()
+PositionEntity stone, 0, 0, 1
+GrassPush meadow, stone, ${push}
+Function Update()
+  If FrameCount() = 20 Then Print "first"
+  If FrameCount() = 50 Then Print "second"
+End Function
+`;
+    const pixels = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      return Array.from(ctx.getImageData(0, 0, copy.width, copy.height).data);
+    });
+    const differ = (a, b) =>
+    {
+      let n = 0;
+      for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 30) n++;
+      return n / (a.length / 4);
+    };
+    // Two moments of one run.
+    const twice = async (wind, push) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(wind, push));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('first'), null, { timeout: 60000 });
+      const a = await pixels();
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('second'), null, { timeout: 60000 });
+      const b = await pixels();
+      return [a, b];
+    };
+    const [windA, windB] = await twice(1, 0);
+    const [stillA, stillB] = await twice(0, 0);
+    const [pushed] = await twice(0, 2.5);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'grass-pushed.png') });
+    const moved = differ(windA, windB);
+    const calm = differ(stillA, stillB);
+    const push = differ(stillB, pushed);
+    const text = `wind moved ${(moved * 100).toFixed(2)}%, still ${(calm * 100).toFixed(3)}%, pushing changed ${(push * 100).toFixed(2)}%`;
+    assert(moved > 0.01 && calm < 0.0005, `the wind: ${text}`);
+    assert(push > 0.01, `the push: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${text}`);
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
