@@ -1337,8 +1337,65 @@ End Function
     };
     await measure(scene(sun, 'LightShadows sun'), 'shade');
     await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'shadows.png') });
+
+    // A masked card's shadow has its holes: less of the ground is shaded
+    // than under the same card solid.
+    const card = (flags) => `Graphics3D 640, 480
+cam = CreateCamera()
+PositionEntity cam, 0, 7, -4
+target = CreatePivot()
+PositionEntity target, 0, 0, 3
+PointEntity cam, target
+ground = CreatePlane(8)
+ScaleEntity ground, 10, 1, 10
+EntityColor ground, 220, 220, 220
+tex = CreateTexture(8, 8, 60, 160, 60, ${flags})
+For y = 0 To 7 : For x = 0 To 7
+  If (x + y) Mod 2 = 0 Then TexturePixel tex, x, y, 0, 0, 0
+Next : Next
+card = CreatePlane()
+ScaleEntity card, 2, 1, 2
+PositionEntity card, 0, 2.5, 3
+EntityTexture card, tex
+EntityFX card, FX_TWOSIDED
+sun = CreateLight()
+RotateEntity sun, 70, -20, 0
+LightShadows sun, True, 20
+AmbientLight 70, 70, 70
+Function Update()
+  If FrameCount() = 1 Then Print "lit"
+End Function
+`;
+    const shaded = async (flags) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), card(flags));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('lit'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      // Grey ground in shadow: the same on all three channels, and dark.
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4)
+        {
+          if (d[i] > 30 && d[i] < 120 && Math.abs(d[i] - d[i + 1]) < 6 && Math.abs(d[i] - d[i + 2]) < 6) n++;
+        }
+        return n / (d.length / 4);
+      });
+    };
+    const solidShadow = await shaded('TEX_COLOR');
+    const maskedShadow = await shaded('TEX_MASKED');
+    ratios.cutOut = maskedShadow / solidShadow;
     const text = Object.entries(ratios).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ');
     assert(ratios.sun < 0.6 && ratios.lamp < 0.6, `no shadow where it should fall: ${text}`);
+    assert(ratios.cutOut > 0.3 && ratios.cutOut < 0.8, `a masked card's shadow is not cut out (masked / solid shaded ground): ${text}`);
     for (const name of ['off', 'noCast', 'noReceive'])
     {
       assert(ratios[name] > 0.9, `a shadow that should not be there (${name}): ${text}`);
