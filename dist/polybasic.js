@@ -37478,7 +37478,7 @@ var ThreeBackend = class extends RenderBackend {
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = PCFSoftShadowMap;
+    this.renderer.shadowMap.type = PCFShadowMap;
     this.scene = new Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new AmbientLight(16777215, 0);

@@ -113,7 +113,9 @@ async function openPage(browser, url, viewport = { width: 1000, height: 750 })
   page.consoleErrors = [];
   page.on('console', (m) =>
   {
-    if (m.type() === 'error') page.consoleErrors.push(m.text());
+    // three.js reports what it had to change (a removed setting, a bad
+    // texture) as warnings: those are errors of ours too.
+    if (m.type() === 'error' || (m.type() === 'warning' && m.text().startsWith('THREE.'))) page.consoleErrors.push(m.text());
   });
   page.on('pageerror', (e) => page.consoleErrors.push(e.message));
   await page.goto(url);

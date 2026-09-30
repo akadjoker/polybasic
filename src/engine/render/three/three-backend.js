@@ -110,7 +110,7 @@ export class ThreeBackend extends RenderBackend
     // Only lights that cast shadows cost anything (three.js leaves the
     // shadow code out of the shaders while none does).
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.scene = new THREE.Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new THREE.AmbientLight(0xffffff, 0);
