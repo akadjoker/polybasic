@@ -1,7 +1,8 @@
 // Browser glue: a PolyBasic screen on a web page. It stacks a WebGL canvas
 // (drawn by the three.js backend) and a 2D canvas (the Draw overlay) in a
 // box that keeps the program's aspect ratio inside the element it is given,
-// feeds DOM input to the engine and loads textures with <img>.
+// feeds DOM input to the engine and loads textures with <img> and other
+// files with fetch.
 //
 //   const screen = createScreen(element);
 //   const engine = screen.newEngine({ baseUrl });   // one per program run
@@ -71,6 +72,21 @@ export function createScreen(container)
     img.src = url;
   });
 
+  const loadFile = async (url) =>
+  {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Cannot load ${url} (${response.status})`);
+    return response.arrayBuffer();
+  };
+
+  // Images inside a model file (.glb). Rows stay top first, as our
+  // textures expect, and colours are left alone.
+  const decodeImage = (bytes, mimeType) => createImageBitmap(new Blob([bytes], { type: mimeType }), {
+    imageOrientation: 'none',
+    premultiplyAlpha: 'none',
+    colorSpaceConversion: 'none'
+  });
+
   return {
     element: box,
     canvas: gl,
@@ -100,6 +116,8 @@ export function createScreen(container)
         overlay,
         input,
         loadImage,
+        loadFile,
+        decodeImage,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) =>
         {

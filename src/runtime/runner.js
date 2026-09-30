@@ -25,20 +25,25 @@ export async function loadProgram(js)
 //   signal      an AbortSignal that stops the loop (the playground's Stop)
 //   commands    extra command factories (see runtime.js)
 //   engine      an object that joins the frame loop (the 3D engine):
-//               commands(rt), beginStep() before each Update,
-//               renderFrame() once per frame after the Updates, and
-//               beginDraw() / endDraw() around Draw
+//               commands(rt), beginStep() before each Update, endStep()
+//               after it, renderFrame() once per frame after the Updates,
+//               and beginDraw() / endDraw() around Draw. Optionally
+//               prepare(uses), called with the program's $uses before
+//               main, and whenReady(), called after main: each returns a
+//               promise to wait for, or null when there is nothing to wait
+//               for (then main still runs at once, as without an engine).
 //
 // Resolves to { status, updates, error? } where status is
 //   'finished'  main body done and there is no Update/Draw
 //   'ended'     the program ran End
 //   'stopped'   maxUpdates reached or the signal fired
 //   'error'     a runtime error; `error` has { message, file, line }
-export function runProgram(module, host, options = {})
+export async function runProgram(module, host, options = {})
 {
   const rt = createRuntime(host, options);
   const engine = options.engine || null;
   const result = { status: 'finished', updates: 0 };
+  const aborted = () => Boolean(options.signal && options.signal.aborted);
 
   const fail = (e) =>
   {
@@ -53,15 +58,45 @@ export function runProgram(module, host, options = {})
     return result;
   };
 
+  // Things the program needs before it starts (the physics engine), and
+  // the files its main body started loading (models, textures): the first
+  // Update sees them all in place.
+  const wait = async (promise) =>
+  {
+    if (options.signal)
+    {
+      // Stop must work even while a file never arrives.
+      const signal = options.signal;
+      await Promise.race([promise, new Promise((resolve) =>
+      {
+        if (signal.aborted) resolve();
+        else signal.addEventListener('abort', resolve, { once: true });
+      })]);
+    }
+    else await promise;
+    if (aborted())
+    {
+      result.status = 'stopped';
+      return false;
+    }
+    return true;
+  };
+
   let program;
   try
   {
+    // Only a real promise is awaited: without one, main runs right here,
+    // inside the runProgram call.
+    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || []) : null;
+    if (preparing && !await wait(preparing)) return result;
     program = module.create(rt);
     program.main();
+    const loading = engine && engine.whenReady ? engine.whenReady() : null;
+    if (loading && !await wait(loading)) return result;
   }
   catch (e)
   {
-    return Promise.resolve(fail(e));
+    return fail(e);
   }
   if (!program.update && !program.draw)
   {
@@ -77,10 +112,10 @@ export function runProgram(module, host, options = {})
       }
       catch (e)
       {
-        return Promise.resolve(fail(e));
+        return fail(e);
       }
     }
-    return Promise.resolve(result);
+    return result;
   }
 
   return new Promise((resolve) =>
@@ -126,6 +161,7 @@ export function runProgram(module, host, options = {})
             result.updates++;
             program.update();
           }
+          if (engine && engine.endStep) engine.endStep();
           if (options.maxUpdates && result.updates >= options.maxUpdates) break;
         }
         if (n === MAX_UPDATES_PER_FRAME) pending = 0;

@@ -1,4 +1,5 @@
 handle 2, loaded right away: 0
 constants 1 4 16 2 32 90
-loaded by frame 1
+LoadTexture: could not load "assets/none.png"
+loaded by frame 1, missing one loaded: 0
 [ended]

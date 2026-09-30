@@ -1,7 +1,9 @@
 // The engine ties the scene, the render backend, the 2D overlay and input
 // together and plugs into the runner's frame loop:
 //
-//   every Update step:  input.sample()  ->  Update()
+//   before main:        prepare() loads what the program needs (physics)
+//   after main:         whenReady() waits for the files main started loading
+//   every Update step:  input.sample()  ->  Update()  ->  endStep()
 //   every frame:        world matrices + backend.render()  ->  Draw() on the overlay
 //
 // It is platform-neutral. src/engine/browser.js builds one with the three.js
@@ -24,7 +26,12 @@ export class Engine
   //   overlay    the 2D layer (default: NullOverlay)
   //   input      an Input (default: a fresh one, fed by nobody)
   //   loadImage  (url) => Promise<image>, used by LoadTexture
-  //   baseUrl    LoadTexture paths are relative to this (the .pb's URL)
+  //   loadFile   (url) => Promise<ArrayBuffer | Uint8Array>, used by
+  //              LoadMesh (and, without loadImage, to check that a texture
+  //              file exists)
+  //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
+  //              inside a model file
+  //   baseUrl    file paths are relative to this (the .pb's URL)
   //   onResize   (width, height) => void, called by Graphics3D so the
   //              platform can lay out its canvases
   constructor(options = {})
@@ -34,6 +41,9 @@ export class Engine
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
     this.loadImage = options.loadImage || null;
+    this.loadFile = options.loadFile || null;
+    this.decodeImage = options.decodeImage || null;
+    this.pending = new Set();
     this.baseUrl = options.baseUrl || '';
     this.onResize = options.onResize || ((w, h) => this.backend.resize(w, h, 1));
     this.width = DEFAULT_WIDTH;
@@ -89,43 +99,71 @@ export class Engine
     return mesh;
   }
 
+  // Keeps track of a load in progress, so whenReady can wait for it.
+  track(promise)
+  {
+    const p = Promise.resolve(promise).catch(() => {}).finally(() => this.pending.delete(p));
+    this.pending.add(p);
+    return promise;
+  }
+
   // Returns the texture at once; its image arrives later. Until then the
   // entities using it are drawn with their plain colour.
   loadTexture(file)
   {
     const t = this.world.createTexture(0, 0);
     t.url = resolveUrl(this.baseUrl, file);
-    if (!this.loadImage)
+    const done = (image) =>
     {
-      // Headless: nothing to decode, but the texture behaves as loaded on
-      // the next frame so programs follow the same path everywhere.
-      Promise.resolve().then(() =>
+      if (image)
       {
-        t.loaded = true;
-        t.version++;
-      });
-      return t;
-    }
-    this.loadImage(t.url).then((image) =>
-    {
-      t.image = image;
-      t.width = image.width;
-      t.height = image.height;
+        t.image = image;
+        t.width = image.width;
+        t.height = image.height;
+      }
       t.loaded = true;
       t.version++;
-    }, () =>
+    };
+    const failed = () =>
     {
       t.failed = true;
       this.warn(`LoadTexture: could not load "${file}"`);
-    });
+    };
+    if (this.loadImage) this.track(this.loadImage(t.url).then(done, failed));
+    // Headless: nothing to decode, but the file must exist, and the texture
+    // behaves as loaded so programs follow the same path everywhere.
+    else if (this.loadFile) this.track(this.loadFile(t.url).then(() => done(null), failed));
+    else this.track(Promise.resolve().then(() => done(null)));
     return t;
   }
 
   // ----------------------------------------------------- runner hooks
 
+  // Called before main with the commands the program uses. Returns a
+  // promise when something must be loaded first, or null.
+  prepare(uses)
+  {
+    return null;
+  }
+
+  // After main: a promise that settles once every file started so far has
+  // arrived (or failed), or null when nothing is loading. Loads can start
+  // more loads (a model's textures), so it waits until the set is empty.
+  whenReady()
+  {
+    if (this.pending.size === 0) return null;
+    const drain = () => (this.pending.size ? Promise.all([...this.pending]).then(drain) : undefined);
+    return drain();
+  }
+
   beginStep()
   {
     this.input.sample();
+  }
+
+  // After each Update: the world moves on by one step.
+  endStep()
+  {
   }
 
   renderFrame()

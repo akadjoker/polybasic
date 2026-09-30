@@ -18,7 +18,8 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compile, CompileError, loadProgram, runProgram, CaptureHost } from '../src/index.js';
+import { compile, CompileError, loadProgram, runProgram, CaptureHost, Engine } from '../src/index.js';
+import { nodeEngineOptions } from '../src/node.js';
 
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -60,7 +61,8 @@ async function runGolden(file)
   }
   for (const w of result.warnings) output += `${w.file}:${w.line}:${w.column}: warning: ${w.message}\n`;
   const host = new CaptureHost();
-  const run = await runProgram(await loadProgram(result.js), host, { maxUpdates: 1000 });
+  const engine = new Engine(nodeEngineOptions(join(programsDir, file)));
+  const run = await runProgram(await loadProgram(result.js), host, { maxUpdates: 1000, engine });
   output += host.output;
   if (run.status === 'stopped') output += `[stopped after ${run.updates} updates]\n`;
   if (run.status === 'ended') output += '[ended]\n';

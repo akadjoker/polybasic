@@ -17,7 +17,8 @@
 //     ambient: [r, g, b],
 //     cameras: [{ id, world, fov, near, far, clearColor, viewport }],
 //     lights:  [{ id, world, type, color, range }],  type 1 directional, 2 point
-//     items:   [{ id, world, mesh, material }],       mesh: MeshData, material: Material
+//     items:   [{ id, world, mesh, materials }],      mesh: MeshData, materials: [Material]
+//              (submesh s of the mesh uses materials[s.material])
 //     freedEntities: [id],  freedTextures: [Texture] }
 //
 // `world` is a column-major 4x4 matrix (Float64Array) in PolyBasic space:
