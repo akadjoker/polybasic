@@ -1,0 +1,7 @@
+middle: 2 triangles, 2.0 x 2.0, lifted 1 1
+edge: 1.0 x 2.0
+picked: 2 triangles, turned 45: 1
+cube: 1.0 wide, a child of the cube: 1
+moves with it: 5.0
+nothing: 0
+Runtime error (3d_decals.pb, line 33): CreateDecal needs the way the surface faces (nx, ny, nz), not 0, 0, 0

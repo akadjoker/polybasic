@@ -3365,6 +3365,7 @@ var Entity = class {
     this.camera = null;
     this.light = null;
     this.sprite = null;
+    this.decal = false;
     this.pickMode = 0;
     this.obscurer = true;
     this.collisionType = 0;
@@ -3533,6 +3534,7 @@ var Material = class _Material {
     this.alphaCutoff = 0.5;
     this.vertexColors = false;
     this.vertexAlpha = false;
+    this.decal = false;
     this.name = "";
   }
   changed() {
@@ -3552,6 +3554,7 @@ var Material = class _Material {
     m.alphaCutoff = this.alphaCutoff;
     m.vertexColors = this.vertexColors;
     m.vertexAlpha = this.vertexAlpha;
+    m.decal = this.decal;
     m.name = this.name;
     return m;
   }
@@ -4201,6 +4204,7 @@ var World = class {
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     e.sprite = src.sprite ? { ...src.sprite } : null;
+    e.decal = src.decal;
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
@@ -5309,6 +5313,99 @@ function projectPoint(camera, point, width, height) {
   };
 }
 
+// src/engine/collide/decal.js
+var LIFT = 2e-3;
+function clip(points, axis, sign, limit) {
+  const out = [];
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const da = sign * a[axis] - limit;
+    const db = sign * b[axis] - limit;
+    if (da <= 0) out.push(a);
+    if (da < 0 && db > 0 || da > 0 && db < 0) {
+      const t = da / (da - db);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+    }
+  }
+  return out;
+}
+function buildDecal(point, normal, size, angle, targets) {
+  const n = normal.clone().normalize();
+  const reference = Math.abs(n.y) > 0.99 ? new Vec3(0, 0, 1) : new Vec3(0, 1, 0);
+  let right = n.clone().cross(reference).normalize();
+  let up = right.clone().cross(n);
+  const a = angle * Math.PI / 180;
+  const r = right.clone().scale(Math.cos(a)).add(up.clone().scale(Math.sin(a)));
+  const u = right.clone().scale(-Math.sin(a)).add(up.clone().scale(Math.cos(a)));
+  right = r;
+  up = u;
+  const half = size / 2;
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const toLocal = (x, y, z) => {
+    const dx = x - point.x;
+    const dy = y - point.y;
+    const dz = z - point.z;
+    return [dx * right.x + dy * right.y + dz * right.z, dx * up.x + dy * up.y + dz * up.z, dx * n.x + dy * n.y + dz * n.z];
+  };
+  const reach = new Vec3();
+  for (const target of targets) {
+    for (const part of meshParts(target)) {
+      meshTrianglesNear(part, point, reach, half * Math.SQRT2 + 1e-6, (tri) => {
+        const ux = tri[3] - tri[0];
+        const uy = tri[4] - tri[1];
+        const uz = tri[5] - tri[2];
+        const vx = tri[6] - tri[0];
+        const vy = tri[7] - tri[1];
+        const vz = tri[8] - tri[2];
+        const face = new Vec3(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        if (face.length() < 1e-12) return;
+        face.normalize();
+        if (face.dot(n) < 0.1) return;
+        let poly = [toLocal(tri[0], tri[1], tri[2]), toLocal(tri[3], tri[4], tri[5]), toLocal(tri[6], tri[7], tri[8])];
+        for (const [axis, limit] of [[0, half], [1, half], [2, half]]) {
+          poly = clip(poly, axis, 1, limit);
+          if (poly.length >= 3) poly = clip(poly, axis, -1, limit);
+          if (poly.length < 3) return;
+        }
+        const base = positions.length / 3;
+        for (const [x, y, z] of poly) {
+          const lift = z + size * LIFT;
+          positions.push(point.x + right.x * x + up.x * y + n.x * lift, point.y + right.y * x + up.y * y + n.y * lift, point.z + right.z * x + up.z * y + n.z * lift);
+          normals.push(face.x, face.y, face.z);
+          uvs.push(x / size + 0.5, 0.5 - y / size);
+        }
+        for (let k = 1; k + 1 < poly.length; k++) indices.push(base, base + k, base + k + 1);
+      });
+    }
+  }
+  if (!indices.length) return null;
+  smoothNormals(positions, normals);
+  return new MeshData(positions, normals, uvs, indices);
+}
+function smoothNormals(positions, normals) {
+  const sums = /* @__PURE__ */ new Map();
+  const key = (i) => `${positions[i * 3].toFixed(5)},${positions[i * 3 + 1].toFixed(5)},${positions[i * 3 + 2].toFixed(5)}`;
+  for (let i = 0; i < positions.length / 3; i++) {
+    const k = key(i);
+    const s = sums.get(k) || [0, 0, 0];
+    s[0] += normals[i * 3];
+    s[1] += normals[i * 3 + 1];
+    s[2] += normals[i * 3 + 2];
+    sums.set(k, s);
+  }
+  for (let i = 0; i < positions.length / 3; i++) {
+    const s = sums.get(key(i));
+    const l = Math.hypot(s[0], s[1], s[2]) || 1;
+    normals[i * 3] = s[0] / l;
+    normals[i * 3 + 1] = s[1] / l;
+    normals[i * 3 + 2] = s[2] / l;
+  }
+}
+
 // src/engine/collide/collisions.js
 var COLLIDE_SPHERE = 1;
 var COLLIDE_POLYGON = 2;
@@ -5572,6 +5669,7 @@ var COLLIDE_COMMANDS = [
   "EntityCollided%(entity, type)",
   // From the world to the screen
   "CameraProject%(camera, x#, y#, z#)",
+  "CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)",
   "ProjectedX#()",
   "ProjectedY#()",
   "ProjectedZ#()"
@@ -5591,8 +5689,54 @@ var COLLIDE_CONSTANTS = {
 var MAX_TYPE = 999;
 function createCollideCommands(engine) {
   const world = engine.world;
-  const { entity, ofKind } = handleHelpers(world);
+  const { entity, ofKind, texture } = handleHelpers(world);
   let picked = emptyPick();
+  const decal = (tex, point, normal, size, angle, target) => {
+    let targets;
+    if (target) {
+      targets = [entity(target)];
+    } else {
+      const reach = size;
+      targets = world.entities.filter((e2) => {
+        if (!e2.mesh || e2.sprite || e2.decal || !e2.shown) return false;
+        const b = e2.worldBounds();
+        return b && !b.isEmpty() && point.x > b.min.x - reach && point.x < b.max.x + reach && point.y > b.min.y - reach && point.y < b.max.y + reach && point.z > b.min.z - reach && point.z < b.max.z + reach;
+      });
+    }
+    let data = buildDecal(point, normal, size, angle, targets) || new MeshData([], [], [], []);
+    const owner = target ? targets[0] : null;
+    if (owner) {
+      const inv = owner.worldMatrix.clone();
+      if (inv.invert()) {
+        const w = owner.worldMatrix.e;
+        const p = data.positions;
+        const n = data.normals;
+        const toLocal = new Vec3();
+        for (let i = 0; i < p.length; i += 3) {
+          toLocal.set(p[i], p[i + 1], p[i + 2]).applyMat4(inv);
+          p[i] = toLocal.x;
+          p[i + 1] = toLocal.y;
+          p[i + 2] = toLocal.z;
+          const nx = w[0] * n[i] + w[1] * n[i + 1] + w[2] * n[i + 2];
+          const ny = w[4] * n[i] + w[5] * n[i + 1] + w[6] * n[i + 2];
+          const nz = w[8] * n[i] + w[9] * n[i + 1] + w[10] * n[i + 2];
+          const l = Math.hypot(nx, ny, nz) || 1;
+          n[i] = nx / l;
+          n[i + 1] = ny / l;
+          n[i + 2] = nz / l;
+        }
+        data = new MeshData(p, n, data.uvs, data.indices);
+      }
+    }
+    const e = world.createMesh(data, owner);
+    e.decal = true;
+    e.castShadow = false;
+    const m = e.material;
+    m.texture = tex;
+    m.decal = true;
+    m.changed();
+    return e.id;
+  };
   let projected = { x: 0, y: 0, depth: 0 };
   const collisions = engine.collisions;
   const collision = (handle, index) => {
@@ -5610,6 +5754,12 @@ function createCollideCommands(engine) {
     return picked.entity ? picked.entity.id : 0;
   };
   return {
+    createdecal(tex, x, y, z, nx, ny, nz, size, angle, target) {
+      if (!(size > 0)) throw runtimeError(`CreateDecal needs a size above 0, not ${size}`);
+      if (nx === 0 && ny === 0 && nz === 0) throw runtimeError("CreateDecal needs the way the surface faces (nx, ny, nz), not 0, 0, 0");
+      engine.autoGraphics();
+      return decal(tex === 0 ? null : texture(tex), new Vec3(x, y, z), new Vec3(nx, ny, nz), size, angle, target);
+    },
     entitypickmode(handle, mode, obscurer) {
       if (mode < PICK_NONE || mode > PICK_BOX) throw runtimeError(`EntityPickMode mode must be PICK_NONE, PICK_SPHERE, PICK_POLYGON or PICK_BOX (0 to 3), not ${mode}`);
       const e = entity(handle);
@@ -36137,6 +36287,12 @@ var ThreeBackend = class extends RenderBackend {
       options.premultipliedAlpha = true;
     }
     if (mixing) options.depthWrite = false;
+    if (m.decal) {
+      options.polygonOffset = true;
+      options.polygonOffsetFactor = -1;
+      options.polygonOffsetUnits = -4;
+      options.depthWrite = false;
+    }
     let material;
     if (m.fullbright) material = new MeshBasicMaterial(options);
     else {

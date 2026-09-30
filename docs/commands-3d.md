@@ -311,6 +311,7 @@ mode are found, and hidden entities never are.
 | `PickedNX#()` `PickedNY#()` `PickedNZ#()` | The surface's direction there, facing back along the line. |
 | `PickedTime#()` `PickedDistance#()` | How far along the line (0 to 1), and the distance from its start. |
 | `CameraProject%(camera, x#, y#, z#)` | Puts a world point on the screen: 1 if it is in front of the camera, and then `ProjectedX#()` and `ProjectedY#()` are its pixel, `ProjectedZ#()` its distance in front. For labels over 3D things in `Draw`. |
+| `CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)` | Presses a square of `texture` (0 for none: colour it with `EntityColor`) `size` wide onto the surfaces at x, y, z, which face the way nx, ny, nz: a scorch mark, a bullet hole, a footprint. Use it after a pick: `CreateDecal(tex, PickedX(), PickedY(), PickedZ(), PickedNX(), PickedNY(), PickedNZ(), 0.5)`. `angle` turns it, anticlockwise. It is cut to the shapes it lies on (surfaces facing another way are left out), sits just over them without flickering, and is lit as they are. With `entity` it goes on that entity only and moves with it; otherwise on every shown mesh there, where it stays. It is an ordinary mesh entity: `EntityAlpha`, `EntityBlend`, `FreeEntity` work on it. |
 
 ## Collisions
 

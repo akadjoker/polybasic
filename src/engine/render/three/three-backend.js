@@ -289,6 +289,15 @@ export class ThreeBackend extends RenderBackend
       options.premultipliedAlpha = true;
     }
     if (mixing) options.depthWrite = false;
+    // A decal lies on its surface: pulled towards the camera in depth, and
+    // leaving the depth alone so decals over decals do not flicker.
+    if (m.decal)
+    {
+      options.polygonOffset = true;
+      options.polygonOffsetFactor = -1;
+      options.polygonOffsetUnits = -4;
+      options.depthWrite = false;
+    }
     let material;
     if (m.fullbright) material = new THREE.MeshBasicMaterial(options);
     else

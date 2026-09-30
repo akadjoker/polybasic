@@ -6,6 +6,8 @@ import { handleHelpers, tidy } from '../handles.js';
 import { runtimeError } from '../../runtime/errors.js';
 import { pickLine, emptyPick, PICK_NONE, PICK_SPHERE, PICK_POLYGON, PICK_BOX } from './picking.js';
 import { screenRay, projectPoint } from './camera.js';
+import { buildDecal } from './decal.js';
+import { MeshData } from '../scene/mesh.js';
 import {
   COLLIDE_SPHERE, COLLIDE_POLYGON, COLLIDE_BOX, RESPONSE_STOP, RESPONSE_SLIDE, RESPONSE_SLIDE_NO_DOWNHILL
 } from './collisions.js';
@@ -49,6 +51,7 @@ export const COLLIDE_COMMANDS = [
 
   // From the world to the screen
   'CameraProject%(camera, x#, y#, z#)',
+  'CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)',
   'ProjectedX#()',
   'ProjectedY#()',
   'ProjectedZ#()'
@@ -73,8 +76,67 @@ const MAX_TYPE = 999;
 export function createCollideCommands(engine)
 {
   const world = engine.world;
-  const { entity, ofKind } = handleHelpers(world);
+  const { entity, ofKind, texture } = handleHelpers(world);
   let picked = emptyPick();
+
+  // A decal pressed onto `target`, or onto everything shown there.
+  const decal = (tex, point, normal, size, angle, target) =>
+  {
+    let targets;
+    if (target)
+    {
+      targets = [entity(target)];
+    }
+    else
+    {
+      // Every shown mesh (model parts included) whose box comes near.
+      const reach = size;
+      targets = world.entities.filter((e) =>
+      {
+        if (!e.mesh || e.sprite || e.decal || !e.shown) return false;
+        const b = e.worldBounds();
+        return b && !b.isEmpty() && point.x > b.min.x - reach && point.x < b.max.x + reach && point.y > b.min.y - reach && point.y < b.max.y + reach && point.z > b.min.z - reach && point.z < b.max.z + reach;
+      });
+    }
+    let data = buildDecal(point, normal, size, angle, targets) || new MeshData([], [], [], []);
+    const owner = target ? targets[0] : null;
+    if (owner)
+    {
+      // Kept in the owner's own space, so it moves with it.
+      const inv = owner.worldMatrix.clone();
+      if (inv.invert())
+      {
+        const w = owner.worldMatrix.e;
+        const p = data.positions;
+        const n = data.normals;
+        const toLocal = new Vec3();
+        for (let i = 0; i < p.length; i += 3)
+        {
+          toLocal.set(p[i], p[i + 1], p[i + 2]).applyMat4(inv);
+          p[i] = toLocal.x;
+          p[i + 1] = toLocal.y;
+          p[i + 2] = toLocal.z;
+          // Normals go back by the transpose of the owner's matrix.
+          const nx = w[0] * n[i] + w[1] * n[i + 1] + w[2] * n[i + 2];
+          const ny = w[4] * n[i] + w[5] * n[i + 1] + w[6] * n[i + 2];
+          const nz = w[8] * n[i] + w[9] * n[i + 1] + w[10] * n[i + 2];
+          const l = Math.hypot(nx, ny, nz) || 1;
+          n[i] = nx / l;
+          n[i + 1] = ny / l;
+          n[i + 2] = nz / l;
+        }
+        data = new MeshData(p, n, data.uvs, data.indices);
+      }
+    }
+    const e = world.createMesh(data, owner);
+    e.decal = true;
+    e.castShadow = false;
+    const m = e.material;
+    m.texture = tex;
+    m.decal = true;
+    m.changed();
+    return e.id;
+  };
   let projected = { x: 0, y: 0, depth: 0 };
 
   const collisions = engine.collisions;
@@ -99,6 +161,13 @@ export function createCollideCommands(engine)
   };
 
   return {
+    createdecal(tex, x, y, z, nx, ny, nz, size, angle, target)
+    {
+      if (!(size > 0)) throw runtimeError(`CreateDecal needs a size above 0, not ${size}`);
+      if (nx === 0 && ny === 0 && nz === 0) throw runtimeError('CreateDecal needs the way the surface faces (nx, ny, nz), not 0, 0, 0');
+      engine.autoGraphics();
+      return decal(tex === 0 ? null : texture(tex), new Vec3(x, y, z), new Vec3(nx, ny, nz), size, angle, target);
+    },
     entitypickmode(handle, mode, obscurer)
     {
       if (mode < PICK_NONE || mode > PICK_BOX) throw runtimeError(`EntityPickMode mode must be PICK_NONE, PICK_SPHERE, PICK_POLYGON or PICK_BOX (0 to 3), not ${mode}`);

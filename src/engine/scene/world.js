@@ -107,6 +107,7 @@ export class World
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     e.sprite = src.sprite ? { ...src.sprite } : null;
+    e.decal = src.decal;
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;

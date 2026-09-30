@@ -26,6 +26,7 @@ export class Material
     this.alphaCutoff = 0.5;
     this.vertexColors = false;
     this.vertexAlpha = false;   // FX_VERTEXALPHA: the vertex colours' alpha blends
+    this.decal = false;         // drawn over the surface it lies on
     this.name = '';
   }
 
@@ -49,6 +50,7 @@ export class Material
     m.alphaCutoff = this.alphaCutoff;
     m.vertexColors = this.vertexColors;
     m.vertexAlpha = this.vertexAlpha;
+    m.decal = this.decal;
     m.name = this.name;
     return m;
   }

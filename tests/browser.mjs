@@ -1427,6 +1427,69 @@ End Function
     await page.close();
   });
 
+  await check('decals: drawn on the surface, near and far, with no flicker', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A red decal on a grey floor, seen from `distance` away at a low
+    // angle; the camera circles, so the depth changes every frame.
+    const scene = (distance, pitch) => `Graphics3D 640, 480
+Global cam, pivot
+floor = CreatePlane(4)
+ScaleEntity floor, 200, 1, 200
+EntityColor floor, 120, 120, 120
+EntityFX floor, FX_FULLBRIGHT
+size# = ${distance} / 2.5
+d = CreateDecal(0, 0, 0, 0, 0, 1, 0, size)
+EntityColor d, 255, 0, 0
+EntityFX d, FX_FULLBRIGHT
+pivot = CreatePivot()
+cam = CreateCamera(pivot)
+CameraRange cam, 0.1, 1000
+RotateEntity cam, ${pitch}, 0, 0
+MoveEntity cam, 0, 0, -${distance}
+Function Update()
+  TurnEntity pivot, 0, 1, 0
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    // The middle of the screen, over several frames: every reading must be
+    // the decal's red (flicker shows as grey floor breaking through).
+    const middle = async (distance, pitch) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(distance, pitch));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      const readings = [];
+      for (let i = 0; i < 12; i++)
+      {
+        await page.waitForTimeout(60);
+        readings.push(await page.evaluate(() =>
+        {
+          const canvas = window.polybasicPlayground.getScreen().canvas;
+          const copy = document.createElement('canvas');
+          copy.width = canvas.width;
+          copy.height = canvas.height;
+          const ctx = copy.getContext('2d');
+          ctx.drawImage(canvas, 0, 0);
+          const d = ctx.getImageData(Math.round(canvas.width * 0.49), Math.round(canvas.height * 0.49), Math.round(canvas.width * 0.02), Math.round(canvas.height * 0.02)).data;
+          let red = 0;
+          for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++;
+          return red / (d.length / 4);
+        }));
+      }
+      return Math.min(...readings);
+    };
+    const near = await middle(8, 30);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'decal.png') });
+    const far = await middle(300, 12);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'decal-far.png') });
+    assert(near > 0.99 && far > 0.99, `decal not solid over the floor: near ${near}, far ${far}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
