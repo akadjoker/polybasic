@@ -29,6 +29,30 @@
       "controls": "Left/Right turn the camera, mouse wheel zooms"
     },
     {
+      "id": "coin-hop",
+      "title": "Coin Hop",
+      "category": "3d",
+      "file": "../examples/coin-hop.pb",
+      "description": "A small platformer with glTF models by Kenney: collisions keep the character on the platforms, and its walk, idle and jump animations come from the model file.",
+      "controls": "Arrows or WASD run, Space jumps"
+    },
+    {
+      "id": "crates",
+      "title": "Crate Tower",
+      "category": "3d",
+      "file": "../examples/crates.pb",
+      "description": "Physics: throw heavy balls at a tower of crates and watch it fall. The program gives things bodies; the physics engine does the rest.",
+      "controls": "Click or tap to throw, Left/Right turn the view, R builds a new tower"
+    },
+    {
+      "id": "paint-shapes",
+      "title": "Paint Shapes",
+      "category": "3d",
+      "file": "../examples/paint-shapes.pb",
+      "description": "Picking: point at a shape to see its name, click to paint it. Labels follow the shapes with CameraProject.",
+      "controls": "Mouse or finger; right click or P switches the picking mode"
+    },
+    {
       "id": "tour",
       "title": "Language tour",
       "category": "language",
