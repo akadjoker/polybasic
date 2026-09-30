@@ -27,13 +27,17 @@
 
 import http from 'node:http';
 import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../src/index.js';
 import { nodeEngineOptions } from '../src/node.js';
 import { projectPoint } from '../src/engine/collide/camera.js';
+import { hear } from '../src/engine/audio/spatial.js';
+import { Mat4, Vec3, Quat } from '../src/engine/math/index.js';
+import { makeWav } from './unit/audio.mjs';
+import { projectPage } from '../web/export.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Screenshots of every run go to tests/output (not committed); the ones in
@@ -46,7 +50,8 @@ const MIME = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.pb': 'text/plain; charset=utf-8',
-  '.png': 'image/png'
+  '.png': 'image/png',
+  '.wav': 'audio/wav'
 };
 
 function startServer()
@@ -110,6 +115,81 @@ async function openPage(browser, url, viewport = { width: 1000, height: 750 })
   page.on('pageerror', (e) => page.consoleErrors.push(e.message));
   await page.goto(url);
   return page;
+}
+
+// How loud a screen's sound is, left and right, over `ms` milliseconds:
+// the loudest moment of each side (`left`, `right`) and the level over the
+// whole time (`leftAll`, `rightAll`, the same moments on both sides, so
+// their ratio is the balance even while the sound fades), and `pitch`, the
+// strongest frequency in Hz (the median of the readings). `where` is
+// 'playground' or 'page' (an exported page).
+// Each reading covers the last 8192 samples (about 170 ms): wait this long
+// after a change before measuring what came after it.
+const SETTLE_MS = 250;
+
+async function audioLevels(page, ms = 400, where = 'playground')
+{
+  return page.evaluate(async ({ ms, where }) =>
+  {
+    const audio = where === 'page' ? window.polybasicPage.screen.audio : window.polybasicPlayground.getScreen().audio;
+    const ctx = audio.context();
+    if (!audio.meter)
+    {
+      const split = ctx.createChannelSplitter(2);
+      audio.output.connect(split);
+      const left = ctx.createAnalyser();
+      const right = ctx.createAnalyser();
+      // Each reading on its own: by default an analyser blends every
+      // reading with the ones before, and a loud sound that has stopped
+      // would outweigh a quiet one playing now.
+      for (const analyser of [left, right])
+      {
+        analyser.fftSize = 8192;
+        analyser.smoothingTimeConstant = 0;
+      }
+      split.connect(left, 0);
+      split.connect(right, 1);
+      audio.meter = { left, right };
+    }
+    const data = new Float32Array(8192);
+    const bins = new Float32Array(4096);
+    const loudest = (analyser) =>
+    {
+      analyser.getFloatFrequencyData(bins);
+      let best = 0;
+      for (let i = 1; i < bins.length; i++) if (bins[i] > bins[best]) best = i;
+      return best * ctx.sampleRate / analyser.fftSize;
+    };
+    const pitches = [];
+    const energy = (analyser) =>
+    {
+      analyser.getFloatTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += v * v;
+      return sum / data.length;
+    };
+    let left = 0;
+    let right = 0;
+    let leftSum = 0;
+    let rightSum = 0;
+    let n = 0;
+    const until = performance.now() + ms;
+    while (performance.now() < until)
+    {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      const l = energy(audio.meter.left);
+      const r = energy(audio.meter.right);
+      left = Math.max(left, Math.sqrt(l));
+      right = Math.max(right, Math.sqrt(r));
+      leftSum += l;
+      rightSum += r;
+      n++;
+      if (l > 1e-10) pitches.push(loudest(audio.meter.left));
+    }
+    pitches.sort((a, b) => a - b);
+    const pitch = pitches.length ? pitches[pitches.length >> 1] : 0;
+    return { left, right, leftAll: Math.sqrt(leftSum / n), rightAll: Math.sqrt(rightSum / n), pitch, state: ctx.state, stats: { ...audio.stats } };
+  }, { ms, where });
 }
 
 function noConsoleErrors(page)
@@ -1067,6 +1147,361 @@ End Function
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('sound: Web Audio plays made sounds and songs; a 3D sound comes from the side it is drawn on', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const text = (x) => `Graphics3D 640, 480
+Global cam, tone, box
+cam = CreateCamera()
+CreateListener cam
+box = CreateCube()
+PositionEntity box, ${x}, 0, 5
+tone = CreateTone(WAVE_SINE, 440, 440, 3000, 0.8)
+Function Update()
+  If FrameCount() = 1
+    EmitSound tone, box
+    CameraProject cam, EntityX(box), EntityY(box), EntityZ(box)
+    Print "drawn at x " + Int(ProjectedX())
+  EndIf
+End Function
+`;
+    // The Web Audio stereo panner shares a mono sound between the sides
+    // with equal power: at pan p, right / left = tan((p + 1) * pi / 4).
+    const origin = new Mat4();
+    const place = (x) => new Mat4().compose(new Vec3(x, 0, 5), new Quat(), new Vec3(1, 1, 1));
+    const balance = [];
+    for (const x of [3, -3])
+    {
+      await project(page, (t) => window.polybasicPlayground.setText(t), text(x));
+      await page.click('#runBtn');
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn at x'), null, { timeout: 10000 });
+      const drawnAt = Number(/drawn at x (-?\d+)/.exec(await consoleText(page))[1]);
+      await page.waitForTimeout(SETTLE_MS);
+      const level = await audioLevels(page, 600);
+      const pan = hear(origin, place(x), [0, 0, 0], [0, 0, 0], { rolloff: 1, doppler: 1, distance: 1 }).pan;
+      const expected = Math.tan((pan + 1) * Math.PI / 4);
+      const measured = level.rightAll / level.leftAll;
+      assert(level.state === 'running' && level.right + level.left > 0.01, `silent: ${JSON.stringify(level)}`);
+      assert(Math.abs(measured / expected - 1) < 0.05, `x ${x}: right / left ${measured.toFixed(3)}, expected ${expected.toFixed(3)}`);
+      assert((drawnAt > 320) === (measured > 1), `drawn at x ${drawnAt} of 640 but louder on the ${measured > 1 ? 'right' : 'left'}`);
+      balance.push(`x ${x}: drawn at ${drawnAt}, right/left ${measured.toFixed(2)} (expected ${expected.toFixed(2)})`);
+    }
+
+    // A song: notes on the audio clock, and the program sees where it is.
+    await project(page, (t) => window.polybasicPlayground.setText(t), `Global song
+song = CreateSong(140)
+SongTrack song, INST_PAD, "C4 - - - E4 - - - G4 - - - E4 - - -"
+SongTrack song, INST_DRUMS, "k . h . s . h . k k h . s . h ."
+SongTrack song, INST_BASS, "C3 . . . C3 . . . G2 . . . G2 . . ."
+PlaySong song
+Function Update()
+  If FrameCount() = 90 Then Print "playing " + (SongPlaying() = song) + " step " + SongStep() + " time " + SongTime()
+End Function
+`);
+    const notesBefore = (await audioLevels(page, 50)).stats.notes;
+    await page.click('#runBtn');
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('time'), null, { timeout: 10000 });
+    const song = await audioLevels(page, 500);
+    const [, playing, step, time] = /playing (\d) step (-?\d+) time ([\d.]+)/.exec(await consoleText(page));
+    assert(playing === '1' && Number(step) >= 0 && Number(step) < 16, `playing ${playing} step ${step}`);
+    assert(Number(time) > 1 && Number(time) < 2, `song time ${time} after 90 updates (1.5 s)`);
+    assert(song.stats.notes > notesBefore + 10 && song.left > 0.005, `song: ${JSON.stringify(song)}`);
+
+    // A hidden page is silent, and comes back.
+    const hide = (hidden) => page.evaluate((h) =>
+    {
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => h });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }, hidden);
+    await hide(true);
+    await page.waitForTimeout(200);
+    const hidden = await audioLevels(page, 50);
+    await hide(false);
+    await page.waitForTimeout(200);
+    const shown = await audioLevels(page, 300);
+    assert(hidden.state === 'suspended' && shown.state === 'running' && shown.left > 0.005, `hidden ${hidden.state}, shown ${shown.state} ${shown.left}`);
+
+    // Stop silences everything.
+    await page.click('#stopBtn');
+    await page.waitForTimeout(250);
+    const stopped = await audioLevels(page, 300);
+    assert(stopped.left < 1e-4 && stopped.right < 1e-4, `still sounding after Stop: ${JSON.stringify(stopped)}`);
+    noConsoleErrors(page);
+    await page.close();
+    facts.sound3d = balance.join('; ');
+    console.log(`      ${facts.sound3d}`);
+  });
+
+  await check('sound: pause, resume, pitch and the Doppler effect, heard in the browser', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const waitFor = (text) => page.waitForFunction((t) => document.getElementById('console').textContent.includes(t), text, { timeout: 10000 });
+    // One bin of the analysis is ctx.sampleRate / 8192 Hz wide (about 6).
+    const close = (measured, expected) => Math.abs(measured - expected) <= 8;
+    await project(page, (t) => window.polybasicPlayground.setText(t), `Global tone, ch
+tone = CreateTone(WAVE_SINE, 440, 440, 30000, 0.8)
+ch = PlaySound(tone)
+Function Update()
+  f = FrameCount()
+  If f = 20 Then Print "plain"
+  If f = 80
+    ChannelPitch ch, 88200    ; twice the rate it was made at
+    Print "doubled"
+  EndIf
+  If f = 140
+    PauseChannel ch
+    Print "paused"
+  EndIf
+  If f = 200
+    ResumeChannel ch
+    Print "resumed " + ChannelPlaying(ch)
+  EndIf
+End Function
+`);
+    await page.click('#runBtn');
+    const heard = {};
+    for (const mark of ['plain', 'doubled', 'paused', 'resumed'])
+    {
+      await waitFor(mark);
+      await page.waitForTimeout(SETTLE_MS);
+      heard[mark] = await audioLevels(page, 400);
+    }
+    assert(close(heard.plain.pitch, 440), `plain: ${heard.plain.pitch} Hz`);
+    assert(close(heard.doubled.pitch, 880), `doubled: ${heard.doubled.pitch} Hz`);
+    assert(heard.paused.left < 1e-4, `paused: level ${heard.paused.left}`);
+    assert(close(heard.resumed.pitch, 880) && heard.resumed.left > 0.05, `resumed: ${heard.resumed.pitch} Hz, level ${heard.resumed.left}`);
+    assert((await consoleText(page)).includes('resumed 1'), await consoleText(page));
+
+    // Something coming at the listener at 60 units a second (30 m/s: a
+    // unit is half a metre) sounds higher by 343 / (343 - 30), and lower
+    // going away, by 343 / (343 + 30).
+    await project(page, (t) => window.polybasicPlayground.setText(t), `Graphics3D 640, 480
+Global cam, car, tone, speed#
+cam = CreateCamera()
+CreateListener cam
+car = CreatePivot()
+PositionEntity car, 0, 0, 200
+tone = CreateTone(WAVE_SINE, 440, 440, 30000, 0.8)
+EmitSound tone, car
+speed = -1
+Function Update()
+  MoveEntity car, 0, 0, speed   ; 60 units a second
+  If FrameCount() = 30 Then Print "coming"
+  If FrameCount() = 120
+    speed = 1
+    Print "going"
+  EndIf
+End Function
+`);
+    await page.click('#runBtn');
+    await waitFor('coming');
+    await page.waitForTimeout(SETTLE_MS);
+    const coming = await audioLevels(page, 400);
+    await waitFor('going');
+    await page.waitForTimeout(SETTLE_MS);
+    const going = await audioLevels(page, 400);
+    const up = 440 * 343 / (343 - 30);
+    const down = 440 * 343 / (343 + 30);
+    assert(close(coming.pitch, up), `coming: ${coming.pitch.toFixed(1)} Hz, expected ${up.toFixed(1)}`);
+    assert(close(going.pitch, down), `going: ${going.pitch.toFixed(1)} Hz, expected ${down.toFixed(1)}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    facts.pitch = `pitch 440 -> ${heard.doubled.pitch.toFixed(0)} Hz; Doppler ${coming.pitch.toFixed(0)} Hz coming (${up.toFixed(0)}), ${going.pitch.toFixed(0)} Hz going (${down.toFixed(0)})`;
+    console.log(`      ${facts.pitch}`);
+  });
+
+  await check('sound: nothing sounds before the player clicks; the first click starts it', async () =>
+  {
+    // Browsers keep a page quiet until the player interacts with it. This
+    // page starts its program by itself, and nothing from the test touches
+    // it before the first reading (Playwright's evaluate counts as the
+    // player's doing, so the reading looks at the state before it acts).
+    const source = `Graphics3D 640, 480
+Global blip, song
+blip = CreateSfx(SFX_BLIP)
+song = CreateSong(120)
+SongTrack song, INST_SQUARE, "C5 E5 G5 C6"
+PlaySong song
+Function Update()
+  If FrameCount() Mod 20 = 1 Then PlaySound blip
+End Function
+`;
+    const { js } = compile(source, { file: 'main.pb' });
+    const htmlPath = join(SHOTS, 'quiet-until-click.html');
+    writeFileSync(htmlPath, projectPage({
+      name: 'Quiet until a click', main: 'main.pb', files: new Map([['main.pb', new TextEncoder().encode(source)]]),
+      js, engine: readFileSync(join(ROOT, 'dist/polybasic.js'), 'utf8'), physics: null
+    }));
+    const page = await openPage(browser, `file://${htmlPath}`, { width: 800, height: 600 });
+    await page.waitForTimeout(1500);
+    const before = await page.evaluate(() =>
+    {
+      const { engine, screen } = window.polybasicPage;
+      const audio = screen.audio;
+      return {
+        state: audio.output ? audio.output.context.state : 'none',
+        stats: { ...audio.stats },
+        frames: engine.frames,
+        song: engine.audio.songPlaying() ? 1 : 0,
+        songTime: audio.songTime()
+      };
+    });
+    assert(before.frames > 30, `the page is not running: ${JSON.stringify(before)}`);
+    assert(before.state === 'suspended' && before.stats.played === 0 && before.stats.skipped > 0 && before.stats.notes === 0, `before a click: ${JSON.stringify(before)}`);
+    assert(before.song === 1 && before.songTime === 0, `the song should be waiting: ${JSON.stringify(before)}`);
+    await page.mouse.click(400, 300);
+    await page.waitForTimeout(300);
+    const after = await audioLevels(page, 600, 'page');
+    assert(after.state === 'running' && after.stats.played > 0 && after.stats.notes > 0 && after.left > 0.005, `after a click: ${JSON.stringify(after)}`);
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('sound: LoadSound and PlayMusic play the project\'s files, from the playground and from an exported page', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId(), null, { timeout: 20000 });
+    answer('Sound test');
+    await page.click('#newBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const id = await project(page, () => window.polybasicPlayground.getProjectId());
+    const sine = (hz, seconds) => Array.from({ length: Math.round(44100 * seconds) }, (_, i) => 0.5 * Math.sin(2 * Math.PI * hz * i / 44100));
+    const beep = Array.from(makeWav(sine(660, 0.5)));
+    const tune = Array.from(makeWav(sine(330, 2)));
+    // 440 Hz recorded at 22050 samples a second.
+    const low = Array.from(makeWav(Array.from({ length: 22050 * 3 }, (_, i) => 0.5 * Math.sin(2 * Math.PI * 440 * i / 22050)), 22050));
+    await project(page, ({ beep, tune, low }) => window.polybasicPlayground.upload([
+      { name: 'beep.wav', bytes: new Uint8Array(beep) },
+      { name: 'tune.wav', bytes: new Uint8Array(tune) },
+      { name: 'low.wav', bytes: new Uint8Array(low) }
+    ]), { beep, tune, low });
+    await project(page, () => window.polybasicPlayground.openFile('assets/beep.wav'));
+    const asset = await page.textContent('#assetView');
+    assert(asset.includes('LoadSound("assets/beep.wav")') && await page.isVisible('#assetView audio'), asset);
+    // The sound files come from the project, never from the network.
+    const fetched = [];
+    await page.route('**/*.wav', (route) =>
+    {
+      fetched.push(route.request().url());
+      return route.abort();
+    });
+    await project(page, () => window.polybasicPlayground.openFile('main.pb'));
+    await project(page, (t) => window.polybasicPlayground.setText(t), `Graphics3D 640, 480
+Global snd, music
+snd = LoadSound("assets/beep.wav")
+LoopSound snd
+SoundVolume snd, 0.5
+music = PlayMusic("assets/tune.wav")
+Function Update()
+  If FrameCount() = 1
+    Print "loaded " + SoundLoaded(snd)
+    PlaySound snd
+  EndIf
+  If FrameCount() = 30 Then Print "music " + ChannelPlaying(music)
+End Function
+`);
+    // Twice: the files must still be whole after a run has read them.
+    for (const run of [1, 2])
+    {
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('music'), null, { timeout: 10000 });
+      const text = await consoleText(page);
+      assert(text.includes('loaded 1') && text.includes('music 1'), `run ${run}: ${text}`);
+      const level = await audioLevels(page, 400);
+      assert(level.left > 0.02 && level.stats.played > 0, `run ${run}: ${JSON.stringify(level)}`);
+    }
+    assert(fetched.length === 0, `fetched: ${fetched.join(', ')}`);
+
+    // SoundPitch counts in the file's own rate: twice 22050 is an octave up.
+    await project(page, (t) => window.polybasicPlayground.setText(t), `Global low
+low = LoadSound("assets/low.wav")
+Function Update()
+  If FrameCount() = 1 Then PlaySound low
+  If FrameCount() = 40
+    SoundPitch low, 44100
+    PlaySound low
+    Print "octave"
+  EndIf
+End Function
+`);
+    await project(page, () => window.polybasicPlayground.run());
+    await page.waitForTimeout(SETTLE_MS + 100);
+    const asRecorded = await audioLevels(page, 300);
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('octave'), null, { timeout: 10000 });
+    // The first copy (440 Hz) plays on under the new one: the new one is
+    // not louder, so look for its frequency among the strongest two.
+    await page.waitForTimeout(SETTLE_MS);
+    const both = await page.evaluate(() =>
+    {
+      const audio = window.polybasicPlayground.getScreen().audio;
+      const bins = new Float32Array(audio.meter.left.frequencyBinCount);
+      audio.meter.left.getFloatFrequencyData(bins);
+      const hz = (i) => i * audio.output.context.sampleRate / audio.meter.left.fftSize;
+      const near = (f) => Math.max(...[-1, 0, 1].map((d) => bins[Math.round(f / hz(1)) + d]));
+      return { at440: near(440), at880: near(880), at220: near(220), at1760: near(1760) };
+    });
+    assert(Math.abs(asRecorded.pitch - 440) <= 8, `as recorded: ${asRecorded.pitch} Hz`);
+    assert(both.at880 > both.at220 + 30 && both.at880 > both.at1760 + 30, `an octave up: ${JSON.stringify(both)}`);
+    await page.click('#stopBtn');
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#exportPageBtn')]);
+    const htmlPath = join(SHOTS, 'sound-test.html');
+    await download.saveAs(htmlPath);
+    await project(page, (x) => window.polybasicPlayground.getStore().remove(x), id);
+    noConsoleErrors(page);
+    await page.close();
+
+    const game = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    const problems = [];
+    game.on('pageerror', (e) => problems.push(e.message));
+    game.on('console', (m) =>
+    {
+      if (m.type() === 'error') problems.push(m.text());
+    });
+    await game.route('**/*', (route) =>
+    {
+      const u = route.request().url();
+      if (u.startsWith('file:') || u.startsWith('blob:') || u.startsWith('data:')) return route.continue();
+      problems.push(`fetched ${u}`);
+      return route.abort();
+    });
+    await game.goto(`file://${htmlPath}`);
+    await game.waitForFunction(() => window.polybasicPage && window.polybasicPage.engine && window.polybasicPage.engine.frames > 30, null, { timeout: 30000 });
+    await game.mouse.click(400, 300);
+    const level = await audioLevels(game, 500, 'page');
+    assert(level.state === 'running' && level.left > 0.02, `exported page: ${JSON.stringify(level)}`);
+    assert(problems.length === 0, problems.join('\n'));
+    await game.close();
+  });
+
+  await check('sound: Sound Lab answers the keys with sound, and draws the song as it plays', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=sound-lab`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'sound-lab', null, { timeout: 20000 });
+    await page.waitForFunction(() => document.getElementById('status').textContent === 'Running', null, { timeout: 20000 });
+    const box = await page.locator('.polybasic-screen canvas').first().boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForTimeout(600);
+    const music = await audioLevels(page, 400);
+    assert(music.state === 'running' && music.stats.notes > 0 && music.left > 0.005, `music: ${JSON.stringify(music)}`);
+    const playedBefore = music.stats.played;
+    await page.keyboard.press('Digit3');
+    await page.waitForTimeout(100);
+    const boom = await audioLevels(page, 300);
+    assert(boom.stats.played > playedBefore, `the key played nothing: ${JSON.stringify(boom.stats)}`);
+    assert(boom.left > music.left, `the explosion is not louder than the music alone: ${boom.left} vs ${music.left}`);
+    const shown = await page.evaluate(`(${canvasStats})(window.polybasicPlayground.getScreen().overlayCanvas)`);
+    await page.screenshot({ path: join(SHOTS, 'sound-lab.png') });
+    assert(shown.colours > 3, 'nothing drawn on the 2D layer');
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
   });
 
   await check('the site root leads to the playground', async () =>

@@ -40,6 +40,7 @@ const SAVE_DELAY_MS = 400;
 // Files edited as text; everything else is an asset (image, model...).
 const TEXT_TYPES = new Set(['pb', 'txt', 'md', 'json', 'csv']);
 const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+const SOUND_TYPES = { wav: 'audio/wav', ogg: 'audio/ogg', mp3: 'audio/mpeg' };
 
 const NEW_PROGRAM_SOURCE = `; My first PolyBasic program
 Graphics3D 800, 600
@@ -751,6 +752,15 @@ function showAsset(path)
     img.alt = path;
     el.assetView.appendChild(img);
     use = `tex = LoadTexture("${from}")`;
+  }
+  else if (SOUND_TYPES[ext])
+  {
+    previewUrl = URL.createObjectURL(new Blob([bytes], { type: SOUND_TYPES[ext] }));
+    const player = document.createElement('audio');
+    player.controls = true;
+    player.src = previewUrl;
+    el.assetView.appendChild(player);
+    use = `sound = LoadSound("${from}")`;
   }
   else if (ext === 'glb' || ext === 'gltf') use = `model = LoadMesh("${from}")`;
   if (use)

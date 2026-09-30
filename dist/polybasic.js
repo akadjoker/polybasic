@@ -3639,6 +3639,16 @@ var World = class {
     this.handles.set(t.handle, t);
     return t;
   }
+  // Gives any other object kept by the engine (a sound, a song) a handle
+  // in the same space, so mixing handles up is reported clearly.
+  addHandle(object) {
+    object.handle = this.nextHandle++;
+    this.handles.set(object.handle, object);
+    return object.handle;
+  }
+  removeHandle(object) {
+    this.handles.delete(object.handle);
+  }
   // Frees an entity and all its children.
   freeEntity(e) {
     for (const c of [...e.children]) this.freeEntity(c);
@@ -3990,12 +4000,17 @@ var tidy = (v) => {
   const r = Math.round(v * 1e9) / 1e9;
   return r === 0 ? 0 : r;
 };
+function describe(object) {
+  if (object instanceof Entity) return "an entity";
+  if (object instanceof Texture) return "a texture";
+  return object && object.handleKind ? object.handleKind : "something else";
+}
 function handleHelpers(world) {
   const entity = (handle) => {
     const e = world.handles.get(handle);
     if (e instanceof Entity) return e;
     if (handle === 0) throw runtimeError("Entity handle is 0 (no entity)");
-    if (e instanceof Texture) throw runtimeError(`Handle ${handle} is a texture, not an entity`);
+    if (e) throw runtimeError(`Handle ${handle} is ${describe(e)}, not an entity`);
     throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
   };
   const parentOf = (handle) => handle === 0 ? null : entity(handle);
@@ -4003,7 +4018,7 @@ function handleHelpers(world) {
     const t = world.handles.get(handle);
     if (t instanceof Texture) return t;
     if (handle === 0) throw runtimeError("Texture handle is 0 (no texture)");
-    if (t instanceof Entity) throw runtimeError(`Handle ${handle} is an entity, not a texture`);
+    if (t) throw runtimeError(`Handle ${handle} is ${describe(t)}, not a texture`);
     throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
   };
   const ofKind = (handle, kind, what) => {
@@ -5938,6 +5953,694 @@ function createModelCommands(engine) {
   };
 }
 
+// src/engine/audio/synth.js
+var SAMPLE_RATE = 44100;
+var WAVE_SQUARE = 0;
+var WAVE_TRIANGLE = 1;
+var WAVE_SAW = 2;
+var WAVE_SINE = 3;
+var WAVE_NOISE = 4;
+var SFX_COIN = 0;
+var SFX_LASER = 1;
+var SFX_EXPLOSION = 2;
+var SFX_POWERUP = 3;
+var SFX_HIT = 4;
+var SFX_JUMP = 5;
+var SFX_BLIP = 6;
+var SFX_RANDOM = 7;
+var INST_SQUARE = 0;
+var INST_TRIANGLE = 1;
+var INST_SAW = 2;
+var INST_SINE = 3;
+var INST_DRUMS = 4;
+var INST_PLUCK = 5;
+var INST_PAD = 6;
+var INST_BASS = 7;
+var STEPS_PER_BEAT = 4;
+function makeRandom(seed) {
+  let a = Number(seed) >>> 0 || 2654435769;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function synthesize(recipe) {
+  const {
+    wave = WAVE_SQUARE,
+    freq = 440,
+    freqEnd = freq,
+    ms = 200,
+    volume = 0.5,
+    attackMs = 4,
+    arpAt = 0,
+    arpMul = 1,
+    vibDepth = 0,
+    vibHz = 0,
+    lowpass = 0,
+    lowpassEnd = lowpass,
+    seed = 1
+  } = recipe;
+  const length = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
+  const out = new Float32Array(length);
+  const attack = Math.max(1, Math.round(SAMPLE_RATE * attackMs / 1e3));
+  const random = makeRandom(seed);
+  let phase = 0;
+  let noiseValue = random() * 2 - 1;
+  let filtered = 0;
+  for (let i = 0; i < length; i++) {
+    const t = i / length;
+    let f = freq + (freqEnd - freq) * t;
+    if (arpAt > 0 && t >= arpAt) f *= arpMul;
+    if (vibDepth > 0) f *= 1 + vibDepth * Math.sin(2 * Math.PI * vibHz * i / SAMPLE_RATE);
+    phase += Math.max(1, f) / SAMPLE_RATE;
+    if (phase >= 1) {
+      phase -= Math.floor(phase);
+      noiseValue = random() * 2 - 1;
+    }
+    let s;
+    switch (wave) {
+      case WAVE_TRIANGLE:
+        s = 1 - 4 * Math.abs(phase - 0.5);
+        break;
+      case WAVE_SAW:
+        s = 2 * phase - 1;
+        break;
+      case WAVE_SINE:
+        s = Math.sin(2 * Math.PI * phase);
+        break;
+      case WAVE_NOISE:
+        s = noiseValue;
+        break;
+      default:
+        s = phase < 0.5 ? 0.6 : -0.6;
+        break;
+    }
+    if (lowpass > 0) {
+      const cutoff = lowpass + (lowpassEnd - lowpass) * t;
+      const a = 1 - Math.exp(-2 * Math.PI * Math.max(20, cutoff) / SAMPLE_RATE);
+      filtered += a * (s - filtered);
+      s = filtered;
+    }
+    const env = i < attack ? i / attack : (1 - t) * (1 - t);
+    out[i] = s * env * volume;
+  }
+  return out;
+}
+function sfxRecipe(kind, seed = 0) {
+  const r = makeRandom((Number(seed) || 0) * 7919 + (Number(kind) || 0) + 1);
+  const vary = (value, amount) => value * (1 + (r() * 2 - 1) * amount);
+  switch (Number(kind)) {
+    case SFX_COIN:
+      return { wave: WAVE_SQUARE, freq: vary(990, 0.2), ms: vary(260, 0.2), arpAt: 0.22, arpMul: 1.5, volume: 0.45 };
+    case SFX_LASER:
+      return { wave: r() < 0.5 ? WAVE_SAW : WAVE_SQUARE, freq: vary(1300, 0.3), freqEnd: vary(180, 0.3), ms: vary(170, 0.3), volume: 0.4 };
+    case SFX_EXPLOSION:
+      return { wave: WAVE_NOISE, freq: vary(900, 0.3), freqEnd: vary(60, 0.3), ms: vary(700, 0.3), lowpass: 5e3, lowpassEnd: 200, volume: 0.9, seed: r() * 1e9 };
+    case SFX_POWERUP:
+      return { wave: WAVE_SQUARE, freq: vary(350, 0.2), freqEnd: vary(1300, 0.2), ms: vary(420, 0.2), vibDepth: 0.06, vibHz: 18, volume: 0.4 };
+    case SFX_HIT:
+      return { wave: WAVE_NOISE, freq: vary(1600, 0.3), freqEnd: vary(200, 0.3), ms: vary(130, 0.3), lowpass: 3e3, volume: 0.7, seed: r() * 1e9 };
+    case SFX_JUMP:
+      return { wave: WAVE_SQUARE, freq: vary(260, 0.2), freqEnd: vary(720, 0.2), ms: vary(190, 0.2), volume: 0.4 };
+    case SFX_BLIP:
+      return { wave: WAVE_SQUARE, freq: vary(880, 0.25), ms: vary(60, 0.2), volume: 0.35 };
+    default: {
+      const wave = Math.floor(r() * 5);
+      return {
+        wave,
+        freq: 100 + r() * 1500,
+        freqEnd: 100 + r() * 1500,
+        ms: 60 + r() * 500,
+        arpAt: r() < 0.3 ? 0.3 : 0,
+        arpMul: 1 + r(),
+        vibDepth: r() < 0.3 ? r() * 0.2 : 0,
+        vibHz: 5 + r() * 20,
+        lowpass: wave === WAVE_NOISE ? 4e3 : 0,
+        lowpassEnd: 300,
+        volume: 0.45,
+        seed: r() * 1e9
+      };
+    }
+  }
+}
+var DRUM_RECIPES = {
+  k: { wave: WAVE_SINE, freq: 150, freqEnd: 40, ms: 220, volume: 0.9, attackMs: 1 },
+  s: { wave: WAVE_NOISE, freq: 6e3, ms: 160, lowpass: 7e3, lowpassEnd: 2500, volume: 0.5, attackMs: 1, seed: 7 },
+  h: { wave: WAVE_NOISE, freq: 12e3, ms: 45, volume: 0.22, attackMs: 1, seed: 3 }
+};
+var NOTE_INDEX = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 };
+function noteFrequency(token) {
+  const m = /^([a-g])([#b]?)(-?\d)$/i.exec(String(token));
+  if (!m) return null;
+  let semitone = NOTE_INDEX[m[1].toLowerCase()];
+  if (m[2] === "#") semitone += 1;
+  else if (m[2] === "b") semitone -= 1;
+  const midi = 12 * (Number(m[3]) + 1) + semitone;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+}
+function parseNotes(text, drums = false) {
+  const tokens = String(text || "").split(/[\s|]+/).filter((t) => t.length > 0);
+  const events = [];
+  let last = null;
+  let bad = null;
+  tokens.forEach((token, step) => {
+    if (token === "-") {
+      if (last) last.length++;
+      return;
+    }
+    last = null;
+    if (token === ".") return;
+    if (drums) {
+      const hits = [...token.toLowerCase()];
+      if (hits.every((c) => c === "k" || c === "s" || c === "h")) events.push({ step, length: 1, drums: [...new Set(hits)] });
+      else if (bad === null) bad = token;
+      return;
+    }
+    const freq = noteFrequency(token);
+    if (freq === null) {
+      if (bad === null) bad = token;
+      return;
+    }
+    last = { step, length: 1, freq };
+    events.push(last);
+  });
+  return { events, steps: tokens.length, bad };
+}
+
+// src/engine/audio/spatial.js
+var SPEED_OF_SOUND = 343;
+function hear(listener, emitter, listenerVelocity, emitterVelocity, settings) {
+  const l = listener.e;
+  const s = emitter.e;
+  const metres = settings.distance > 0 ? settings.distance : 1;
+  const dx = (s[12] - l[12]) * metres;
+  const dy = (s[13] - l[13]) * metres;
+  const dz = (s[14] - l[14]) * metres;
+  const d = Math.hypot(dx, dy, dz);
+  const rolloff = Math.max(0, settings.rolloff);
+  const gain = 1 / (1 + rolloff * (Math.max(d, 1) - 1));
+  let pan = 0;
+  if (d > 1e-6) {
+    const rx = l[0];
+    const ry = l[1];
+    const rz = l[2];
+    const rl = Math.hypot(rx, ry, rz) || 1;
+    pan = Math.max(-1, Math.min(1, (dx * rx + dy * ry + dz * rz) / (rl * d)));
+  }
+  let rate = 1;
+  const doppler = Math.max(0, settings.doppler);
+  if (doppler > 0 && d > 1e-6) {
+    const ux = dx / d;
+    const uy = dy / d;
+    const uz = dz / d;
+    const limit = SPEED_OF_SOUND * 0.5;
+    const clamp2 = (v) => Math.max(-limit, Math.min(limit, v));
+    const toward = clamp2(doppler * metres * (listenerVelocity[0] * ux + listenerVelocity[1] * uy + listenerVelocity[2] * uz));
+    const away = clamp2(doppler * metres * (emitterVelocity[0] * ux + emitterVelocity[1] * uy + emitterVelocity[2] * uz));
+    rate = (SPEED_OF_SOUND + toward) / (SPEED_OF_SOUND + away);
+  }
+  return { gain, pan, rate };
+}
+
+// src/engine/audio/audio.js
+var KEEP_CHANNELS = 256;
+var Sound = class {
+  constructor() {
+    this.handleKind = "a sound";
+    this.handle = 0;
+    this.file = "";
+    this.loaded = false;
+    this.failed = false;
+    this.seconds = 0;
+    this.sampleRate = SAMPLE_RATE;
+    this.loop = false;
+    this.volume = 1;
+    this.pitch = 0;
+    this.pan = 0;
+    this.recipeKey = null;
+  }
+  // Playback rate for a frequency in Hz (0: as recorded).
+  rateFor(hz) {
+    return hz > 0 ? hz / this.sampleRate : 1;
+  }
+};
+var Song = class {
+  constructor(bpm) {
+    this.handleKind = "a song";
+    this.handle = 0;
+    this.bpm = bpm;
+    this.tracks = [];
+  }
+  // Steps before it starts again: the longest track's.
+  get length() {
+    return this.tracks.reduce((m, t) => Math.max(m, t.steps), 0);
+  }
+};
+var Audio = class {
+  constructor(engine, backend) {
+    this.engine = engine;
+    this.world = engine.world;
+    this.backend = backend;
+    backend.init(() => engine.steps * STEP_MS / 1e3);
+    this.recipes = /* @__PURE__ */ new Map();
+    this.channels = /* @__PURE__ */ new Map();
+    this.nextChannel = 1;
+    this.song = null;
+    this.listener = null;
+    this.effectsVolume = 1;
+    this.musicVolume = 1;
+  }
+  // -------------------------------------------------------------- sounds
+  // Starts loading a sound file; returns the Sound at once. Like textures,
+  // files started in the main body are in by the first Update.
+  load(file, url) {
+    const sound = new Sound();
+    sound.file = file;
+    this.world.addHandle(sound);
+    const failed = (text) => {
+      sound.failed = true;
+      this.engine.warn(text);
+    };
+    if (!this.engine.loadFile) {
+      failed(`LoadSound: could not load "${file}"`);
+      return sound;
+    }
+    this.engine.track(this.engine.loadFile(url).then(
+      (bytes) => this.backend.decode(sound, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).then((info) => {
+        sound.seconds = info.seconds;
+        sound.sampleRate = info.sampleRate;
+        sound.loaded = true;
+      }, () => failed(`LoadSound: "${file}" is not a sound file that can be played here (WAV, OGG or MP3)`)),
+      () => failed(`LoadSound: could not load "${file}"`)
+    ));
+    return sound;
+  }
+  // A sound made from a recipe (synth.js). The same recipe gives the same
+  // Sound: making an effect for every shot does not pile up sounds.
+  fromRecipe(recipe) {
+    const key = JSON.stringify(recipe);
+    const known = this.recipes.get(key);
+    if (known && known.handle) return known;
+    const samples = synthesize(recipe);
+    const sound = new Sound();
+    sound.recipeKey = key;
+    sound.seconds = samples.length / SAMPLE_RATE;
+    sound.loaded = true;
+    this.world.addHandle(sound);
+    this.backend.addSamples(sound, samples);
+    this.recipes.set(key, sound);
+    return sound;
+  }
+  effect(kind, seed) {
+    return this.fromRecipe(sfxRecipe(kind, seed));
+  }
+  free(sound) {
+    for (const [id, c] of this.channels) {
+      if (c.sound === sound) {
+        this.backend.stop(id);
+        this.channels.delete(id);
+      }
+    }
+    if (sound.recipeKey) this.recipes.delete(sound.recipeKey);
+    this.backend.freeSound(sound);
+    this.world.removeHandle(sound);
+    sound.handle = 0;
+  }
+  // ------------------------------------------------------------ channels
+  newChannel(record2) {
+    const id = this.nextChannel++;
+    this.channels.set(id, record2);
+    if (this.channels.size > KEEP_CHANNELS) {
+      for (const [old] of this.channels) {
+        if (!this.backend.playing(old)) this.channels.delete(old);
+      }
+    }
+    return id;
+  }
+  // Plays a sound the way it is set up; `emitter` (an entity) places it in
+  // the 3D world. Returns the channel.
+  play(sound, emitter = null) {
+    const record2 = {
+      sound,
+      music: false,
+      volume: sound.volume,
+      rate: sound.rateFor(sound.pitch),
+      pan: sound.pan,
+      emitter,
+      last: null,
+      velocity: [0, 0, 0]
+    };
+    const id = this.newChannel(record2);
+    if (!sound.loaded) return id;
+    let { volume, rate, pan } = record2;
+    if (emitter) {
+      record2.last = new Mat4().copy(emitter.worldMatrix);
+      const heard = this.heard(record2);
+      volume *= heard.gain;
+      rate *= heard.rate;
+      pan = heard.pan;
+    }
+    this.backend.play(id, sound, { loop: sound.loop, volume, rate, pan, music: false });
+    return id;
+  }
+  // Plays a music file on a channel of its own, looping unless `loop` is
+  // false. The file is read now and heard once it has arrived.
+  playMusic(file, url, loop) {
+    const record2 = { sound: null, music: true, volume: 1, rate: 1, pan: 0, emitter: null, stopped: false };
+    const id = this.newChannel(record2);
+    if (!this.engine.loadFile) {
+      this.engine.warn(`PlayMusic: could not load "${file}"`);
+      return id;
+    }
+    this.engine.track(this.engine.loadFile(url).then(
+      (bytes) => {
+        if (record2.stopped) return;
+        return this.backend.playMusic(id, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), { loop, volume: record2.volume }).catch(() => this.engine.warn(`PlayMusic: "${file}" is not a music file that can be played here (WAV, OGG or MP3)`));
+      },
+      () => this.engine.warn(`PlayMusic: could not load "${file}"`)
+    ));
+    return id;
+  }
+  // The channel record, or null for a channel that is over and forgotten.
+  // `id` must be one this program was given.
+  channel(id) {
+    return this.channels.get(id) || null;
+  }
+  issued(id) {
+    return id >= 1 && id < this.nextChannel;
+  }
+  setVolume(id, volume) {
+    const c = this.channel(id);
+    if (!c) return;
+    c.volume = volume;
+    this.backend.set(id, { volume: c.emitter ? volume * this.heard(c).gain : volume });
+  }
+  setPitch(id, hz) {
+    const c = this.channel(id);
+    if (!c) return;
+    c.rate = c.sound.rateFor(hz);
+    this.backend.set(id, { rate: c.emitter ? c.rate * this.heard(c).rate : c.rate });
+  }
+  setPan(id, pan) {
+    const c = this.channel(id);
+    if (!c || c.emitter) return;
+    c.pan = pan;
+    this.backend.set(id, { pan });
+  }
+  stop(id) {
+    const c = this.channel(id);
+    if (!c) return;
+    c.stopped = true;
+    this.backend.stop(id);
+    this.channels.delete(id);
+  }
+  pause(id) {
+    if (this.channel(id)) this.backend.pause(id);
+  }
+  resume(id) {
+    if (this.channel(id)) this.backend.resume(id);
+  }
+  playing(id) {
+    return !!this.channel(id) && this.backend.playing(id);
+  }
+  setVolumes(effects, music) {
+    this.effectsVolume = effects;
+    this.musicVolume = music;
+    this.backend.setVolumes(effects, music);
+  }
+  // --------------------------------------------------------------- songs
+  newSong(bpm) {
+    const song = new Song(bpm);
+    this.world.addHandle(song);
+    return song;
+  }
+  // Adds a track; returns the song's number of tracks, or an Error naming
+  // the first token that is not a note.
+  addTrack(song, instrument, notes, volume) {
+    const parsed = parseNotes(notes, instrument === INST_DRUMS);
+    if (parsed.bad !== null) return new Error(`"${parsed.bad}" is not ${instrument === INST_DRUMS ? "a drum (k, s, h)" : "a note (such as C4, F#3, Bb2)"}, a hold (-) or a rest (.)`);
+    if (parsed.steps === 0) return new Error("the line has no notes");
+    song.tracks.push({ inst: instrument, events: parsed.events, steps: parsed.steps, volume });
+    return song.tracks.length;
+  }
+  playSong(song, loop) {
+    this.song = song;
+    this.backend.playSong({ bpm: song.bpm, length: song.length, tracks: song.tracks }, loop);
+  }
+  stopSong() {
+    this.song = null;
+    this.backend.stopSong();
+  }
+  songPlaying() {
+    if (this.song && !this.backend.songPlaying()) this.song = null;
+    return this.song;
+  }
+  // ------------------------------------------------------------------ 3D
+  setListener(entity, rolloff, doppler, distance) {
+    this.listener = { entity, rolloff, doppler, distance, last: new Mat4().copy(entity.worldMatrix), velocity: [0, 0, 0] };
+  }
+  // How the channel's emitter is heard now: { gain, pan, rate }.
+  heard(c) {
+    const l = this.listener;
+    if (!l) return { gain: 1, pan: 0, rate: 1 };
+    const where = c.emitter.alive ? c.emitter.worldMatrix : c.last;
+    return hear(l.entity.alive ? l.entity.worldMatrix : l.last, where, l.velocity, c.velocity, l);
+  }
+  // After each step: sounds placed in the world follow their entities
+  // (and the listener), and velocities for the Doppler effect are updated.
+  step() {
+    const dt = STEP_MS / 1e3;
+    const velocity = (out, before, now) => {
+      out[0] = (now.e[12] - before.e[12]) / dt;
+      out[1] = (now.e[13] - before.e[13]) / dt;
+      out[2] = (now.e[14] - before.e[14]) / dt;
+    };
+    const l = this.listener;
+    if (l) {
+      if (l.entity.alive) {
+        velocity(l.velocity, l.last, l.entity.worldMatrix);
+        l.last.copy(l.entity.worldMatrix);
+      } else l.velocity.fill(0);
+    }
+    for (const [id, c] of this.channels) {
+      if (!c.emitter || !c.last) continue;
+      if (!this.backend.playing(id)) {
+        this.channels.delete(id);
+        continue;
+      }
+      if (c.emitter.alive) {
+        velocity(c.velocity, c.last, c.emitter.worldMatrix);
+        c.last.copy(c.emitter.worldMatrix);
+      } else c.velocity.fill(0);
+      const heard = this.heard(c);
+      this.backend.set(id, { volume: c.volume * heard.gain, rate: c.rate * heard.rate, pan: heard.pan });
+    }
+  }
+  // The program stopped: everything goes quiet. Sounds stay (they belong
+  // to the world, which stays until the next run).
+  stopAll() {
+    for (const c of this.channels.values()) c.stopped = true;
+    this.channels.clear();
+    this.song = null;
+    this.backend.reset();
+  }
+};
+
+// src/engine/audio/commands.js
+var AUDIO_COMMANDS = [
+  // Sounds
+  "LoadSound%(file$)",
+  "Load3DSound%(file$)",
+  "SoundLoaded%(sound)",
+  "FreeSound(sound)",
+  "LoopSound(sound)",
+  "SoundVolume(sound, volume#)",
+  "SoundPitch(sound, hz)",
+  "SoundPan(sound, pan#)",
+  "PlaySound%(sound)",
+  "CreateSfx%(kind, seed = 0)",
+  "CreateTone%(wave, freq#, freqEnd#, ms, volume# = 0.5)",
+  // Channels
+  "StopChannel(channel)",
+  "PauseChannel(channel)",
+  "ResumeChannel(channel)",
+  "ChannelVolume(channel, volume#)",
+  "ChannelPitch(channel, hz)",
+  "ChannelPan(channel, pan#)",
+  "ChannelPlaying%(channel)",
+  // Music
+  "PlayMusic%(file$, loop = 1)",
+  "EffectsVolume(volume#)",
+  "MusicVolume(volume#)",
+  // Songs
+  "CreateSong%(bpm)",
+  "SongTrack%(song, instrument, notes$, volume# = 0.6)",
+  "PlaySong(song, loop = 1)",
+  "StopSong()",
+  "SongPlaying%()",
+  "SongTime#()",
+  "SongStep%()",
+  // Sound in the 3D world
+  "CreateListener%(parent, rolloff# = 1, doppler# = 1, distance# = 0.5)",
+  "EmitSound%(sound, entity)"
+];
+var AUDIO_CONSTANTS = {
+  WAVE_SQUARE,
+  WAVE_TRIANGLE,
+  WAVE_SAW,
+  WAVE_SINE,
+  WAVE_NOISE,
+  SFX_COIN,
+  SFX_LASER,
+  SFX_EXPLOSION,
+  SFX_POWERUP,
+  SFX_HIT,
+  SFX_JUMP,
+  SFX_BLIP,
+  SFX_RANDOM,
+  INST_SQUARE,
+  INST_TRIANGLE,
+  INST_SAW,
+  INST_SINE,
+  INST_DRUMS,
+  INST_PLUCK,
+  INST_PAD,
+  INST_BASS
+};
+var unitRange = (v) => Math.max(0, Math.min(1, v));
+var panRange = (v) => Math.max(-1, Math.min(1, v));
+function createAudioCommands(engine) {
+  const world = engine.world;
+  const audio = engine.audio;
+  const { entity, parentOf } = handleHelpers(world);
+  const sound = (handle) => {
+    const s = world.handles.get(handle);
+    if (s instanceof Sound) return s;
+    if (handle === 0) throw runtimeError("Sound handle is 0 (no sound)");
+    if (s) throw runtimeError(`Handle ${handle} is ${describe(s)}, not a sound`);
+    throw runtimeError(`Sound ${handle} does not exist (it was freed, or never created)`);
+  };
+  const song = (handle) => {
+    const s = world.handles.get(handle);
+    if (s instanceof Song) return s;
+    if (handle === 0) throw runtimeError("Song handle is 0 (no song)");
+    if (s) throw runtimeError(`Handle ${handle} is ${describe(s)}, not a song`);
+    throw runtimeError(`Song ${handle} does not exist (it was never created)`);
+  };
+  const channel = (id) => {
+    if (!audio.issued(id)) throw runtimeError(id === 0 ? "Channel is 0 (no channel)" : `Channel ${id} does not exist (PlaySound, EmitSound and PlayMusic give channels)`);
+    return audio.channel(id);
+  };
+  const hz = (value, what) => {
+    if (value < 0) throw runtimeError(`${what} needs a frequency of 0 or more Hz, not ${value}`);
+    return value;
+  };
+  return {
+    // ------------------------------------------------------------ sounds
+    loadsound: (file) => engine.loadSound(file).handle,
+    load3dsound: (file) => engine.loadSound(file).handle,
+    soundloaded: (handle) => sound(handle).loaded ? 1 : 0,
+    freesound(handle) {
+      audio.free(sound(handle));
+    },
+    loopsound(handle) {
+      sound(handle).loop = true;
+    },
+    soundvolume(handle, volume) {
+      sound(handle).volume = Math.max(0, volume);
+    },
+    soundpitch(handle, value) {
+      sound(handle).pitch = hz(value, "SoundPitch");
+    },
+    soundpan(handle, pan) {
+      sound(handle).pan = panRange(pan);
+    },
+    playsound: (handle) => audio.play(sound(handle)),
+    createsfx(kind, seed) {
+      if (kind < SFX_COIN || kind > SFX_RANDOM) throw runtimeError(`CreateSfx needs one of the SFX_ kinds (${SFX_COIN} to ${SFX_RANDOM}), not ${kind}`);
+      return audio.effect(kind, seed).handle;
+    },
+    createtone(wave, freq, freqEnd, ms, volume) {
+      if (wave < WAVE_SQUARE || wave > WAVE_NOISE) throw runtimeError(`CreateTone needs one of the WAVE_ shapes (${WAVE_SQUARE} to ${WAVE_NOISE}), not ${wave}`);
+      if (!(freq > 0 && freqEnd > 0)) throw runtimeError(`CreateTone needs frequencies above 0 Hz, not ${freq} and ${freqEnd}`);
+      if (!(ms > 0)) throw runtimeError(`CreateTone needs a length above 0 ms, not ${ms}`);
+      return audio.fromRecipe({ wave, freq, freqEnd, ms, volume: unitRange(volume) }).handle;
+    },
+    // ---------------------------------------------------------- channels
+    stopchannel(id) {
+      if (channel(id)) audio.stop(id);
+    },
+    pausechannel(id) {
+      if (channel(id)) audio.pause(id);
+    },
+    resumechannel(id) {
+      if (channel(id)) audio.resume(id);
+    },
+    channelvolume(id, volume) {
+      if (channel(id)) audio.setVolume(id, Math.max(0, volume));
+    },
+    channelpitch(id, value) {
+      const c = channel(id);
+      if (c && c.music) throw runtimeError(`Channel ${id} plays music: ChannelPitch works on sound channels`);
+      if (c) audio.setPitch(id, hz(value, "ChannelPitch"));
+    },
+    channelpan(id, pan) {
+      if (channel(id)) audio.setPan(id, panRange(pan));
+    },
+    channelplaying: (id) => channel(id) && audio.playing(id) ? 1 : 0,
+    // ------------------------------------------------------------- music
+    playmusic: (file, loop) => engine.playMusic(file, loop !== 0),
+    effectsvolume(volume) {
+      audio.setVolumes(unitRange(volume), audio.musicVolume);
+    },
+    musicvolume(volume) {
+      audio.setVolumes(audio.effectsVolume, unitRange(volume));
+    },
+    // ------------------------------------------------------------- songs
+    createsong(bpm) {
+      if (!(bpm >= 20 && bpm <= 400)) throw runtimeError(`CreateSong needs a tempo of 20 to 400 beats a minute, not ${bpm}`);
+      return audio.newSong(bpm).handle;
+    },
+    songtrack(handle, instrument, notes, volume) {
+      const s = song(handle);
+      if (instrument < INST_SQUARE || instrument > INST_BASS) throw runtimeError(`SongTrack needs one of the INST_ instruments (${INST_SQUARE} to ${INST_BASS}), not ${instrument}`);
+      const count = audio.addTrack(s, instrument, notes, unitRange(volume));
+      if (count instanceof Error) throw runtimeError(`SongTrack: ${count.message}`);
+      return count;
+    },
+    playsong(handle, loop) {
+      const s = song(handle);
+      if (s.tracks.length === 0) throw runtimeError(`Song ${handle} has no tracks yet (SongTrack adds them)`);
+      audio.playSong(s, loop !== 0);
+    },
+    stopsong() {
+      audio.stopSong();
+    },
+    songplaying() {
+      const s = audio.songPlaying();
+      return s ? s.handle : 0;
+    },
+    songtime: () => audio.backend.songTime(),
+    songstep: () => audio.backend.songStep(),
+    // ---------------------------------------------------------------- 3D
+    createlistener(parent, rolloff, doppler, distance) {
+      if (!(distance > 0)) throw runtimeError(`CreateListener needs a distance above 0 (metres in one unit), not ${distance}`);
+      const listener = world.createEntity("pivot", parentOf(parent));
+      audio.setListener(listener, Math.max(0, rolloff), Math.max(0, doppler), distance);
+      return listener.id;
+    },
+    emitsound(handle, target) {
+      const s = sound(handle);
+      const e = entity(target);
+      if (!audio.listener || !audio.listener.entity.alive) throw runtimeError("EmitSound needs a listener to hear it: CreateListener first (usually on the camera)");
+      return audio.play(s, e);
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -6030,7 +6733,8 @@ var ENGINE_COMMANDS = [
   "Plot(x, y)",
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
-  ...MODEL_COMMANDS
+  ...MODEL_COMMANDS,
+  ...AUDIO_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
   ...KEYS,
@@ -6044,7 +6748,8 @@ var ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
-  ...MODEL_CONSTANTS
+  ...MODEL_CONSTANTS,
+  ...AUDIO_CONSTANTS
 };
 function createEngineCommands(engine) {
   const world = engine.world;
@@ -6064,6 +6769,7 @@ function createEngineCommands(engine) {
     ...createCollideCommands(engine),
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
+    ...createAudioCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -6864,18 +7570,208 @@ function newModel() {
   return { data: null, nodes: [], state: null, loaded: false, failed: false, waiting: [] };
 }
 
+// src/engine/audio/backend.js
+var AudioBackend = class {
+  init(clock) {
+  }
+  addSamples(sound, samples) {
+  }
+  decode(sound, bytes) {
+    return Promise.reject(new Error("this audio backend cannot read sound files"));
+  }
+  freeSound(sound) {
+  }
+  play(id, sound, options) {
+  }
+  playMusic(id, bytes, options) {
+    return Promise.reject(new Error("this audio backend cannot play music files"));
+  }
+  set(id, values) {
+  }
+  stop(id) {
+  }
+  pause(id) {
+  }
+  resume(id) {
+  }
+  playing(id) {
+    return false;
+  }
+  setVolumes(effects, music) {
+  }
+  playSong(song, loop) {
+  }
+  stopSong() {
+  }
+  songPlaying() {
+    return false;
+  }
+  songTime() {
+    return 0;
+  }
+  songStep() {
+    return -1;
+  }
+  reset() {
+  }
+  dispose() {
+  }
+};
+
+// src/engine/audio/wav.js
+function readWavInfo(bytes) {
+  const b = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (b.length < 12) return null;
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const tag = (at2) => String.fromCharCode(b[at2], b[at2 + 1], b[at2 + 2], b[at2 + 3]);
+  if (tag(0) !== "RIFF" || tag(8) !== "WAVE") return null;
+  let format = null;
+  let at = 12;
+  while (at + 8 <= b.length) {
+    const id = tag(at);
+    const size = view.getUint32(at + 4, true);
+    const body = at + 8;
+    if (id === "fmt " && size >= 16 && body + 16 <= b.length) {
+      format = {
+        code: view.getUint16(body, true),
+        channels: view.getUint16(body + 2, true),
+        sampleRate: view.getUint32(body + 4, true),
+        bits: view.getUint16(body + 14, true)
+      };
+    } else if (id === "data" && format) {
+      if (![1, 3, 65534].includes(format.code) || !format.channels || !format.sampleRate || !format.bits) return null;
+      const frameBytes = format.channels * Math.ceil(format.bits / 8);
+      const dataBytes = Math.min(size, b.length - body);
+      const frames = Math.floor(dataBytes / frameBytes);
+      return { sampleRate: format.sampleRate, channels: format.channels, bits: format.bits, frames, seconds: frames / format.sampleRate };
+    }
+    at = body + size + (size & 1);
+  }
+  return null;
+}
+
+// src/engine/audio/null/null-audio.js
+var NullAudio = class extends AudioBackend {
+  constructor() {
+    super();
+    this.clock = () => 0;
+    this.lengths = /* @__PURE__ */ new Map();
+    this.channels = /* @__PURE__ */ new Map();
+    this.song = null;
+  }
+  init(clock) {
+    this.clock = clock;
+  }
+  addSamples(sound, samples) {
+    this.lengths.set(sound, samples.length / SAMPLE_RATE);
+  }
+  decode(sound, bytes) {
+    const wav = readWavInfo(bytes);
+    const info = wav ? { seconds: wav.seconds, sampleRate: wav.sampleRate } : { seconds: 0, sampleRate: SAMPLE_RATE };
+    this.lengths.set(sound, info.seconds);
+    return Promise.resolve(info);
+  }
+  freeSound(sound) {
+    this.lengths.delete(sound);
+  }
+  play(id, sound, options) {
+    this.start(id, this.lengths.get(sound) || 0, options.rate || 1, options.loop);
+  }
+  playMusic(id, bytes, options) {
+    const wav = readWavInfo(bytes);
+    const seconds = wav ? wav.seconds : 0;
+    this.start(id, seconds, 1, options.loop);
+    return Promise.resolve({ seconds });
+  }
+  start(id, seconds, rate, loop) {
+    this.channels.set(id, { start: this.clock(), seconds, rate: Math.max(0.05, Math.min(16, rate)), loop: !!loop && seconds > 0, pausedAt: -1, left: 0 });
+  }
+  // Seconds of sound left on a channel, as of now (Infinity when looping).
+  left(c, now) {
+    if (c.loop) return Infinity;
+    if (c.pausedAt >= 0) return c.left;
+    return c.seconds / c.rate - (now - c.start);
+  }
+  set(id, values) {
+    const c = this.channels.get(id);
+    if (!c || values.rate === void 0) return;
+    const rate = Math.max(0.05, Math.min(16, values.rate));
+    if (!c.loop) {
+      if (c.pausedAt >= 0) c.left = c.left * c.rate / rate;
+      else {
+        const now = this.clock();
+        c.start = now - (now - c.start) * c.rate / rate;
+      }
+    }
+    c.rate = rate;
+  }
+  stop(id) {
+    this.channels.delete(id);
+  }
+  pause(id) {
+    const c = this.channels.get(id);
+    if (!c || c.pausedAt >= 0) return;
+    const now = this.clock();
+    c.left = this.left(c, now);
+    c.pausedAt = now;
+  }
+  resume(id) {
+    const c = this.channels.get(id);
+    if (!c || c.pausedAt < 0) return;
+    const now = this.clock();
+    if (!c.loop) c.start = now - (c.seconds / c.rate - c.left);
+    c.pausedAt = -1;
+  }
+  playing(id) {
+    const c = this.channels.get(id);
+    if (!c) return false;
+    if (this.left(c, this.clock()) > 1e-9) return true;
+    this.channels.delete(id);
+    return false;
+  }
+  playSong(song, loop) {
+    this.song = { start: this.clock(), stepTime: 60 / song.bpm / STEPS_PER_BEAT, length: song.length, loop: !!loop };
+  }
+  stopSong() {
+    this.song = null;
+  }
+  // The song still being heard, or null (a song that does not loop ends).
+  heard() {
+    const s = this.song;
+    if (s && !s.loop && this.clock() - s.start >= s.length * s.stepTime - 1e-9) this.song = null;
+    return this.song;
+  }
+  songPlaying() {
+    return !!this.heard();
+  }
+  songTime() {
+    const s = this.heard();
+    return s ? this.clock() - s.start : 0;
+  }
+  songStep() {
+    const s = this.heard();
+    if (!s) return -1;
+    return Math.floor((this.clock() - s.start) / s.stepTime + 1e-9) % s.length;
+  }
+  reset() {
+    this.channels.clear();
+    this.song = null;
+  }
+};
+
 // src/engine/engine.js
 var DEFAULT_WIDTH = 800;
 var DEFAULT_HEIGHT = 600;
 var Engine = class {
   // options:
   //   backend    a RenderBackend (default: NullBackend)
+  //   audio      an AudioBackend (default: NullAudio)
   //   overlay    the 2D layer (default: NullOverlay)
   //   input      an Input (default: a fresh one, fed by nobody)
   //   loadImage  (url) => Promise<image>, used by LoadTexture
   //   loadFile   (url) => Promise<ArrayBuffer | Uint8Array>, used by
-  //              LoadMesh (and, without loadImage, to check that a texture
-  //              file exists)
+  //              LoadMesh, LoadSound and PlayMusic (and, without loadImage,
+  //              to check that a texture file exists)
   //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
   //              inside a model file
   //   loadPhysics () => Promise<PhysicsBackend>, a ready physics backend
@@ -6890,6 +7786,7 @@ var Engine = class {
     this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
     this.steps = 0;
+    this.audio = new Audio(this, options.audio || new NullAudio());
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -6976,6 +7873,13 @@ var Engine = class {
   loadMesh(file, parent) {
     return this.models.load(file, resolveUrl(this.baseUrl, file), parent);
   }
+  // Sound files, relative to the program like every other file.
+  loadSound(file) {
+    return this.audio.load(file, resolveUrl(this.baseUrl, file));
+  }
+  playMusic(file, loop) {
+    return this.audio.playMusic(file, resolveUrl(this.baseUrl, file), loop);
+  }
   // ----------------------------------------------------- runner hooks
   // Called before main with the commands the program uses. Returns a
   // promise when something must be loaded first, or null.
@@ -6996,16 +7900,19 @@ var Engine = class {
     this.input.sample();
   }
   // After each Update: the world moves on by one step. Animations, then
-  // physics, then collisions, which see where bodies ended up.
+  // physics, then collisions, which see where bodies ended up; then sounds
+  // placed in the world follow where everything is now.
   endStep() {
     this.models.step(STEP_MS / 1e3);
     this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
+    this.audio.step();
   }
   // The program stopped (for whatever reason): let go of what only a
   // running program needs. The scene stays on screen.
   stop() {
     this.physics.dispose();
+    this.audio.stopAll();
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
@@ -34640,6 +35547,471 @@ function attachDomInput(input, element, toLogical) {
   };
 }
 
+// src/engine/audio/webaudio/webaudio-backend.js
+var LOOKAHEAD = 0.12;
+var SCHEDULE_EVERY_MS = 25;
+var SMOOTH = 0.015;
+var sharedContext = null;
+var decoder = null;
+function contextClass() {
+  return typeof window !== "undefined" ? window.AudioContext || window.webkitAudioContext || null : null;
+}
+var clampRate = (r) => Math.max(0.05, Math.min(16, r));
+var clampPan = (p) => Math.max(-1, Math.min(1, p));
+var WebAudioBackend = class extends AudioBackend {
+  constructor() {
+    super();
+    this.available = !!contextClass();
+    this.buffers = /* @__PURE__ */ new WeakMap();
+    this.channels = /* @__PURE__ */ new Map();
+    this.effectsVolume = 1;
+    this.musicVolume = 1;
+    this.output = null;
+    this.effects = null;
+    this.music = null;
+    this.song = null;
+    this.endingSong = null;
+    this.timer = 0;
+    this.drumBuffers = null;
+    this.pausedByHide = false;
+    this.stats = { played: 0, skipped: 0, notes: 0 };
+    this.onVisibility = null;
+    if (this.available && typeof document !== "undefined") {
+      this.onVisibility = () => this.followVisibility(document.hidden);
+      document.addEventListener("visibilitychange", this.onVisibility);
+    }
+  }
+  // The page's AudioContext, with this backend's volumes under it.
+  context() {
+    if (!this.available) return null;
+    if (!sharedContext) sharedContext = new (contextClass())();
+    if (!this.output) {
+      this.output = sharedContext.createGain();
+      this.output.connect(sharedContext.destination);
+      this.effects = sharedContext.createGain();
+      this.effects.gain.value = this.effectsVolume;
+      this.effects.connect(this.output);
+      this.music = sharedContext.createGain();
+      this.music.gain.value = this.musicVolume;
+      this.music.connect(this.output);
+    }
+    return sharedContext;
+  }
+  get running() {
+    return !!sharedContext && sharedContext.state === "running";
+  }
+  // The player clicked or pressed a key: sound may start. Browsers that
+  // remember an earlier click let resume() work without a new one.
+  unlock() {
+    const ctx = this.context();
+    if (!ctx) return;
+    if (ctx.state === "running") this.startWaiting();
+    else ctx.resume().then(() => this.startWaiting()).catch(() => {
+    });
+  }
+  followVisibility(hidden) {
+    if (!sharedContext) return;
+    if (hidden && sharedContext.state === "running") {
+      this.pausedByHide = true;
+      sharedContext.suspend().catch(() => {
+      });
+      for (const c of this.channels.values()) if (c.element && !c.paused) c.element.pause();
+    } else if (!hidden && this.pausedByHide) {
+      this.pausedByHide = false;
+      sharedContext.resume().catch(() => {
+      });
+      for (const c of this.channels.values()) if (c.element && !c.paused && c.started) c.element.play().catch(() => {
+      });
+    }
+  }
+  // Music and a song that were waiting for the player's first click.
+  startWaiting() {
+    for (const c of this.channels.values()) {
+      if (c.element && !c.started && !c.paused) this.startElement(c);
+    }
+    this.startPendingSong();
+  }
+  // -------------------------------------------------------------- sounds
+  addSamples(sound, samples) {
+    this.buffers.set(sound, { buffer: null, samples });
+  }
+  decode(sound, bytes) {
+    if (!this.available) return Promise.reject(new Error("this browser has no Web Audio"));
+    if (!decoder) {
+      const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+      decoder = new Offline(1, 1, SAMPLE_RATE);
+    }
+    const wav = readWavInfo(bytes);
+    return decoder.decodeAudioData(bytes.slice().buffer).then((buffer) => {
+      this.buffers.set(sound, { buffer, samples: null });
+      return { seconds: buffer.duration, sampleRate: wav ? wav.sampleRate : buffer.sampleRate };
+    });
+  }
+  freeSound(sound) {
+    this.buffers.delete(sound);
+  }
+  bufferOf(sound) {
+    const entry = this.buffers.get(sound);
+    if (!entry) return null;
+    if (!entry.buffer && entry.samples) {
+      entry.buffer = new AudioBuffer({ length: entry.samples.length, numberOfChannels: 1, sampleRate: SAMPLE_RATE });
+      entry.buffer.copyToChannel(entry.samples, 0);
+    }
+    return entry.buffer;
+  }
+  // The chain every channel ends in: gain -> panner -> a volume.
+  chain(ctx, volume, pan, music) {
+    const gain = ctx.createGain();
+    gain.gain.value = Math.max(0, volume);
+    const panner = ctx.createStereoPanner();
+    panner.pan.value = clampPan(pan);
+    gain.connect(panner).connect(music ? this.music : this.effects);
+    return { gain, panner };
+  }
+  play(id, sound, options) {
+    const ctx = this.context();
+    const buffer = this.bufferOf(sound);
+    if (!ctx || ctx.state !== "running" || !buffer) {
+      this.stats.skipped++;
+      if (ctx && ctx.state !== "running") ctx.resume().then(() => this.startWaiting()).catch(() => {
+      });
+      return;
+    }
+    const c = {
+      buffer,
+      loop: !!options.loop,
+      rate: clampRate(options.rate || 1),
+      offset: 0,
+      since: 0,
+      source: null,
+      paused: false,
+      ended: false,
+      ...this.chain(ctx, options.volume ?? 1, options.pan || 0, !!options.music)
+    };
+    this.channels.set(id, c);
+    this.startSource(ctx, c);
+    this.stats.played++;
+  }
+  // (Re)starts a channel's buffer from its offset.
+  startSource(ctx, c) {
+    const source = ctx.createBufferSource();
+    source.buffer = c.buffer;
+    source.loop = c.loop;
+    source.playbackRate.value = c.rate;
+    source.connect(c.gain);
+    source.onended = () => {
+      if (c.source === source) c.ended = true;
+    };
+    source.start(0, c.offset);
+    c.source = source;
+    c.since = ctx.currentTime;
+  }
+  // Seconds into the sound a buffer channel has got to.
+  position(c) {
+    const at = c.offset + (sharedContext.currentTime - c.since) * c.rate;
+    return c.loop ? at % c.buffer.duration : Math.min(at, c.buffer.duration);
+  }
+  playMusic(id, bytes, options) {
+    const ctx = this.context();
+    if (!ctx) return Promise.reject(new Error("this browser has no Web Audio"));
+    const url = URL.createObjectURL(new Blob([bytes]));
+    const element = document.createElement("audio");
+    element.src = url;
+    element.loop = !!options.loop;
+    element.preload = "auto";
+    const c = {
+      element,
+      url,
+      started: false,
+      paused: false,
+      ended: false,
+      ...this.chain(ctx, options.volume ?? 1, 0, true)
+    };
+    ctx.createMediaElementSource(element).connect(c.gain);
+    element.onended = () => {
+      c.ended = true;
+    };
+    this.channels.set(id, c);
+    const ready = new Promise((resolve2, reject) => {
+      element.onloadedmetadata = () => resolve2({ seconds: element.duration });
+      element.onerror = () => reject(new Error("the browser cannot play this file"));
+    });
+    if (ctx.state === "running") this.startElement(c);
+    else ctx.resume().then(() => this.startWaiting()).catch(() => {
+    });
+    return ready;
+  }
+  startElement(c) {
+    c.started = true;
+    c.element.play().catch(() => {
+      c.started = false;
+    });
+  }
+  set(id, values) {
+    const c = this.channels.get(id);
+    if (!c || c.ended) return;
+    const now = sharedContext.currentTime;
+    if (values.volume !== void 0) c.gain.gain.setTargetAtTime(Math.max(0, values.volume), now, SMOOTH);
+    if (values.pan !== void 0) c.panner.pan.setTargetAtTime(clampPan(values.pan), now, SMOOTH);
+    if (values.rate !== void 0 && c.buffer) {
+      const rate = clampRate(values.rate);
+      if (!c.paused) {
+        c.offset = this.position(c);
+        c.since = now;
+        c.source.playbackRate.setValueAtTime(rate, now);
+      }
+      c.rate = rate;
+    }
+  }
+  stop(id) {
+    const c = this.channels.get(id);
+    if (!c) return;
+    this.channels.delete(id);
+    this.silence(c);
+  }
+  silence(c) {
+    c.ended = true;
+    if (c.source) {
+      const source = c.source;
+      c.source = null;
+      try {
+        source.stop();
+      } catch {
+      }
+    }
+    if (c.element) {
+      c.element.pause();
+      c.element.removeAttribute("src");
+      c.element.load();
+      URL.revokeObjectURL(c.url);
+    }
+    c.panner.disconnect();
+  }
+  pause(id) {
+    const c = this.channels.get(id);
+    if (!c || c.ended || c.paused) return;
+    c.paused = true;
+    if (c.element) {
+      c.element.pause();
+      return;
+    }
+    c.offset = this.position(c);
+    const source = c.source;
+    c.source = null;
+    source.stop();
+  }
+  resume(id) {
+    const c = this.channels.get(id);
+    if (!c || c.ended || !c.paused) return;
+    c.paused = false;
+    if (c.element) {
+      if (this.running) this.startElement(c);
+      return;
+    }
+    this.startSource(sharedContext, c);
+  }
+  playing(id) {
+    const c = this.channels.get(id);
+    if (!c) return false;
+    if (!c.ended) return true;
+    this.channels.delete(id);
+    return false;
+  }
+  setVolumes(effects, music) {
+    this.effectsVolume = effects;
+    this.musicVolume = music;
+    if (this.effects) {
+      this.effects.gain.value = effects;
+      this.music.gain.value = music;
+    }
+  }
+  // --------------------------------------------------------------- songs
+  playSong(song, loop) {
+    this.stopSong();
+    this.context();
+    this.song = { def: song, loop: !!loop, step: 0, nextTime: 0, startTime: 0, nodes: /* @__PURE__ */ new Set(), started: false };
+    this.startPendingSong();
+  }
+  startPendingSong() {
+    const s = this.song;
+    if (!s || s.started || !this.running) return;
+    s.started = true;
+    s.nextTime = sharedContext.currentTime + 0.05;
+    s.startTime = s.nextTime;
+    this.schedule();
+    this.timer = setInterval(() => this.schedule(), SCHEDULE_EVERY_MS);
+  }
+  stopSong() {
+    this.endingSong = null;
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = 0;
+    }
+    if (!this.song) return;
+    for (const node of this.song.nodes) {
+      try {
+        node.stop();
+      } catch {
+      }
+    }
+    this.song = null;
+  }
+  // The song being heard: the playing one, or one that does not loop whose
+  // last steps are still sounding.
+  heardSong(now) {
+    if (this.song) return this.song.started ? this.song : null;
+    const s = this.endingSong;
+    return s && now < s.nextTime ? s : null;
+  }
+  songPlaying() {
+    if (this.song) return true;
+    return !!sharedContext && !!this.heardSong(sharedContext.currentTime);
+  }
+  // Time as heard: the audio clock less the time sound takes to reach the
+  // speakers.
+  heardNow() {
+    const latency = Number(sharedContext.outputLatency) || Number(sharedContext.baseLatency) || 0;
+    return sharedContext.currentTime - latency;
+  }
+  songTime() {
+    if (!sharedContext) return 0;
+    const now = this.heardNow();
+    const s = this.heardSong(now);
+    return s ? Math.max(0, now - s.startTime) : 0;
+  }
+  songStep() {
+    if (!sharedContext) return -1;
+    const s = this.heardSong(this.heardNow());
+    if (!s) return -1;
+    const stepTime = 60 / s.def.bpm / STEPS_PER_BEAT;
+    return Math.floor(this.songTime() / stepTime + 1e-9) % s.def.length;
+  }
+  // Schedules every step that starts within the lookahead.
+  schedule() {
+    const s = this.song;
+    if (!s || !sharedContext) return;
+    const stepTime = 60 / s.def.bpm / STEPS_PER_BEAT;
+    while (s.nextTime < sharedContext.currentTime + LOOKAHEAD) {
+      if (s.step >= s.def.length) {
+        if (!s.loop) {
+          clearInterval(this.timer);
+          this.timer = 0;
+          const nodes = s.nodes;
+          setTimeout(() => nodes.clear(), 2e3);
+          this.endingSong = s;
+          this.song = null;
+          return;
+        }
+        s.step = 0;
+      }
+      for (const track of s.def.tracks) {
+        const local = s.step % track.steps;
+        for (const event of track.events) {
+          if (event.step === local) this.playNote(s, track, event, s.nextTime, stepTime);
+        }
+      }
+      s.step++;
+      s.nextTime += stepTime;
+    }
+  }
+  playNote(s, track, event, when, stepTime) {
+    const ctx = sharedContext;
+    const length = event.length * stepTime;
+    const remember = (node) => {
+      s.nodes.add(node);
+      node.onended = () => s.nodes.delete(node);
+    };
+    this.stats.notes++;
+    if (track.inst === INST_DRUMS) {
+      const drums = this.drums();
+      for (const hit of event.drums) {
+        const source = ctx.createBufferSource();
+        source.buffer = drums[hit];
+        const gain2 = ctx.createGain();
+        gain2.gain.value = track.volume;
+        source.connect(gain2).connect(this.music);
+        source.start(when);
+        remember(source);
+      }
+      return;
+    }
+    const types = {
+      [INST_SQUARE]: "square",
+      [INST_TRIANGLE]: "triangle",
+      [INST_SAW]: "sawtooth",
+      [INST_SINE]: "sine",
+      [INST_PLUCK]: "square",
+      [INST_PAD]: "sawtooth",
+      [INST_BASS]: "triangle"
+    };
+    const osc = ctx.createOscillator();
+    osc.type = types[track.inst] || "square";
+    osc.frequency.value = track.inst === INST_BASS ? event.freq / 2 : event.freq;
+    const gain = ctx.createGain();
+    const peak = track.volume * (osc.type === "square" || osc.type === "sawtooth" ? 0.18 : 0.35);
+    const g = gain.gain;
+    g.setValueAtTime(0, when);
+    let end;
+    if (track.inst === INST_PLUCK) {
+      end = when + Math.min(length, 0.35);
+      g.linearRampToValueAtTime(peak, when + 5e-3);
+      g.exponentialRampToValueAtTime(1e-4, end);
+    } else if (track.inst === INST_PAD) {
+      end = when + length;
+      g.linearRampToValueAtTime(peak * 0.7, when + Math.min(0.3, length * 0.5));
+      g.setValueAtTime(peak * 0.7, when + length * 0.8);
+      g.linearRampToValueAtTime(0, end);
+    } else {
+      end = when + length;
+      g.linearRampToValueAtTime(peak, when + 0.01);
+      g.setValueAtTime(peak, when + Math.max(0.01, length - 0.03));
+      g.linearRampToValueAtTime(0, end);
+    }
+    let out = gain;
+    if (track.inst === INST_PAD) {
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.value = 1400;
+      gain.connect(filter);
+      out = filter;
+    }
+    osc.connect(gain);
+    out.connect(this.music);
+    osc.start(when);
+    osc.stop(end + 0.02);
+    remember(osc);
+  }
+  drums() {
+    if (!this.drumBuffers) {
+      this.drumBuffers = {};
+      for (const [hit, recipe] of Object.entries(DRUM_RECIPES)) {
+        const samples = synthesize(recipe);
+        const buffer = new AudioBuffer({ length: samples.length, numberOfChannels: 1, sampleRate: SAMPLE_RATE });
+        buffer.copyToChannel(samples, 0);
+        this.drumBuffers[hit] = buffer;
+      }
+    }
+    return this.drumBuffers;
+  }
+  // ------------------------------------------------------------ lifetime
+  reset() {
+    this.stopSong();
+    for (const c of this.channels.values()) this.silence(c);
+    this.channels.clear();
+  }
+  dispose() {
+    this.reset();
+    if (this.onVisibility) {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.onVisibility = null;
+    }
+    if (this.output) {
+      this.output.disconnect();
+      this.output = null;
+    }
+  }
+};
+
 // src/engine/browser.js
 var MAX_PIXEL_RATIO = 2;
 var PROJECT_SCHEME = "polybasic-project:";
@@ -34663,6 +36035,11 @@ function createScreen(container2) {
   const backend = new ThreeBackend();
   backend.init(gl);
   const overlay = new CanvasOverlay(overlayCanvas);
+  const audio = new WebAudioBackend();
+  const unlock = () => audio.unlock();
+  for (const type of ["pointerdown", "keydown", "touchend"]) {
+    window.addEventListener(type, unlock, { capture: true, passive: true });
+  }
   const input = new Input();
   let width = 800;
   let height = 600;
@@ -34710,6 +36087,7 @@ function createScreen(container2) {
     canvas: gl,
     overlayCanvas,
     backend,
+    audio,
     input,
     fit,
     size: () => [width, height],
@@ -34747,8 +36125,10 @@ function createScreen(container2) {
       input.releaseAll();
       input.sample();
       overlay.begin(width, height);
+      audio.reset();
       const engine = new Engine({
         backend,
+        audio,
         overlay,
         input,
         loadImage: async (url) => {

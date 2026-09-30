@@ -1,8 +1,9 @@
-# PolyBasic 3D, 2D and input commands
+# PolyBasic 3D, 2D, sound and input commands
 
 These commands come with the 3D engine. They work the same in the browser
-(drawn with WebGL) and in Node.js (a headless engine that keeps the whole
-scene but draws nothing, which is what the tests use).
+(drawn with WebGL, heard through Web Audio) and in Node.js (a headless
+engine that keeps the whole scene but draws and plays nothing, which is
+what the tests use).
 
 - [The basics](#the-basics)
 - [Screen](#screen)
@@ -17,6 +18,7 @@ scene but draws nothing, which is what the tests use).
 - [Picking](#picking)
 - [Collisions](#collisions)
 - [Physics](#physics)
+- [Sound](#sound)
 - [Keyboard and mouse](#keyboard-and-mouse)
 - [2D drawing](#2d-drawing)
 - [Constants](#constants)
@@ -306,6 +308,109 @@ Physics and collisions are separate: use collisions for characters you
 steer and physics for things that should tumble; an entity should have one
 or the other.
 
+## Sound
+
+![Sound Lab (examples/sound-lab.pb)](screenshots/sound-lab.png)
+
+Sounds come from files (WAV, OGG or MP3: `LoadSound`) or are made by the
+engine from a recipe, with no file at all (`CreateSfx`, `CreateTone`).
+`PlaySound` plays one on a new **channel**, a number the program can use
+to change or stop that playing copy. Music is either a file (`PlayMusic`)
+or a **song** written as lines of notes (`CreateSong`, `SongTrack`). Sounds
+can also be placed in the 3D world (`CreateListener`, `EmitSound`): they
+fade with distance, come from the left or the right, and rise and fall in
+pitch as they pass (the Doppler effect).
+
+| Command | What it does |
+|---------|--------------|
+| `LoadSound%(file$)` | Starts loading a sound file and returns its handle at once. Files started in the main body are in by the first `Update`. |
+| `Load3DSound%(file$)` | The same as `LoadSound` (any sound can be placed in the world); kept for Blitz3D programs. |
+| `SoundLoaded%(sound)` | 1 once the file is in (always 1 for made sounds). A missing file, or one that is not a sound, is reported and never loads. |
+| `FreeSound sound` | Stops its channels and lets it go. |
+| `LoopSound sound` | From now on `PlaySound` plays it over and over, until `StopChannel`. |
+| `SoundVolume sound, volume#` | How loud `PlaySound` plays it: 1 as recorded (default), 0 silent. |
+| `SoundPitch sound, hz` | The rate `PlaySound` plays it at, in samples a second: twice the rate it was recorded at is an octave up and twice as fast. 0: as recorded (default). Made sounds are 44100 Hz, a WAV file the rate in the file; OGG and MP3 files count as 44100 Hz. |
+| `SoundPan sound, pan#` | -1 left, 0 middle (default), 1 right. |
+| `PlaySound%(sound)` | Plays it as set up above, on a new channel; returns the channel. |
+| `CreateSfx%(kind, seed = 0)` | A ready-made effect: `SFX_COIN`, `SFX_LASER`, `SFX_EXPLOSION`, `SFX_POWERUP`, `SFX_HIT`, `SFX_JUMP`, `SFX_BLIP` or `SFX_RANDOM`. Another `seed` gives a variation. The same kind and seed give the same sound (the same handle), so asking for it again is cheap. |
+| `CreateTone%(wave, freq#, freqEnd#, ms, volume# = 0.5)` | A tone of `ms` milliseconds sliding from `freq` to `freqEnd` Hz, in one of the waves `WAVE_SQUARE`, `WAVE_TRIANGLE`, `WAVE_SAW`, `WAVE_SINE`, `WAVE_NOISE`. |
+
+**Channels.** A finished channel is simply not playing any more: the
+commands below do nothing to it (and `ChannelPlaying` gives 0). A number
+that no `PlaySound`, `EmitSound` or `PlayMusic` gave is an error.
+
+| Command | What it does |
+|---------|--------------|
+| `StopChannel channel` | Stops it for good. |
+| `PauseChannel channel` `ResumeChannel channel` | Holds it where it is, and goes on from there. |
+| `ChannelVolume channel, volume#` `ChannelPan channel, pan#` | As `SoundVolume` and `SoundPan`, for this playing copy only. (A sound placed in the world takes its pan from where it is.) |
+| `ChannelPitch channel, hz` | As `SoundPitch`, for this playing copy only (not for music files). |
+| `ChannelPlaying%(channel)` | 1 while it is playing, or paused part way. |
+
+**Music.**
+
+| Command | What it does |
+|---------|--------------|
+| `PlayMusic%(file$, loop = True)` | Plays a music file (WAV, OGG or MP3) on a channel of its own, decoded bit by bit as it plays rather than all at once; it loops unless `loop` is `False`. The channel works with the commands above (except `ChannelPitch`). |
+| `EffectsVolume volume#` | Volume of all sounds, 0 to 1 (default 1). |
+| `MusicVolume volume#` | Volume of the music: `PlayMusic` and songs, 0 to 1 (default 1). |
+
+**Songs.** A song has a tempo and tracks. A track is an instrument and a
+line of notes, one step per sixteenth note (four steps a beat); shorter
+tracks repeat under the longest one.
+
+| Command | What it does |
+|---------|--------------|
+| `CreateSong%(bpm)` | A new, empty song at `bpm` beats a minute (20 to 400). |
+| `SongTrack%(song, instrument, notes$, volume# = 0.6)` | Adds a track and returns how many the song has. Instruments: `INST_SQUARE`, `INST_TRIANGLE`, `INST_SAW`, `INST_SINE`, `INST_PLUCK` (short, plucked), `INST_PAD` (soft, slow), `INST_BASS` (an octave down), `INST_DRUMS`. |
+| `PlaySong song, loop = True` | Plays it (stopping the song playing), over and over unless `loop` is `False`. |
+| `StopSong` | Stops the song. |
+| `SongPlaying%()` | The song playing (or waiting for the player's first click), 0 for none. |
+| `SongTime#()` | Seconds of the song heard so far, through every loop, read from the sound's own clock: follow the beat with this, not with frames. 0 while it waits for the first click. |
+| `SongStep%()` | The step being heard, from 0 to the song's length - 1: `SongStep() / 4` is the beat. -1 with no song. |
+
+A line of notes is made of tokens separated by spaces (or `|`, to mark
+bars): a note is its name, an optional `#` or `b` and the octave (`C4`,
+`F#3`, `Bb2`; `A4` is 440 Hz); `-` holds the note before one more step;
+`.` is a step of silence. Drum tracks use `k` (kick), `s` (snare) and `h`
+(hi-hat), alone or together (`kh`). Anything else is an error that names
+the token.
+
+```
+song = CreateSong(120)
+SongTrack song, INST_PLUCK, "C4 E4 G4 E4 | C4 E4 G4 C5"
+SongTrack song, INST_BASS,  "C3 - - - | G2 - - -"
+SongTrack song, INST_DRUMS, "k . h . s . h ."
+PlaySong song
+```
+
+**Sound in the 3D world.**
+
+| Command | What it does |
+|---------|--------------|
+| `CreateListener%(parent, rolloff# = 1, doppler# = 1, distance# = 0.5)` | The ears: a pivot, usually put on the camera (`CreateListener(camera)`). `rolloff` is how fast sounds fade with distance (0: they do not), `doppler` how strong the Doppler effect is (0: none, 1: real), `distance` how many metres one unit is (0.5, as for physics). A new listener replaces the one before. |
+| `EmitSound%(sound, entity)` | Plays a sound where the entity is, and keeps it there as the entity moves (after it is freed, the sound stays where it was). Returns the channel. |
+
+A sound in the world is as loud as `SoundVolume` / `ChannelVolume` within a
+metre of the listener, and beyond that fades as 1 / distance (with
+`rolloff` 1; a larger `rolloff` fades it faster). It comes from the
+side of the listener it is on, and its pitch rises while it comes closer
+and falls while it goes away, by the speed of sound (343 m/s).
+
+**When sound can start.** Browsers only let a page make sound once the
+player has clicked, touched or pressed a key on it (clicking Run in the
+playground counts). Until then `PlaySound` and `EmitSound` are skipped
+(they still return a channel, which is not playing), while `PlayMusic` and
+songs wait and start by themselves. A hidden page is silent, and goes on
+where it was when it is shown again. When the program stops, so does every
+sound, so a program that plays sounds needs an `Update` to keep running.
+
+**Headless.** In Node.js nothing is heard, but a channel plays for as long
+as its sound lasts (at its pitch), on the clock of the updates, and songs
+keep their tempo: programs that wait for a sound, or follow a song's beat,
+run the same. The length of a WAV file is read from it; OGG and MP3 files
+cannot be measured there and play for no time.
+
 ## Keyboard and mouse
 
 Input is read once at the start of every Update, so all the Updates of a
@@ -366,6 +471,9 @@ the top-left; text stays sharp at any page size.
 | `BODY_STATIC` `BODY_DYNAMIC` `BODY_KINEMATIC` | 1 2 3 |
 | `SHAPE_AUTO` `SHAPE_BOX` `SHAPE_SPHERE` `SHAPE_CAPSULE` `SHAPE_CYLINDER` `SHAPE_HULL` `SHAPE_MESH` | 0 to 6 |
 | `ANIM_STOP` `ANIM_LOOP` `ANIM_ONCE` `ANIM_PINGPONG` | 0 1 2 3 |
+| `SFX_COIN` `SFX_LASER` `SFX_EXPLOSION` `SFX_POWERUP` `SFX_HIT` `SFX_JUMP` `SFX_BLIP` `SFX_RANDOM` | 0 to 7 |
+| `WAVE_SQUARE` `WAVE_TRIANGLE` `WAVE_SAW` `WAVE_SINE` `WAVE_NOISE` | 0 to 4 |
+| `INST_SQUARE` `INST_TRIANGLE` `INST_SAW` `INST_SINE` `INST_DRUMS` `INST_PLUCK` `INST_PAD` `INST_BASS` | 0 to 7 |
 
 The names are built in: a program cannot declare its own `Const KEY_LEFT`.
 
@@ -377,8 +485,9 @@ textures) arrive. Then, every frame:
 
 1. For every Update that is due (60 per second): the keyboard and mouse are
    read, your `Update()` runs, and then the world takes one step: model
-   animations move on, physics moves the bodies, and collisions sweep the
-   entities that moved.
+   animations move on, physics moves the bodies, collisions sweep the
+   entities that moved, and sounds placed in the world follow where
+   everything is now.
 2. The world matrices of everything that moved are brought up to date, and
    the 3D scene is drawn by every camera.
 3. The 2D layer is cleared and your `Draw()` runs on top.
@@ -403,3 +512,10 @@ layer (`src/engine/physics/physics.js`), which talks to a small backend
 interface (`src/engine/physics/backend.js`). Rapier is the backend today,
 in one file (`src/engine/physics/rapier/`); the browser build puts it in
 `dist/physics.js`, loaded only by programs that use physics.
+
+Sound too: the sound commands talk to PolyBasic's own layer
+(`src/engine/audio/audio.js`), which works out how a sound in the world is
+heard (`spatial.js`) and makes sounds and songs from recipes (`synth.js`),
+and tells a small backend (`src/engine/audio/backend.js`) what to play:
+Web Audio in the browser, or a null backend that plays nothing but keeps
+time.

@@ -4,8 +4,9 @@ PolyBasic is a friendly BASIC for making 3D games in the browser. You write
 short, readable programs in the spirit of Blitz Basic (type sigils, `Type`
 objects, `For Each`, `CreateCube`, `TurnEntity`) and PolyBasic compiles them
 to plain, fast JavaScript that runs on a WebGL canvas. glTF models with
-their animations, picking with the mouse, collisions and physics are built
-in ([docs/commands-3d.md](docs/commands-3d.md)).
+their animations, picking with the mouse, collisions, physics and sound
+(files, effects and songs made by the engine, and sound placed in the 3D
+world) are built in ([docs/commands-3d.md](docs/commands-3d.md)).
 
 ![The spinning cube example in the playground](docs/screenshots/playground-spin.png)
 
@@ -135,6 +136,7 @@ src/engine/scene/        entities, the world, meshes, materials, textures
 src/engine/collide/      picking and collisions: triangle trees, ray and sphere sweeps
 src/engine/physics/      the physics commands and backend interface; rapier/ backend
 src/engine/model/        the glTF reader, models and their animations
+src/engine/audio/        sound: channels, songs, 3D sound; webaudio/ and null/ backends
 src/engine/render/       the render backend interface; three/ and null/ backends
 src/engine/input/        keyboard and mouse, sampled per Update
 src/engine/overlay/      the 2D layer for Draw

@@ -1,0 +1,22 @@
+loaded in the main body: 0
+the same effect twice is one sound: 1
+another seed is another sound: 1
+a tone: 1
+tracks 1
+tracks 2
+constants 0 7 4 4 7
+LoadSound: could not load "assets/none.wav"
+loaded by the first update: 1, missing: 0
+song 1, step 0
+frame 15: playing 1
+frame 16: playing 0, song step 2
+frame 23: fast 1
+frame 24: fast 0, held 1
+song time 0.983333, step 7
+frame 67: held 1
+frame 68: held 0
+a looping sound plays on: 1
+stopped: 0
+song after StopSong: 0, step -1
+freed: 0
+[ended]

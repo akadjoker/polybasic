@@ -302,6 +302,12 @@ button.small {
   border-radius: 6px;
 }
 
+.asset-view audio {
+  display: block;
+  width: 100%;
+  max-width: 420px;
+}
+
 .asset-view code {
   display: inline-block;
   font-family: var(--mono);

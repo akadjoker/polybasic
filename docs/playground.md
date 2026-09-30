@@ -38,18 +38,19 @@ The open project shows its files as a tree, with the main program first.
   project, everything else goes in `assets/`.
 - **Make main**, **Rename file**, **Delete file** act on the open file. The
   main program cannot be deleted; make another file the main one first.
-- Choosing an image or a model shows its size, a preview (images), and the
-  line that loads it from the main program, such as
-  `tex = LoadTexture("assets/tile.png")`.
+- Choosing an image, a model or a sound shows its size, a preview (images
+  are shown, sounds can be played), and the line that loads it from the
+  main program, such as `tex = LoadTexture("assets/tile.png")` or
+  `sound = LoadSound("assets/jump.wav")`.
 
 `Include "lib/game.pb"` adds another program file of the project; its
 path is relative to the file that has the Include (see
 [language.md](language.md#include)). Files loaded while the program runs
-(`LoadTexture`, `LoadMesh`, ...) are relative to the main program, from
-whichever file the command is in: with `main.pb` at the top,
-`LoadMesh("assets/ship.glb")` works in `main.pb` and in `lib/game.pb`
-alike. A program in a project reads only the project's files; a name that
-is not in the project is an error that names the file.
+(`LoadTexture`, `LoadMesh`, `LoadSound`, `PlayMusic`...) are relative to
+the main program, from whichever file the command is in: with `main.pb`
+at the top, `LoadMesh("assets/ship.glb")` works in `main.pb` and in
+`lib/game.pb` alike. A program in a project reads only the project's
+files; a name that is not in the project is an error that names the file.
 
 While typing, a compile error in another file of the project shows on
 line 1 of the open file, with the file and line it is in. After Run, the
