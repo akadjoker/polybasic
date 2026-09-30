@@ -1,10 +1,16 @@
 // A tiny benchmark: confirms the generated code runs at plain JavaScript
-// speed (no per-statement bookkeeping, no async in hot paths).
+// speed (no per-statement bookkeeping, no async in hot paths), and times
+// the engine's collisions and picking on a busy scene.
 //
 //   node tests/bench.mjs
 
 import { compile } from '../src/compiler/index.js';
 import { loadProgram, runProgram, CaptureHost } from '../src/runtime/index.js';
+import { World } from '../src/engine/scene/world.js';
+import { createPlane, createCube } from '../src/engine/scene/mesh.js';
+import { Collisions } from '../src/engine/collide/collisions.js';
+import { pickLine } from '../src/engine/collide/picking.js';
+import { Vec3 } from '../src/engine/math/vec3.js';
 
 const CASES = [
   {
@@ -147,4 +153,73 @@ for (const c of CASES)
     line += `   hand-written JS ${ref.ms.toFixed(1).padStart(7)} ms`;
   }
   console.log(`${line}   -> ${host.output.trim()}`);
+}
+
+// ------------------------------------------------------------- engine
+
+// A bumpy ground of 8192 triangles, 50 boxes and 100 walkers with
+// ellipsoids that bump into the ground, the boxes and each other.
+function busyScene()
+{
+  const world = new World();
+  const collisions = new Collisions(world);
+  collisions.set(1, 2, 2, 3);
+  collisions.set(1, 3, 3, 2);
+  collisions.set(1, 1, 1, 2);
+  const ground = world.createMesh(createPlane(64));
+  ground.setScale(50, 1, 50);
+  ground.collisionType = 2;
+  ground.pickMode = 2;
+  const m = ground.mesh;
+  for (let i = 1; i < m.positions.length; i += 3) m.positions[i] = Math.sin(m.positions[i - 1] * 9) * 0.05;
+  m.version++;
+  for (let i = 0; i < 50; i++)
+  {
+    const b = world.createMesh(createCube());
+    b.setPosition((i % 10) * 8 - 40, 1, Math.floor(i / 10) * 8 - 20, false);
+    b.collisionType = 3;
+    b.pickMode = 3;
+  }
+  const walkers = [];
+  for (let i = 0; i < 100; i++)
+  {
+    const p = world.createEntity('pivot');
+    p.radiusX = 0.4;
+    p.radiusY = 0.8;
+    p.collisionType = 1;
+    p.pickMode = 1;
+    p.setPosition((i % 10) * 7 - 32, 2, Math.floor(i / 10) * 7 - 32, false);
+    walkers.push(p);
+  }
+  collisions.resetAll();
+  return { world, collisions, walkers };
+}
+
+{
+  const { collisions, walkers } = busyScene();
+  const steps = 300;
+  const start = performance.now();
+  for (let s = 0; s < steps; s++)
+  {
+    for (const p of walkers) p.translate(Math.sin(s * 0.05 + p.id) * 0.15, -0.1, Math.cos(s * 0.05 + p.id) * 0.15, true);
+    collisions.update();
+  }
+  const ms = (performance.now() - start) / steps;
+  console.log(`${'collisions: 100 walkers, busy scene'.padEnd(36)} ${ms.toFixed(2).padStart(7)} ms per step`);
+}
+
+{
+  const { world } = busyScene();
+  const rays = 20000;
+  let hits = 0;
+  const start = performance.now();
+  for (let i = 0; i < rays; i++)
+  {
+    const a = i * 0.618;
+    const origin = new Vec3(Math.cos(a) * 30, 20, Math.sin(a) * 30);
+    const line = new Vec3(-Math.cos(a) * 60, -25, -Math.sin(a) * 60);
+    if (pickLine(world, origin, line, 0).entity) hits++;
+  }
+  const ms = performance.now() - start;
+  console.log(`${'picking: rays across the busy scene'.padEnd(36)} ${(ms / rays * 1000).toFixed(1).padStart(7)} us per ray (${hits} of ${rays} hit)`);
 }

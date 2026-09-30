@@ -96,33 +96,32 @@ export function shapeBounds(e, mode)
 }
 
 // Does the segment origin + s * line (0 <= s <= limit) come within `pad`
-// of the box? A cheap first test before the exact shape.
+// of the box? A cheap first test before the exact shape; it runs for every
+// pair of mover and target, so it allocates nothing.
 export function segmentNearBox(ox, oy, oz, lx, ly, lz, box, pad, limit)
 {
-  let t0 = 0;
-  let t1 = limit;
-  const o = [ox, oy, oz];
-  const d = [lx, ly, lz];
-  for (let a = 0; a < 3; a++)
+  span[0] = 0;
+  span[1] = limit;
+  return slabNear(ox, lx, box.min[0] - pad, box.max[0] + pad) &&
+    slabNear(oy, ly, box.min[1] - pad, box.max[1] + pad) &&
+    slabNear(oz, lz, box.min[2] - pad, box.max[2] + pad);
+}
+
+// The part of the segment inside the slabs tested so far.
+const span = new Float64Array(2);
+
+function slabNear(o, d, lo, hi)
+{
+  if (Math.abs(d) < 1e-15) return o >= lo && o <= hi;
+  let n = (lo - o) / d;
+  let f = (hi - o) / d;
+  if (n > f)
   {
-    const lo = box.min[a] - pad;
-    const hi = box.max[a] + pad;
-    if (Math.abs(d[a]) < 1e-15)
-    {
-      if (o[a] < lo || o[a] > hi) return false;
-      continue;
-    }
-    let n = (lo - o[a]) / d[a];
-    let f = (hi - o[a]) / d[a];
-    if (n > f)
-    {
-      const t = n;
-      n = f;
-      f = t;
-    }
-    t0 = Math.max(t0, n);
-    t1 = Math.min(t1, f);
-    if (t0 > t1) return false;
+    const t = n;
+    n = f;
+    f = t;
   }
-  return true;
+  if (n > span[0]) span[0] = n;
+  if (f < span[1]) span[1] = f;
+  return span[0] <= span[1];
 }

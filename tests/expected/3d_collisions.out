@@ -1,0 +1,11 @@
+types: ball 1 floor 2
+bullet after one step: x 4.75, hit 1 thing: the wall 1
+  contact x 5.0 normal -1.0,0.0,0.0
+ball resting: y 0.5, collided with scenery: 1, normal y 1.0
+slider along the wall: x 4.5 z 3.0
+a stopped by b: x -3.0 (distance 3.0), b collided with nothing: 0
+on the ramp: slide moved x by -2.41506, no-downhill by 0.0
+hopper slid around the crate: x 3.15425 z -41.9429
+ball below the floor after the jump: y -5.0
+after ClearCollisions the bullet passes the wall: x 24.75
+Runtime error (3d_collisions.pb, line 98): Entity 4 has 0 collisions this step, not number 1
