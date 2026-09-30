@@ -10,11 +10,12 @@
 // runtime error with a clear message, never a crash.
 
 import { Entity } from './scene/entity.js';
-import { Texture } from './scene/texture.js';
+import { byte, unit, tidy, handleHelpers } from './handles.js';
 import {
   createCube, createSphere, createCylinder, createCone, createPlane, createTorus
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
+import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -113,7 +114,9 @@ export const ENGINE_COMMANDS = [
   'Rect(x, y, width, height, solid = 1)',
   'Oval(x, y, width, height, solid = 1)',
   'Line(x1, y1, x2, y2)',
-  'Plot(x, y)'
+  'Plot(x, y)',
+
+  ...COLLIDE_COMMANDS
 ];
 
 export const ENGINE_CONSTANTS = {
@@ -125,47 +128,16 @@ export const ENGINE_CONSTANTS = {
   LIGHT_POINT: 2,
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
-  FX_TWOSIDED: 16
+  FX_TWOSIDED: 16,
+  ...COLLIDE_CONSTANTS
 };
 
-const byte = (v) => Math.max(0, Math.min(255, v | 0));
-
-// Positions and angles read back by a program are rounded to 9 decimals,
-// so a cube turned by 90 degrees reports x = 0, not 2.22045e-16.
-const tidy = (v) =>
-{
-  const r = Math.round(v * 1e9) / 1e9;
-  return r === 0 ? 0 : r;
-};
-const unit = (v) => byte(v) / 255;
 
 export function createEngineCommands(engine)
 {
   const world = engine.world;
 
-  const entity = (handle) =>
-  {
-    const e = world.handles.get(handle);
-    if (e instanceof Entity) return e;
-    if (handle === 0) throw runtimeError('Entity handle is 0 (no entity)');
-    if (e instanceof Texture) throw runtimeError(`Handle ${handle} is a texture, not an entity`);
-    throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
-  };
-  const parentOf = (handle) => (handle === 0 ? null : entity(handle));
-  const texture = (handle) =>
-  {
-    const t = world.handles.get(handle);
-    if (t instanceof Texture) return t;
-    if (handle === 0) throw runtimeError('Texture handle is 0 (no texture)');
-    if (t instanceof Entity) throw runtimeError(`Handle ${handle} is an entity, not a texture`);
-    throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
-  };
-  const ofKind = (handle, kind, what) =>
-  {
-    const e = entity(handle);
-    if (e.kind !== kind) throw runtimeError(`Entity ${handle} is not a ${what}`);
-    return e;
-  };
+  const { entity, parentOf, texture, ofKind } = handleHelpers(world);
   const material = (handle) =>
   {
     const e = entity(handle);
@@ -181,6 +153,8 @@ export function createEngineCommands(engine)
   const step = () => engine.input.step;
 
   return {
+    ...createCollideCommands(engine),
+
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
     {

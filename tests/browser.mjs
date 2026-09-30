@@ -9,6 +9,7 @@
 //   - the same programs give the same entity transforms in the browser
 //     (three.js backend) as in Node (null backend), and three.js draws each
 //     object with our world matrix mirrored into its coordinate system;
+//   - CameraPick and CameraProject agree with the pixels three.js drew;
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
@@ -289,6 +290,81 @@ try
     }
     facts.swap = worst;
     for (const w of worst) console.log(`      ${w}`);
+  });
+
+  await check('CameraPick names the entity three.js drew at each pixel; CameraProject lands on it', async () =>
+  {
+    // An 800 x 600 page shows the 800 x 600 program at one pixel per pixel.
+    const page = await openPage(browser, `${base}/web/player.html?src=../tests/browser/picking.pb`, { width: 800, height: 600 });
+    await page.waitForFunction(() => window.polybasicPlayer.state.output.includes('done'), null, { timeout: 20000 });
+    const lines = (await page.evaluate(() => window.polybasicPlayer.state.output)).trim().split('\n');
+    const pixels = await page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayer.screen.canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      return { width: copy.width, height: copy.height, data: Array.from(ctx.getImageData(0, 0, copy.width, copy.height).data) };
+    });
+    assert(pixels.width === 800 && pixels.height === 600, `canvas is ${pixels.width} x ${pixels.height}`);
+    // Handles in picking.pb: the camera is 1, the shapes 2 to 6.
+    const colours = { 0: [0, 0, 0], 2: [255, 0, 0], 3: [0, 255, 0], 4: [0, 0, 255], 5: [255, 255, 0], 6: [255, 0, 255] };
+    const classAt = (x, y) =>
+    {
+      const i = (y * pixels.width + x) * 4;
+      const c = pixels.data.slice(i, i + 3);
+      for (const [id, rgb] of Object.entries(colours))
+      {
+        if (Math.abs(c[0] - rgb[0]) + Math.abs(c[1] - rgb[1]) + Math.abs(c[2] - rgb[2]) < 30) return Number(id);
+      }
+      return -1;   // a blend at an edge
+    };
+    const nearby = (x, y, id) =>
+    {
+      for (let dy = -2; dy <= 2; dy++)
+      {
+        for (let dx = -2; dx <= 2; dx++)
+        {
+          if (classAt(x + dx, y + dy) === id) return true;
+        }
+      }
+      return false;
+    };
+    let samples = 0;
+    let exact = 0;
+    const wrong = [];
+    for (const line of lines)
+    {
+      const m = /^(\d+) (\d+) (\d+)$/.exec(line);
+      if (!m) continue;
+      const [x, y, id] = [Number(m[1]), Number(m[2]), Number(m[3])];
+      samples++;
+      const drawn = classAt(x, y);
+      if (drawn === id) exact++;
+      // Anti-aliased edges may differ by a pixel or two, nothing more.
+      else if (!nearby(x, y, id)) wrong.push(`(${x}, ${y}): picked ${id}, drawn ${drawn}`);
+    }
+    assert(samples > 3000, `only ${samples} samples`);
+    assert(wrong.length === 0, `${wrong.length} picks disagree with the picture:\n${wrong.slice(0, 10).join('\n')}`);
+    const projections = lines.filter((l) => l.startsWith('project '));
+    const onShape = [];
+    for (const line of projections)
+    {
+      const [, id, px, py] = line.split(' ').map(Number);
+      // The cube, sphere and cylinder centres are on their visible faces.
+      if (id > 4) continue;
+      const drawn = classAt(Math.floor(px), Math.floor(py));
+      assert(drawn === id, `entity ${id} projects to (${px}, ${py}) where ${drawn} is drawn`);
+      onShape.push(id);
+    }
+    assert(onShape.length === 3, `projections checked: ${onShape}`);
+    facts.picking = `${samples} samples, ${exact} exact, ${samples - exact} on anti-aliased edges, 0 wrong`;
+    console.log(`      ${facts.picking}`);
+    await page.screenshot({ path: join(SHOTS, 'picking.png') });
+    noConsoleErrors(page);
+    await page.close();
   });
 
   // ── Playground ──────────────────────────────────────────────────────

@@ -1,0 +1,21 @@
+nothing pickable yet: 0
+centre pick: 1 at 0.0,0.0,4.0
+normal 0.0,0.0,-1.0 distance 4.0 time 0.004
+a corner of the screen misses: 0, picked entity now 0
+line to the sphere: 1 at z 8.5 normal z -1.0
+line across the turned box: 1 at x -1.41421
+a longer box reaches further along its own z: 1
+from below: 1 at y -2.0 normal y -1.0
+ball dropped on the floor: 1 touches y -2.0 time 0.65
+ball dropped on the cube: 1 touches y 1.0 time 0.35
+eye looking at the cube: 1 at z 4.0
+eye turned away: 0
+cube between a and b: visible 0
+cube no longer an obscurer: visible 1, still pickable 1
+cube hidden: centre pick is the box 1
+after freeing the picked cube: PickedEntity 0
+centre projects to 400.0,300.0 depth 5.0
+(1, 1, 5) projects to 503.923,196.077
+behind the camera: 0 0.0
+with a viewport in the top-right quarter: 600.0,150.0
+Runtime error (3d_picking.pb, line 75): EntityPickMode mode must be PICK_NONE, PICK_SPHERE, PICK_POLYGON or PICK_BOX (0 to 3), not 7
