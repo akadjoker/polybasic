@@ -12,7 +12,7 @@
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
-// Screenshots go to docs/screenshots/.
+// Screenshots go to tests/output/.
 
 import http from 'node:http';
 import { readFile, stat, mkdir } from 'node:fs/promises';
@@ -23,7 +23,9 @@ import { chromium } from 'playwright';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../src/index.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
-const SHOTS = join(ROOT, 'docs', 'screenshots');
+// Screenshots of every run go to tests/output (not committed); the ones in
+// docs/screenshots are copies picked from there.
+const SHOTS = join(ROOT, 'tests', 'output');
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
