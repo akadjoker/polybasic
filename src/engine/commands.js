@@ -16,6 +16,7 @@ import {
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
 import { createSpriteQuad, newSprite, SPRITE_FREE, SPRITE_UPRIGHT2 } from './scene/sprite.js';
+import { Trail, MAX_BLADE } from './scene/trail.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
@@ -52,6 +53,17 @@ export const ENGINE_COMMANDS = [
   'CreateCone%(segments = 16, solid = 1, parent = 0)',
   'CreatePlane%(divisions = 1, parent = 0)',
   'CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)',
+
+  // Ribbon trails
+  'CreateTrail%(first, second)',
+  'TrailPoint(trail, entity)',
+  'TrailLife(trail, seconds#)',
+  'TrailStep(trail, distance#)',
+  'TrailSmooth(trail, pieces)',
+  'TrailColor(trail, r, g, b, alpha# = 1)',
+  'TrailFadeColor(trail, r, g, b, alpha# = 0)',
+  'TrailEmit(trail, on)',
+  'ClearTrail(trail)',
 
   // Sprites
   'CreateSprite%(parent = 0)',
@@ -216,6 +228,12 @@ export function createEngineCommands(engine)
     if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
     return e.sprite;
   };
+  const trail = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.trail) throw runtimeError(`Entity ${handle} is not a trail (CreateTrail makes trails)`);
+    return e.trail;
+  };
   const style = engine.style;
   const step = () => engine.input.step;
 
@@ -304,6 +322,71 @@ export function createEngineCommands(engine)
       shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) =>
       shape(engine.sharedMesh('plane' + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createtrail(first, second)
+    {
+      const blade = [entity(first), entity(second)];
+      if (blade[0] === blade[1]) throw runtimeError('CreateTrail needs two different entities for the ends of its blade');
+      engine.autoGraphics();
+      const e = world.createEntity('mesh');
+      const t = new Trail(e, blade);
+      e.mesh = t.mesh;
+      e.trail = t;
+      e.castShadow = false;
+      e.receiveShadow = false;
+      const m = e.material;
+      m.fullbright = true;
+      m.twoSided = true;
+      m.vertexColors = true;
+      m.vertexAlpha = true;
+      m.blend = 'add';
+      m.changed();
+      engine.trails.push(t);
+      return e.id;
+    },
+    trailpoint(handle, point)
+    {
+      const t = trail(handle);
+      const e = entity(point);
+      if (t.blade.includes(e)) throw runtimeError(`Entity ${point} is already on trail ${handle}'s blade`);
+      if (t.blade.length >= MAX_BLADE) throw runtimeError(`A trail's blade has at most ${MAX_BLADE} points`);
+      t.blade.push(e);
+      t.clear();
+    },
+    traillife(handle, seconds)
+    {
+      trail(handle).life = Math.max(0.01, seconds);
+    },
+    trailstep(handle, distance)
+    {
+      trail(handle).step = Math.max(0.001, distance);
+    },
+    trailsmooth(handle, pieces)
+    {
+      trail(handle).smooth = Math.max(1, Math.min(64, pieces));
+    },
+    trailcolor(handle, r, g, b, alpha)
+    {
+      const t = trail(handle);
+      const end = t.end;
+      t.setColors(r, g, b, alpha, r, g, b, 0);
+      if (t.fadeSet) t.end = end;
+    },
+    trailfadecolor(handle, r, g, b, alpha)
+    {
+      const t = trail(handle);
+      const start = t.start;
+      t.setColors(0, 0, 0, 0, r, g, b, alpha);
+      t.start = start;
+      t.fadeSet = true;
+    },
+    trailemit(handle, on)
+    {
+      trail(handle).setEmitting(on !== 0);
+    },
+    cleartrail(handle)
+    {
+      trail(handle).clear();
+    },
     createsprite: (parent) => makeSprite(parent, null),
     loadsprite: (file, flags, parent) => makeSprite(parent, engine.loadTexture(file).setFlags(textureFlags(flags, 'LoadSprite'))),
     rotatesprite(handle, angle)

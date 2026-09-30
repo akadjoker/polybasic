@@ -1490,6 +1490,65 @@ End Function
     await page.close();
   });
 
+  await check('trails: a swung blade leaves a glowing ribbon that fades away', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    await project(page, (x) => window.polybasicPlayground.setText(x), `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+PositionEntity cam, 0, 0, -6
+Global hilt, tip, t
+hilt = CreatePivot()
+tip = CreatePivot(hilt)
+PositionEntity tip, 0, 2.5, 0
+base = CreatePivot(hilt)
+PositionEntity base, 0, 1, 0
+t = CreateTrail(base, tip)
+TrailLife t, 0.4
+TrailColor t, 60, 200, 255
+Function Update()
+  TurnEntity hilt, 0, 0, 8
+  If FrameCount() = 60 Then Print "swinging"
+  If FrameCount() = 90
+    TrailEmit t, False
+    Print "stopped"
+  EndIf
+End Function
+`);
+    const cyan = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+      let n = 0;
+      let bright = 0;
+      for (let i = 0; i < d.length; i += 4)
+      {
+        if (d[i + 2] > 40 && d[i + 2] > d[i]) n++;
+        if (d[i + 2] > 200 && d[i + 1] > 150) bright++;
+      }
+      return { lit: n / (d.length / 4), bright: bright / (d.length / 4) };
+    });
+    await project(page, () => window.polybasicPlayground.run());
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('swinging'), null, { timeout: 10000 });
+    const swinging = await cyan();
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'trail.png') });
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('stopped'), null, { timeout: 10000 });
+    await page.waitForTimeout(800);
+    const faded = await cyan();
+    assert(swinging.lit > 0.02 && swinging.bright > 0.002, `no ribbon: ${JSON.stringify(swinging)}`);
+    assert(faded.lit < 0.0005, `the ribbon did not fade: ${JSON.stringify(faded)}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ribbon covers ${(swinging.lit * 100).toFixed(1)}% of the screen while swinging, ${(faded.lit * 100).toFixed(2)}% after`);
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

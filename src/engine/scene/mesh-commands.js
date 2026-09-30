@@ -112,6 +112,7 @@ export function createMeshCommands(engine)
     const e = entity(handle);
     if (e.kind !== 'mesh' || !e.mesh) throw runtimeError(`Entity ${handle} is not a mesh`);
     if (e.sprite) throw runtimeError(`Entity ${handle} is a sprite: its square cannot be changed`);
+    if (e.trail) throw runtimeError(`Entity ${handle} is a trail: its mesh is made anew every step`);
     if (!(e.mesh instanceof EditableMesh))
     {
       e.mesh = EditableMesh.from(e.mesh);

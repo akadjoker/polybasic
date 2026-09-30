@@ -11,6 +11,7 @@ what the tests use).
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
+- [Ribbon trails](#ribbon-trails)
 - [Building meshes](#building-meshes)
 - [Looks](#looks)
 - [Textures](#textures)
@@ -120,6 +121,33 @@ and cast no shadow, as in Blitz3D; `EntityFX` changes both.
 For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
 which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
+
+## Ribbon trails
+
+A trail is the ribbon a moving blade leaves behind it: a sword's swing, a
+comet's tail, a jet's wake. The blade is two (or more) entities, often
+pivots on the thing that moves; after every step the ribbon grows where
+they went, smoothly between the points it samples, and fades with age.
+
+```
+hilt = CreatePivot(sword)
+point = CreatePivot(sword)
+PositionEntity point, 0, 2, 0
+trail = CreateTrail(hilt, point)
+TrailColor trail, 80, 200, 255
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateTrail%(first, second)` | A trail between two entities (the blade's two ends). It glows (adds to what is behind), lit by nothing and seen from both sides; `EntityTexture` puts a texture along it (U across the blade, V along the way it went), `EntityBlend` changes how it mixes. |
+| `TrailPoint trail, entity` | Adds a point to the blade (up to 8 in all), for a curved blade: the ribbon becomes a sheet through all of them. |
+| `TrailLife trail, seconds#` | How long the ribbon lasts behind the blade (default 0.35). |
+| `TrailStep trail, distance#` | How far the fastest point of the blade moves between samples (default 0.08 units): smaller follows fast turns more closely. |
+| `TrailSmooth trail, pieces` | Straight pieces between two samples along the curve (default 12). |
+| `TrailColor trail, r, g, b, alpha# = 1` | The colour at the head. |
+| `TrailFadeColor trail, r, g, b, alpha# = 0` | The colour it fades to (default: the head's colour, fully faded). |
+| `TrailEmit trail, on` | Stops (or starts again) growing; what is there fades away. |
+| `ClearTrail trail` | Removes the ribbon at once. |
 
 ## Building meshes
 

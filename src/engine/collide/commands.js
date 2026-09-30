@@ -93,7 +93,7 @@ export function createCollideCommands(engine)
       const reach = size;
       targets = world.entities.filter((e) =>
       {
-        if (!e.mesh || e.sprite || e.decal || !e.shown) return false;
+        if (!e.mesh || e.sprite || e.decal || e.trail || !e.shown) return false;
         const b = e.worldBounds();
         return b && !b.isEmpty() && point.x > b.min.x - reach && point.x < b.max.x + reach && point.y > b.min.y - reach && point.y < b.max.y + reach && point.z > b.min.z - reach && point.z < b.max.z + reach;
       });
