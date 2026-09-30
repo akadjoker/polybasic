@@ -5882,14 +5882,8 @@ var RapierBackend = class _RapierBackend extends PhysicsBackend {
     const { collider } = this.bodies.get(id);
     const out = [];
     this.world.contactPairsWith(collider, (other) => {
-      let touching = false;
-      this.world.contactPair(collider, other, (manifold) => {
-        for (let i2 = 0; i2 < manifold.numContacts() && !touching; i2++) {
-          if (manifold.contactDist(i2) <= TOUCHING) touching = true;
-        }
-      });
       const otherId = this.byCollider.get(other.handle);
-      if (touching && otherId !== void 0) out.push(otherId);
+      if (otherId !== void 0 && collider.contactCollider(other, TOUCHING)) out.push(otherId);
     });
     return out.sort((a2, b2) => a2 - b2);
   }
