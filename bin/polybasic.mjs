@@ -12,7 +12,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { compile, CompileError, loadProgram, runProgram, NodeHost } from '../src/index.js';
+import { compile, CompileError, loadProgram, runProgram, NodeHost, Engine } from '../src/index.js';
+import { nodeEngineOptions } from '../src/node.js';
 
 
 const USAGE = `Usage:
@@ -51,7 +52,7 @@ function main(argv)
   };
   if (command === 'run' && /\.m?js$/i.test(file))
   {
-    return import(pathToFileURL(resolve(file)).href).then((module) => run(module, runOptions));
+    return import(pathToFileURL(resolve(file)).href).then((module) => run(module, file, runOptions));
   }
 
   let result;
@@ -92,19 +93,20 @@ function main(argv)
       return 0;
     }
     case 'run':
-      return loadProgram(result.js).then((module) => run(module, runOptions));
+      return loadProgram(result.js).then((module) => run(module, file, runOptions));
     default:
       process.stderr.write(`Unknown command '${command}'\n${USAGE}`);
       return 2;
   }
 }
 
-async function run(module, { maxUpdates, fakeTime })
+async function run(module, file, { maxUpdates, fakeTime })
 {
   const host = new NodeHost({ fakeTime });
   const controller = new AbortController();
   process.once('SIGINT', () => controller.abort());
-  const result = await runProgram(module, host, { maxUpdates, signal: controller.signal });
+  const engine = new Engine(nodeEngineOptions(file));
+  const result = await runProgram(module, host, { maxUpdates, signal: controller.signal, engine });
   return result.status === 'error' ? 1 : 0;
 }
 

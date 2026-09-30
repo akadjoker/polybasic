@@ -1893,6 +1893,8 @@ var Generator = class {
     js += `export const $map = { files: ${JSON.stringify(files)}, lines: ${JSON.stringify(lineMap)}`;
     js += files.length > 1 ? `, fileOf: ${JSON.stringify(fileMap)} };
 ` : " };\n";
+    js += `export const $uses = ${JSON.stringify([...this.commands.keys()].sort())};
+`;
     return js;
   }
   // The host calls Update and Draw with no arguments; parameters with
@@ -2696,10 +2698,11 @@ async function loadProgram(js) {
   const url = "data:text/javascript;charset=utf-8," + encodeURIComponent(js);
   return import(url);
 }
-function runProgram(module, host, options = {}) {
+async function runProgram(module, host, options = {}) {
   const rt = createRuntime(host, options);
   const engine = options.engine || null;
   const result = { status: "finished", updates: 0 };
+  const aborted = () => Boolean(options.signal && options.signal.aborted);
   const fail2 = (e) => {
     if (e instanceof EndSignal) {
       result.status = "ended";
@@ -2710,12 +2713,30 @@ function runProgram(module, host, options = {}) {
     host.error(formatError(result.error));
     return result;
   };
+  const wait = async (promise) => {
+    if (options.signal) {
+      const signal = options.signal;
+      await Promise.race([promise, new Promise((resolve) => {
+        if (signal.aborted) resolve();
+        else signal.addEventListener("abort", resolve, { once: true });
+      })]);
+    } else await promise;
+    if (aborted()) {
+      result.status = "stopped";
+      return false;
+    }
+    return true;
+  };
   let program;
   try {
+    const preparing = engine && engine.prepare ? engine.prepare(module.$uses || []) : null;
+    if (preparing && !await wait(preparing)) return result;
     program = module.create(rt);
     program.main();
+    const loading = engine && engine.whenReady ? engine.whenReady() : null;
+    if (loading && !await wait(loading)) return result;
   } catch (e) {
-    return Promise.resolve(fail2(e));
+    return fail2(e);
   }
   if (!program.update && !program.draw) {
     if (engine && engine.graphicsSet) {
@@ -2724,10 +2745,10 @@ function runProgram(module, host, options = {}) {
         engine.beginDraw();
         engine.endDraw();
       } catch (e) {
-        return Promise.resolve(fail2(e));
+        return fail2(e);
       }
     }
-    return Promise.resolve(result);
+    return result;
   }
   return new Promise((resolve) => {
     let last = null;
@@ -2759,6 +2780,7 @@ function runProgram(module, host, options = {}) {
             result.updates++;
             program.update();
           }
+          if (engine && engine.endStep) engine.endStep();
           if (options.maxUpdates && result.updates >= options.maxUpdates) break;
         }
         if (n === MAX_UPDATES_PER_FRAME) pending = 0;
@@ -3330,11 +3352,17 @@ var Entity = class {
     this.order = 0;
     this.alive = true;
     this.mesh = null;
-    this.material = null;
+    this.materials = [];
     this.camera = null;
     this.light = null;
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
+  }
+  get material() {
+    return this.materials.length ? this.materials[0] : null;
+  }
+  set material(m) {
+    this.materials = m ? [m] : [];
   }
   // ---------------------------------------------------------- matrices
   // Marks this entity and everything below it as needing a new world
@@ -3602,7 +3630,7 @@ var World = class {
     e.visible = src.visible;
     e.order = src.order;
     e.mesh = src.mesh;
-    e.material = src.material ? src.material.clone() : null;
+    e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     if (parent) e.setParent(parent, false);
@@ -3623,7 +3651,7 @@ var World = class {
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === "mesh") items.push({ id: e.id, order: e.order, world, mesh: e.mesh, material: e.material });
+      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -3688,8 +3716,10 @@ var NullBackend = class extends RenderBackend {
     this.frames++;
     for (const item of frame.items) {
       if (this.meshes.get(item.mesh.id) !== item.mesh.version) this.meshes.set(item.mesh.id, item.mesh.version);
-      const t = item.material.texture;
-      if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
+      for (const m of item.materials) {
+        const t = m.texture;
+        if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
+      }
     }
     for (const t of frame.freedTextures) this.textures.delete(t.id);
     this.lastFrame = {
@@ -4532,7 +4562,12 @@ var Engine = class {
   //   overlay    the 2D layer (default: NullOverlay)
   //   input      an Input (default: a fresh one, fed by nobody)
   //   loadImage  (url) => Promise<image>, used by LoadTexture
-  //   baseUrl    LoadTexture paths are relative to this (the .pb's URL)
+  //   loadFile   (url) => Promise<ArrayBuffer | Uint8Array>, used by
+  //              LoadMesh (and, without loadImage, to check that a texture
+  //              file exists)
+  //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
+  //              inside a model file
+  //   baseUrl    file paths are relative to this (the .pb's URL)
   //   onResize   (width, height) => void, called by Graphics3D so the
   //              platform can lay out its canvases
   constructor(options = {}) {
@@ -4541,6 +4576,9 @@ var Engine = class {
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
     this.loadImage = options.loadImage || null;
+    this.loadFile = options.loadFile || null;
+    this.decodeImage = options.decodeImage || null;
+    this.pending = /* @__PURE__ */ new Set();
     this.baseUrl = options.baseUrl || "";
     this.onResize = options.onResize || ((w, h) => this.backend.resize(w, h, 1));
     this.width = DEFAULT_WIDTH;
@@ -4585,33 +4623,55 @@ var Engine = class {
     }
     return mesh;
   }
+  // Keeps track of a load in progress, so whenReady can wait for it.
+  track(promise) {
+    const p = Promise.resolve(promise).catch(() => {
+    }).finally(() => this.pending.delete(p));
+    this.pending.add(p);
+    return promise;
+  }
   // Returns the texture at once; its image arrives later. Until then the
   // entities using it are drawn with their plain colour.
   loadTexture(file) {
     const t = this.world.createTexture(0, 0);
     t.url = resolveUrl(this.baseUrl, file);
-    if (!this.loadImage) {
-      Promise.resolve().then(() => {
-        t.loaded = true;
-        t.version++;
-      });
-      return t;
-    }
-    this.loadImage(t.url).then((image) => {
-      t.image = image;
-      t.width = image.width;
-      t.height = image.height;
+    const done = (image) => {
+      if (image) {
+        t.image = image;
+        t.width = image.width;
+        t.height = image.height;
+      }
       t.loaded = true;
       t.version++;
-    }, () => {
+    };
+    const failed = () => {
       t.failed = true;
       this.warn(`LoadTexture: could not load "${file}"`);
-    });
+    };
+    if (this.loadImage) this.track(this.loadImage(t.url).then(done, failed));
+    else if (this.loadFile) this.track(this.loadFile(t.url).then(() => done(null), failed));
+    else this.track(Promise.resolve().then(() => done(null)));
     return t;
   }
   // ----------------------------------------------------- runner hooks
+  // Called before main with the commands the program uses. Returns a
+  // promise when something must be loaded first, or null.
+  prepare(uses) {
+    return null;
+  }
+  // After main: a promise that settles once every file started so far has
+  // arrived (or failed), or null when nothing is loading. Loads can start
+  // more loads (a model's textures), so it waits until the set is empty.
+  whenReady() {
+    if (this.pending.size === 0) return null;
+    const drain = () => this.pending.size ? Promise.all([...this.pending]).then(drain) : void 0;
+    return drain();
+  }
   beginStep() {
     this.input.sample();
+  }
+  // After each Update: the world moves on by one step.
+  endStep() {
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
@@ -31995,7 +32055,8 @@ var ThreeBackend = class extends RenderBackend {
   syncItem(item) {
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
-    const material = this.material(item.material);
+    const materials = item.materials.map((m) => this.material(m));
+    const material = materials.length === 1 ? materials[0] : materials;
     if (!obj) {
       obj = new Mesh(geometry, material);
       obj.matrixAutoUpdate = false;
@@ -32030,7 +32091,7 @@ var ThreeBackend = class extends RenderBackend {
     g.setAttribute("normal", new BufferAttribute(normals, 3));
     g.setAttribute("uv", new BufferAttribute(Float32Array.from(mesh.uvs), 2));
     g.setIndex(new BufferAttribute(indices, 1));
-    for (const s of mesh.submeshes) g.addGroup(s.start, s.count, 0);
+    for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     g.computeBoundingSphere();
     this.geometries.set(mesh.id, { geometry: g, version: mesh.version });
     return g;
@@ -32283,6 +32344,16 @@ function createScreen(container) {
     img.onerror = () => reject(new Error(`Cannot load ${url}`));
     img.src = url;
   });
+  const loadFile = async (url) => {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`Cannot load ${url} (${response.status})`);
+    return response.arrayBuffer();
+  };
+  const decodeImage = (bytes, mimeType) => createImageBitmap(new Blob([bytes], { type: mimeType }), {
+    imageOrientation: "none",
+    premultiplyAlpha: "none",
+    colorSpaceConversion: "none"
+  });
   return {
     element: box,
     canvas: gl,
@@ -32317,6 +32388,8 @@ function createScreen(container) {
         overlay,
         input,
         loadImage,
+        loadFile,
+        decodeImage,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) => {
           width = w;

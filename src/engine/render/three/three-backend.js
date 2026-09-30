@@ -127,7 +127,10 @@ export class ThreeBackend extends RenderBackend
   {
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
-    const material = this.material(item.material);
+    // One three.js material per submesh group; a single one when all the
+    // submeshes share it (the built-in shapes).
+    const materials = item.materials.map((m) => this.material(m));
+    const material = materials.length === 1 ? materials[0] : materials;
     if (!obj)
     {
       obj = new THREE.Mesh(geometry, material);
@@ -168,7 +171,7 @@ export class ThreeBackend extends RenderBackend
     g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(Float32Array.from(mesh.uvs), 2));
     g.setIndex(new THREE.BufferAttribute(indices, 1));
-    for (const s of mesh.submeshes) g.addGroup(s.start, s.count, 0);
+    for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     g.computeBoundingSphere();
     this.geometries.set(mesh.id, { geometry: g, version: mesh.version });
     return g;

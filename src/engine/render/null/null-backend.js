@@ -44,8 +44,11 @@ export class NullBackend extends RenderBackend
     for (const item of frame.items)
     {
       if (this.meshes.get(item.mesh.id) !== item.mesh.version) this.meshes.set(item.mesh.id, item.mesh.version);
-      const t = item.material.texture;
-      if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
+      for (const m of item.materials)
+      {
+        const t = m.texture;
+        if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
+      }
     }
     for (const t of frame.freedTextures) this.textures.delete(t.id);
     // Keep a copy: the matrices in the frame are live and change later.

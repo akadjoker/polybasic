@@ -1,7 +1,8 @@
 ; Textures and materials on the headless engine.
-Global tex, loaded
+Global tex, missing, loaded
 cube = CreateCube()
-tex = LoadTexture("assets/none.png")
+tex = LoadTexture("assets/tile.png")
+missing = LoadTexture("assets/none.png")
 Print "handle " + tex + ", loaded right away: " + TextureLoaded(tex)
 checker = CreateCheckerTexture(64, 8, 255, 0, 0)
 TexturePixel checker, 0, 0, 0, 255, 0
@@ -15,10 +16,11 @@ EntityTexture cube, 0
 Print "constants " + FX_FULLBRIGHT + " " + FX_FLAT + " " + FX_TWOSIDED + " " + LIGHT_POINT + " " + KEY_SPACE + " " + KEY_Z
 
 Function Update()
-  ; LoadTexture never blocks: the image shows up a frame or so later.
+  ; LoadTexture never blocks, but files started in the main body are in
+  ; before the first Update. A missing file is reported and never loads.
   If TextureLoaded(tex) And Not loaded
     loaded = 1
-    Print "loaded by frame " + FrameCount()
+    Print "loaded by frame " + FrameCount() + ", missing one loaded: " + TextureLoaded(missing)
   EndIf
   If FrameCount() = 3 Then End
 End Function

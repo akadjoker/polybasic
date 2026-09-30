@@ -12,6 +12,7 @@
 //     return { main: $main, update: fn_update, draw: null };
 //   }
 //   export const $map = { ... };   // JS line -> .pb line, for error reports
+//   export const $uses = [...];    // the commands the program calls
 //
 // Everything is plain synchronous JavaScript: the host owns the frame loop
 // and calls update/draw, so no statement ever has to wait. Ints stay 32-bit
@@ -137,6 +138,9 @@ class Generator
     js += '\n\n// Maps each line of this file back to the PolyBasic source, for error reports.\n';
     js += `export const $map = { files: ${JSON.stringify(files)}, lines: ${JSON.stringify(lineMap)}`;
     js += files.length > 1 ? `, fileOf: ${JSON.stringify(fileMap)} };\n` : ' };\n';
+    // The runner uses this to get ready before main runs: a program that
+    // calls a physics command waits for the physics engine to load.
+    js += `export const $uses = ${JSON.stringify([...this.commands.keys()].sort())};\n`;
     return js;
   }
 

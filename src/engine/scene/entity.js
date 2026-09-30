@@ -3,8 +3,9 @@
 // matrix that is only recomputed when something above it moved.
 //
 // Pivots, meshes, cameras and lights are all entities; `kind` says which,
-// and the kind-specific settings live in `mesh`/`material`, `camera` or
-// `light`.
+// and the kind-specific settings live in `mesh`/`materials`, `camera` or
+// `light`. A mesh has one material per submesh (built-in shapes have one;
+// a loaded model can have several), and `material` is the first.
 
 import { Vec3 } from '../math/vec3.js';
 import { Quat } from '../math/quat.js';
@@ -28,11 +29,21 @@ export class Entity
     this.order = 0;         // draw order: lower first; cameras render in this order
     this.alive = true;
     this.mesh = null;
-    this.material = null;
+    this.materials = [];
     this.camera = null;
     this.light = null;
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
+  }
+
+  get material()
+  {
+    return this.materials.length ? this.materials[0] : null;
+  }
+
+  set material(m)
+  {
+    this.materials = m ? [m] : [];
   }
 
   // ---------------------------------------------------------- matrices
