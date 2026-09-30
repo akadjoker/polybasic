@@ -5,7 +5,8 @@
 // What is checked:
 //   - the player page (web/player.html) with the three.js backend: the spin
 //     example draws, the cube turns, the frame rate over 10 seconds;
-//   - the game reacts to real key presses, a mouse drag and a touch drag;
+//   - the games react to real key presses, clicks, a mouse drag and a touch
+//     drag;
 //   - the same programs give the same entity transforms in the browser
 //     (three.js backend) as in Node (null backend), and three.js draws each
 //     object with our world matrix mirrored into its coordinate system;
@@ -28,6 +29,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../src/index.js';
 import { nodeEngineOptions } from '../src/node.js';
+import { projectPoint } from '../src/engine/collide/camera.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Screenshots of every run go to tests/output (not committed); the ones in
@@ -549,6 +551,91 @@ try
     facts.reference = `${differ} of ${ours.length / 4} pixels differ from three.js on its own (${(share * 100).toFixed(3)}%)`;
     console.log(`      ${facts.reference}`);
     assert(share < 0.002, facts.reference);
+  });
+
+  await check('the phase 3 examples respond to real input: Coin Hop, Crate Tower, Paint Shapes', async () =>
+  {
+    // Coin Hop: run forward, jump onto the next platform, pick up a coin.
+    let page = await openPage(browser, `${base}/web/player.html?src=../examples/coin-hop.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    await page.waitForTimeout(800);
+    const player = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+      const p = e.worldPosition();
+      return { x: p.x, y: p.y, z: p.z };
+    });
+    const start = await player();
+    await page.keyboard.down('ArrowUp');
+    await page.waitForTimeout(550);
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(900);
+    await page.keyboard.up('ArrowUp');
+    await page.waitForTimeout(600);
+    const after = await player();
+    const coins = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.model && e.visible && e.parent === null && e.model.loaded && e.children.length && e.children[0].name === 'coin').length);
+    assert(after.z > start.z + 2 && after.y > start.y + 0.5, `the player did not run and jump up: ${JSON.stringify(start)} -> ${JSON.stringify(after)}`);
+    facts.coinHop = `player ${start.z.toFixed(2)},${start.y.toFixed(2)} -> ${after.z.toFixed(2)},${after.y.toFixed(2)}, ${coins} coins left`;
+    await page.screenshot({ path: join(SHOTS, 'coin-hop.png') });
+    noConsoleErrors(page);
+    await page.close();
+
+    // Crate Tower: click on the tower a few times.
+    page = await openPage(browser, `${base}/web/player.html?src=../examples/crates.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    await page.waitForTimeout(500);
+    const box = await page.locator('canvas').first().boundingBox();
+    for (let i = 0; i < 3; i++)
+    {
+      await page.mouse.click(box.x + box.width * (0.45 + i * 0.05), box.y + box.height * 0.5);
+      await page.waitForTimeout(700);
+    }
+    await page.waitForTimeout(1500);
+    const moved = await page.evaluate(() =>
+    {
+      let n = 0;
+      for (const e of window.polybasicPlayer.state.engine.world.entities)
+      {
+        if (e.kind !== 'mesh' || !e.materials[0].texture) continue;
+        const p = e.worldPosition();
+        if (p.y < 0.2 || Math.abs(p.z - 1.5) > 0.5) n++;
+      }
+      return n;
+    });
+    assert(moved > 3, `only ${moved} crates moved after three throws`);
+    facts.crates = `${moved} crates knocked by three clicks`;
+    await page.screenshot({ path: join(SHOTS, 'crates.png') });
+    noConsoleErrors(page);
+    await page.close();
+
+    // Paint Shapes: point at the middle shape, click it.
+    page = await openPage(browser, `${base}/web/player.html?src=../examples/paint-shapes.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const shapeBox = await page.locator('canvas').first().boundingBox();
+    // Where the torus is on the screen: the same scene in Node, projected
+    // with the engine's own camera maths.
+    const scene = new Engine(nodeEngineOptions(join(ROOT, 'examples/paint-shapes.pb')));
+    const { js: paintJs } = compile(readFileSync(join(ROOT, 'examples/paint-shapes.pb'), 'utf8'), { file: 'paint-shapes.pb' });
+    await runProgram(await loadProgram(paintJs), new CaptureHost(), { engine: scene, maxUpdates: 1 });
+    const torus = scene.world.entities.find((e) => e.name === 'torus');
+    const target = projectPoint(scene.world.entities.find((e) => e.kind === 'camera'), torus.worldPosition(), 800, 600);
+    // The ring's centre is a hole: aim at its front rim.
+    const rim = projectPoint(scene.world.entities.find((e) => e.kind === 'camera'), torus.worldPosition().add({ x: 0, y: 0, z: -0.55 }), 800, 600);
+    await page.mouse.move(shapeBox.x + rim.x * shapeBox.width / 800, shapeBox.y + rim.y * shapeBox.height / 600);
+    await page.waitForTimeout(300);
+    const before = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.find((e) => e.name === 'torus').materials[0].color.join());
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(400);
+    const colourAfter = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.find((e) => e.name === 'torus').materials[0].color.join());
+    assert(before !== colourAfter, `the torus at ${JSON.stringify(target)} was not painted (${before})`);
+    const overlay = await page.evaluate(`(${canvasStats})(window.polybasicPlayer.screen.overlayCanvas)`);
+    assert(overlay.colours > 3, 'no label on the 2D layer');
+    facts.paint = 'pointed at and painted the torus';
+    await page.screenshot({ path: join(SHOTS, 'paint-shapes.png') });
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${facts.coinHop}; ${facts.crates}; ${facts.paint}`);
   });
 
   // ── Playground ──────────────────────────────────────────────────────
