@@ -268,7 +268,7 @@ export class ThreeBackend extends RenderBackend
     // Built-in shapes go by `alpha` and their texture's flags (TEX_ALPHA
     // blends, TEX_MASKED cuts out); model materials say how alpha is used.
     const flags = tex ? m.texture : null;
-    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1 || (flags !== null && flags.alpha);
+    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1 || m.vertexAlpha || (flags !== null && flags.alpha);
     const cut = m.alphaMode === 'mask' ? m.alphaCutoff : (flags !== null && flags.masked ? 0.5 : 0);
     // EntityBlend: adding (glows, fire) and multiplying (shade, stains) do
     // not hide what is behind, so they do not write depth either.

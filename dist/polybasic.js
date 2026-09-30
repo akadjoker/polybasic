@@ -3532,6 +3532,7 @@ var Material = class _Material {
     this.alphaMode = null;
     this.alphaCutoff = 0.5;
     this.vertexColors = false;
+    this.vertexAlpha = false;
     this.name = "";
   }
   changed() {
@@ -3550,6 +3551,7 @@ var Material = class _Material {
     m.alphaMode = this.alphaMode;
     m.alphaCutoff = this.alphaCutoff;
     m.vertexColors = this.vertexColors;
+    m.vertexAlpha = this.vertexAlpha;
     m.name = this.name;
     return m;
   }
@@ -3634,6 +3636,495 @@ var Texture = class {
   }
 };
 
+// src/engine/math/aabb.js
+var Aabb = class _Aabb {
+  constructor(min = new Vec3(Infinity, Infinity, Infinity), max = new Vec3(-Infinity, -Infinity, -Infinity)) {
+    this.min = min;
+    this.max = max;
+  }
+  isEmpty() {
+    return this.min.x > this.max.x || this.min.y > this.max.y || this.min.z > this.max.z;
+  }
+  makeEmpty() {
+    this.min.set(Infinity, Infinity, Infinity);
+    this.max.set(-Infinity, -Infinity, -Infinity);
+    return this;
+  }
+  expandByPoint(p) {
+    this.min.set(Math.min(this.min.x, p.x), Math.min(this.min.y, p.y), Math.min(this.min.z, p.z));
+    this.max.set(Math.max(this.max.x, p.x), Math.max(this.max.y, p.y), Math.max(this.max.z, p.z));
+    return this;
+  }
+  fromPositions(positions) {
+    this.makeEmpty();
+    const p = new Vec3();
+    for (let i = 0; i < positions.length; i += 3) this.expandByPoint(p.set(positions[i], positions[i + 1], positions[i + 2]));
+    return this;
+  }
+  // The box around this box after transforming it by a matrix (all eight
+  // corners, so rotation grows it as needed).
+  transformed(m) {
+    const out = new _Aabb();
+    if (this.isEmpty()) return out;
+    const p = new Vec3();
+    for (let i = 0; i < 8; i++) {
+      p.set(i & 1 ? this.max.x : this.min.x, i & 2 ? this.max.y : this.min.y, i & 4 ? this.max.z : this.min.z);
+      out.expandByPoint(p.applyMat4(m));
+    }
+    return out;
+  }
+  intersects(b) {
+    return this.min.x <= b.max.x && this.max.x >= b.min.x && this.min.y <= b.max.y && this.max.y >= b.min.y && this.min.z <= b.max.z && this.max.z >= b.min.z;
+  }
+  containsPoint(p) {
+    return p.x >= this.min.x && p.x <= this.max.x && p.y >= this.min.y && p.y <= this.max.y && p.z >= this.min.z && p.z <= this.max.z;
+  }
+  center(out = new Vec3()) {
+    return out.set((this.min.x + this.max.x) / 2, (this.min.y + this.max.y) / 2, (this.min.z + this.max.z) / 2);
+  }
+};
+
+// src/engine/scene/mesh.js
+var nextMeshId = 1;
+var MeshData = class {
+  constructor(positions, normals, uvs, indices) {
+    this.id = nextMeshId++;
+    this.version = 0;
+    this.positions = Float32Array.from(positions);
+    this.normals = Float32Array.from(normals);
+    this.uvs = Float32Array.from(uvs);
+    this.indices = Uint32Array.from(indices);
+    this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
+    this.colors = null;
+    this.bounds = new Aabb().fromPositions(this.positions);
+  }
+  get vertexCount() {
+    return this.positions.length / 3;
+  }
+  get triangleCount() {
+    return this.indices.length / 3;
+  }
+};
+var Builder = class {
+  constructor() {
+    this.p = [];
+    this.n = [];
+    this.uv = [];
+    this.idx = [];
+  }
+  vertex(x, y, z, nx, ny, nz, u, v) {
+    this.p.push(x, y, z);
+    this.n.push(nx, ny, nz);
+    this.uv.push(u, v);
+    return this.p.length / 3 - 1;
+  }
+  triangle(a, b, c) {
+    const p = this.p;
+    const ux = p[b * 3] - p[a * 3];
+    const uy = p[b * 3 + 1] - p[a * 3 + 1];
+    const uz = p[b * 3 + 2] - p[a * 3 + 2];
+    const vx = p[c * 3] - p[a * 3];
+    const vy = p[c * 3 + 1] - p[a * 3 + 1];
+    const vz = p[c * 3 + 2] - p[a * 3 + 2];
+    const cx = uy * vz - uz * vy;
+    const cy = uz * vx - ux * vz;
+    const cz = ux * vy - uy * vx;
+    if (cx === 0 && cy === 0 && cz === 0) return;
+    const n = this.n;
+    const nx = n[a * 3] + n[b * 3] + n[c * 3];
+    const ny = n[a * 3 + 1] + n[b * 3 + 1] + n[c * 3 + 1];
+    const nz = n[a * 3 + 2] + n[b * 3 + 2] + n[c * 3 + 2];
+    if (cx * nx + cy * ny + cz * nz < 0) this.idx.push(a, c, b);
+    else this.idx.push(a, b, c);
+  }
+  quad(a, b, c, d) {
+    this.triangle(a, b, c);
+    this.triangle(a, c, d);
+  }
+  // A grid of (cols + 1) x (rows + 1) vertices from `at(u, v)` (u, v in
+  // 0..1), which returns [x, y, z, nx, ny, nz].
+  grid(cols, rows, at) {
+    const base = this.p.length / 3;
+    for (let j = 0; j <= rows; j++) {
+      for (let i = 0; i <= cols; i++) {
+        const u = i / cols;
+        const v = j / rows;
+        const [x, y, z, nx, ny, nz] = at(u, v);
+        this.vertex(x, y, z, nx, ny, nz, u, v);
+      }
+    }
+    for (let j = 0; j < rows; j++) {
+      for (let i = 0; i < cols; i++) {
+        const a = base + j * (cols + 1) + i;
+        this.quad(a, a + 1, a + cols + 2, a + cols + 1);
+      }
+    }
+  }
+  // A flat disc facing `ny` (+1 up, -1 down) at height y.
+  disc(segments, y, ny, radius = 1) {
+    const center = this.vertex(0, y, 0, 0, ny, 0, 0.5, 0.5);
+    const first = this.p.length / 3;
+    for (let i = 0; i <= segments; i++) {
+      const a = i / segments * Math.PI * 2;
+      const x = Math.cos(a) * radius;
+      const z = Math.sin(a) * radius;
+      this.vertex(x, y, z, 0, ny, 0, 0.5 + x / 2, 0.5 - z / 2);
+    }
+    for (let i = 0; i < segments; i++) this.triangle(center, first + i, first + i + 1);
+  }
+  build() {
+    return new MeshData(this.p, this.n, this.uv, this.idx);
+  }
+};
+function createCube() {
+  const b = new Builder();
+  const faces = [
+    [[0, 0, -1], [1, 0, 0], [0, -1, 0]],
+    // front (towards -Z, facing the default camera)
+    [[0, 0, 1], [-1, 0, 0], [0, -1, 0]],
+    // back
+    [[1, 0, 0], [0, 0, 1], [0, -1, 0]],
+    // right
+    [[-1, 0, 0], [0, 0, -1], [0, -1, 0]],
+    // left
+    [[0, 1, 0], [1, 0, 0], [0, 0, -1]],
+    // top
+    [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
+    // bottom
+  ];
+  for (const [n, r, d] of faces) {
+    const corner = (su, sv) => b.vertex(
+      n[0] + r[0] * su + d[0] * sv,
+      n[1] + r[1] * su + d[1] * sv,
+      n[2] + r[2] * su + d[2] * sv,
+      n[0],
+      n[1],
+      n[2],
+      (su + 1) / 2,
+      (sv + 1) / 2
+    );
+    const a = corner(-1, -1);
+    const c1 = corner(1, -1);
+    const c2 = corner(1, 1);
+    const c3 = corner(-1, 1);
+    b.quad(a, c1, c2, c3);
+  }
+  return b.build();
+}
+function createSphere(segments = 16) {
+  const b = new Builder();
+  const stacks = Math.max(2, segments);
+  const slices = Math.max(3, segments * 2);
+  b.grid(slices, stacks, (u, v) => {
+    const theta = u * Math.PI * 2;
+    const phi = v * Math.PI;
+    const x = Math.sin(phi) * Math.cos(theta);
+    const y = Math.cos(phi);
+    const z = Math.sin(phi) * Math.sin(theta);
+    return [x, y, z, x, y, z];
+  });
+  return b.build();
+}
+function createCylinder(segments = 16, solid = true) {
+  const b = new Builder();
+  const n = Math.max(3, segments);
+  b.grid(n, 1, (u, v) => {
+    const a = u * Math.PI * 2;
+    const x = Math.cos(a);
+    const z = Math.sin(a);
+    return [x, 1 - v * 2, z, x, 0, z];
+  });
+  if (solid) {
+    b.disc(n, 1, 1);
+    b.disc(n, -1, -1);
+  }
+  return b.build();
+}
+function createCone(segments = 16, solid = true) {
+  const b = new Builder();
+  const n = Math.max(3, segments);
+  const k = 1 / Math.sqrt(5);
+  b.grid(n, 1, (u, v) => {
+    const a = u * Math.PI * 2;
+    const x = Math.cos(a);
+    const z = Math.sin(a);
+    return [x * v, 1 - v * 2, z * v, 2 * x * k, k, 2 * z * k];
+  });
+  if (solid) b.disc(n, -1, -1);
+  return b.build();
+}
+function createPlane(divisions = 1) {
+  const b = new Builder();
+  const n = Math.max(1, divisions);
+  b.grid(n, n, (u, v) => [u * 2 - 1, 0, 1 - v * 2, 0, 1, 0]);
+  return b.build();
+}
+function createTorus(segments = 24, thickness = 0.25) {
+  const b = new Builder();
+  const n = Math.max(3, segments);
+  const tube = Math.max(3, Math.round(n / 2));
+  const ring = 1 - thickness;
+  b.grid(n, tube, (u, v) => {
+    const a = u * Math.PI * 2;
+    const t = v * Math.PI * 2;
+    const nx = Math.cos(t) * Math.cos(a);
+    const ny = Math.sin(t);
+    const nz = Math.cos(t) * Math.sin(a);
+    return [Math.cos(a) * ring + nx * thickness, ny * thickness, Math.sin(a) * ring + nz * thickness, nx, ny, nz];
+  });
+  return b.build();
+}
+
+// src/engine/scene/editable.js
+var linear = (c) => {
+  const v = Math.max(0, Math.min(255, c)) / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+var screen = (v) => {
+  const c = v <= 31308e-7 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+  return Math.round(Math.max(0, Math.min(1, c)) * 255);
+};
+var Surface = class {
+  constructor(mesh) {
+    this.handleKind = "a surface";
+    this.handle = 0;
+    this.mesh = mesh;
+    this.positions = [];
+    this.normals = [];
+    this.uvs = [];
+    this.colors = [];
+    this.triangles = [];
+  }
+  get vertexCount() {
+    return this.positions.length / 3;
+  }
+  get triangleCount() {
+    return this.triangles.length / 3;
+  }
+  addVertex(x, y, z, u, v) {
+    this.positions.push(x, y, z);
+    this.normals.push(0, 0, 0);
+    this.uvs.push(u, v);
+    this.colors.push(1, 1, 1, 1);
+    this.mesh.touch();
+    return this.vertexCount - 1;
+  }
+  addTriangle(a, b, c) {
+    this.triangles.push(a, b, c);
+    this.mesh.touch();
+    return this.triangleCount - 1;
+  }
+  setPosition(i, x, y, z) {
+    this.positions[i * 3] = x;
+    this.positions[i * 3 + 1] = y;
+    this.positions[i * 3 + 2] = z;
+    this.mesh.touch();
+  }
+  setNormal(i, x, y, z) {
+    this.normals[i * 3] = x;
+    this.normals[i * 3 + 1] = y;
+    this.normals[i * 3 + 2] = z;
+    this.mesh.touch();
+  }
+  setColor(i, r, g, b, a) {
+    this.colors[i * 4] = linear(r);
+    this.colors[i * 4 + 1] = linear(g);
+    this.colors[i * 4 + 2] = linear(b);
+    this.colors[i * 4 + 3] = Math.max(0, Math.min(1, a));
+    this.mesh.colored = true;
+    this.mesh.touch();
+  }
+  // A vertex colour as 0..255 on screen, or the alpha 0..1 (channel 3).
+  color(i, channel) {
+    const v = this.colors[i * 4 + channel];
+    return channel === 3 ? v : screen(v);
+  }
+  setUv(i, u, v) {
+    this.uvs[i * 2] = u;
+    this.uvs[i * 2 + 1] = v;
+    this.mesh.touch();
+  }
+  clear(vertices, triangles) {
+    if (vertices) {
+      this.positions.length = 0;
+      this.normals.length = 0;
+      this.uvs.length = 0;
+      this.colors.length = 0;
+    }
+    if (triangles) this.triangles.length = 0;
+    this.mesh.touch();
+  }
+  // Smooth normals, as Blitz3D makes them: each vertex gets the average of
+  // the facing of every triangle of the surface that has a corner where it
+  // is (so vertices at the same place share one normal).
+  updateNormals() {
+    const p = this.positions;
+    const sums = /* @__PURE__ */ new Map();
+    const key = (i) => `${p[i * 3]},${p[i * 3 + 1]},${p[i * 3 + 2]}`;
+    const t = this.triangles;
+    for (let k = 0; k < t.length; k += 3) {
+      const [a, b, c] = [t[k], t[k + 1], t[k + 2]];
+      const ux = p[b * 3] - p[a * 3];
+      const uy = p[b * 3 + 1] - p[a * 3 + 1];
+      const uz = p[b * 3 + 2] - p[a * 3 + 2];
+      const vx = p[c * 3] - p[a * 3];
+      const vy = p[c * 3 + 1] - p[a * 3 + 1];
+      const vz = p[c * 3 + 2] - p[a * 3 + 2];
+      let nx = uy * vz - uz * vy;
+      let ny = uz * vx - ux * vz;
+      let nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny, nz);
+      if (l <= 1e-12) continue;
+      nx /= l;
+      ny /= l;
+      nz /= l;
+      for (const v of [a, b, c]) {
+        const s = sums.get(key(v)) || [0, 0, 0];
+        s[0] += nx;
+        s[1] += ny;
+        s[2] += nz;
+        sums.set(key(v), s);
+      }
+    }
+    for (let i = 0; i < this.vertexCount; i++) {
+      const s = sums.get(key(i)) || [0, 0, 0];
+      const l = Math.hypot(s[0], s[1], s[2]) || 1;
+      this.normals[i * 3] = s[0] / l;
+      this.normals[i * 3 + 1] = s[1] / l;
+      this.normals[i * 3 + 2] = s[2] / l;
+    }
+    this.mesh.touch();
+  }
+};
+var EditableMesh = class _EditableMesh extends MeshData {
+  constructor() {
+    super([], [], [], []);
+    this.surfaces = [];
+    this.colored = false;
+    this.dirty = false;
+  }
+  // Makes a mesh a program can change from any MeshData (a built-in shape,
+  // a model part): one surface with its vertices and triangles.
+  static from(data) {
+    const m = new _EditableMesh();
+    const s = new Surface(m);
+    s.positions = Array.from(data.positions);
+    s.normals = Array.from(data.normals);
+    s.uvs = Array.from(data.uvs);
+    s.colors = data.colors ? Array.from(data.colors) : new Array(data.positions.length / 3 * 4).fill(1);
+    s.triangles = Array.from(data.indices);
+    m.colored = !!data.colors;
+    m.surfaces.push(s);
+    m.touch();
+    return m;
+  }
+  touch() {
+    this.dirty = true;
+  }
+  // Rebuilds the arrays from the surfaces, if anything changed. A triangle
+  // with a corner that no longer exists (ClearSurface of the vertices only)
+  // is left out.
+  sync() {
+    if (!this.dirty) return;
+    this.dirty = false;
+    let vertices = 0;
+    let corners = 0;
+    for (const s of this.surfaces) {
+      vertices += s.vertexCount;
+      corners += s.triangles.length;
+    }
+    const positions = new Float32Array(vertices * 3);
+    const normals = new Float32Array(vertices * 3);
+    const uvs = new Float32Array(vertices * 2);
+    const colors = new Float32Array(vertices * 4);
+    const indices = new Uint32Array(corners);
+    let base = 0;
+    let used = 0;
+    for (const s of this.surfaces) {
+      const n = s.vertexCount;
+      positions.set(s.positions, base * 3);
+      normals.set(s.normals, base * 3);
+      uvs.set(s.uvs, base * 2);
+      colors.set(s.colors, base * 4);
+      const t = s.triangles;
+      for (let k = 0; k < t.length; k += 3) {
+        const a = t[k];
+        const b = t[k + 1];
+        const c = t[k + 2];
+        if (a >= n || b >= n || c >= n) continue;
+        indices[used++] = base + a;
+        indices[used++] = base + b;
+        indices[used++] = base + c;
+      }
+      base += n;
+    }
+    this._positions = positions;
+    this._normals = normals;
+    this._uvs = uvs;
+    this._indices = used === corners ? indices : indices.slice(0, used);
+    this._colors = this.colored ? colors : null;
+    this._submeshes = [{ start: 0, count: used, material: 0 }];
+    this._bounds = new Aabb().fromPositions(positions);
+    this._version++;
+  }
+  get positions() {
+    this.sync();
+    return this._positions;
+  }
+  set positions(v) {
+    this._positions = v;
+  }
+  get normals() {
+    this.sync();
+    return this._normals;
+  }
+  set normals(v) {
+    this._normals = v;
+  }
+  get uvs() {
+    this.sync();
+    return this._uvs;
+  }
+  set uvs(v) {
+    this._uvs = v;
+  }
+  get indices() {
+    this.sync();
+    return this._indices;
+  }
+  set indices(v) {
+    this._indices = v;
+  }
+  get colors() {
+    this.sync();
+    return this._colors;
+  }
+  set colors(v) {
+    this._colors = v;
+  }
+  get submeshes() {
+    this.sync();
+    return this._submeshes;
+  }
+  set submeshes(v) {
+    this._submeshes = v;
+  }
+  get bounds() {
+    this.sync();
+    return this._bounds;
+  }
+  set bounds(v) {
+    this._bounds = v;
+  }
+  get version() {
+    this.sync();
+    return this._version;
+  }
+  set version(v) {
+    this._version = v;
+  }
+};
+
 // src/engine/scene/world.js
 var World = class {
   constructor() {
@@ -3685,6 +4176,9 @@ var World = class {
     e.alive = false;
     this.handles.delete(e.id);
     this.freedEntities.push(e.id);
+    if (e.mesh instanceof EditableMesh && !this.entities.some((o) => o.mesh === e.mesh)) {
+      for (const s of e.mesh.surfaces) this.handles.delete(s.handle);
+    }
   }
   freeTexture(t) {
     this.handles.delete(t.handle);
@@ -3732,7 +4226,7 @@ var World = class {
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
+      else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -4058,245 +4552,6 @@ function handleHelpers(world) {
     return e;
   };
   return { entity, parentOf, texture, ofKind };
-}
-
-// src/engine/math/aabb.js
-var Aabb = class _Aabb {
-  constructor(min = new Vec3(Infinity, Infinity, Infinity), max = new Vec3(-Infinity, -Infinity, -Infinity)) {
-    this.min = min;
-    this.max = max;
-  }
-  isEmpty() {
-    return this.min.x > this.max.x || this.min.y > this.max.y || this.min.z > this.max.z;
-  }
-  makeEmpty() {
-    this.min.set(Infinity, Infinity, Infinity);
-    this.max.set(-Infinity, -Infinity, -Infinity);
-    return this;
-  }
-  expandByPoint(p) {
-    this.min.set(Math.min(this.min.x, p.x), Math.min(this.min.y, p.y), Math.min(this.min.z, p.z));
-    this.max.set(Math.max(this.max.x, p.x), Math.max(this.max.y, p.y), Math.max(this.max.z, p.z));
-    return this;
-  }
-  fromPositions(positions) {
-    this.makeEmpty();
-    const p = new Vec3();
-    for (let i = 0; i < positions.length; i += 3) this.expandByPoint(p.set(positions[i], positions[i + 1], positions[i + 2]));
-    return this;
-  }
-  // The box around this box after transforming it by a matrix (all eight
-  // corners, so rotation grows it as needed).
-  transformed(m) {
-    const out = new _Aabb();
-    if (this.isEmpty()) return out;
-    const p = new Vec3();
-    for (let i = 0; i < 8; i++) {
-      p.set(i & 1 ? this.max.x : this.min.x, i & 2 ? this.max.y : this.min.y, i & 4 ? this.max.z : this.min.z);
-      out.expandByPoint(p.applyMat4(m));
-    }
-    return out;
-  }
-  intersects(b) {
-    return this.min.x <= b.max.x && this.max.x >= b.min.x && this.min.y <= b.max.y && this.max.y >= b.min.y && this.min.z <= b.max.z && this.max.z >= b.min.z;
-  }
-  containsPoint(p) {
-    return p.x >= this.min.x && p.x <= this.max.x && p.y >= this.min.y && p.y <= this.max.y && p.z >= this.min.z && p.z <= this.max.z;
-  }
-  center(out = new Vec3()) {
-    return out.set((this.min.x + this.max.x) / 2, (this.min.y + this.max.y) / 2, (this.min.z + this.max.z) / 2);
-  }
-};
-
-// src/engine/scene/mesh.js
-var nextMeshId = 1;
-var MeshData = class {
-  constructor(positions, normals, uvs, indices) {
-    this.id = nextMeshId++;
-    this.version = 0;
-    this.positions = Float32Array.from(positions);
-    this.normals = Float32Array.from(normals);
-    this.uvs = Float32Array.from(uvs);
-    this.indices = Uint32Array.from(indices);
-    this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
-    this.colors = null;
-    this.bounds = new Aabb().fromPositions(this.positions);
-  }
-  get vertexCount() {
-    return this.positions.length / 3;
-  }
-  get triangleCount() {
-    return this.indices.length / 3;
-  }
-};
-var Builder = class {
-  constructor() {
-    this.p = [];
-    this.n = [];
-    this.uv = [];
-    this.idx = [];
-  }
-  vertex(x, y, z, nx, ny, nz, u, v) {
-    this.p.push(x, y, z);
-    this.n.push(nx, ny, nz);
-    this.uv.push(u, v);
-    return this.p.length / 3 - 1;
-  }
-  triangle(a, b, c) {
-    const p = this.p;
-    const ux = p[b * 3] - p[a * 3];
-    const uy = p[b * 3 + 1] - p[a * 3 + 1];
-    const uz = p[b * 3 + 2] - p[a * 3 + 2];
-    const vx = p[c * 3] - p[a * 3];
-    const vy = p[c * 3 + 1] - p[a * 3 + 1];
-    const vz = p[c * 3 + 2] - p[a * 3 + 2];
-    const cx = uy * vz - uz * vy;
-    const cy = uz * vx - ux * vz;
-    const cz = ux * vy - uy * vx;
-    if (cx === 0 && cy === 0 && cz === 0) return;
-    const n = this.n;
-    const nx = n[a * 3] + n[b * 3] + n[c * 3];
-    const ny = n[a * 3 + 1] + n[b * 3 + 1] + n[c * 3 + 1];
-    const nz = n[a * 3 + 2] + n[b * 3 + 2] + n[c * 3 + 2];
-    if (cx * nx + cy * ny + cz * nz < 0) this.idx.push(a, c, b);
-    else this.idx.push(a, b, c);
-  }
-  quad(a, b, c, d) {
-    this.triangle(a, b, c);
-    this.triangle(a, c, d);
-  }
-  // A grid of (cols + 1) x (rows + 1) vertices from `at(u, v)` (u, v in
-  // 0..1), which returns [x, y, z, nx, ny, nz].
-  grid(cols, rows, at) {
-    const base = this.p.length / 3;
-    for (let j = 0; j <= rows; j++) {
-      for (let i = 0; i <= cols; i++) {
-        const u = i / cols;
-        const v = j / rows;
-        const [x, y, z, nx, ny, nz] = at(u, v);
-        this.vertex(x, y, z, nx, ny, nz, u, v);
-      }
-    }
-    for (let j = 0; j < rows; j++) {
-      for (let i = 0; i < cols; i++) {
-        const a = base + j * (cols + 1) + i;
-        this.quad(a, a + 1, a + cols + 2, a + cols + 1);
-      }
-    }
-  }
-  // A flat disc facing `ny` (+1 up, -1 down) at height y.
-  disc(segments, y, ny, radius = 1) {
-    const center = this.vertex(0, y, 0, 0, ny, 0, 0.5, 0.5);
-    const first = this.p.length / 3;
-    for (let i = 0; i <= segments; i++) {
-      const a = i / segments * Math.PI * 2;
-      const x = Math.cos(a) * radius;
-      const z = Math.sin(a) * radius;
-      this.vertex(x, y, z, 0, ny, 0, 0.5 + x / 2, 0.5 - z / 2);
-    }
-    for (let i = 0; i < segments; i++) this.triangle(center, first + i, first + i + 1);
-  }
-  build() {
-    return new MeshData(this.p, this.n, this.uv, this.idx);
-  }
-};
-function createCube() {
-  const b = new Builder();
-  const faces = [
-    [[0, 0, -1], [1, 0, 0], [0, -1, 0]],
-    // front (towards -Z, facing the default camera)
-    [[0, 0, 1], [-1, 0, 0], [0, -1, 0]],
-    // back
-    [[1, 0, 0], [0, 0, 1], [0, -1, 0]],
-    // right
-    [[-1, 0, 0], [0, 0, -1], [0, -1, 0]],
-    // left
-    [[0, 1, 0], [1, 0, 0], [0, 0, -1]],
-    // top
-    [[0, -1, 0], [1, 0, 0], [0, 0, 1]]
-    // bottom
-  ];
-  for (const [n, r, d] of faces) {
-    const corner = (su, sv) => b.vertex(
-      n[0] + r[0] * su + d[0] * sv,
-      n[1] + r[1] * su + d[1] * sv,
-      n[2] + r[2] * su + d[2] * sv,
-      n[0],
-      n[1],
-      n[2],
-      (su + 1) / 2,
-      (sv + 1) / 2
-    );
-    const a = corner(-1, -1);
-    const c1 = corner(1, -1);
-    const c2 = corner(1, 1);
-    const c3 = corner(-1, 1);
-    b.quad(a, c1, c2, c3);
-  }
-  return b.build();
-}
-function createSphere(segments = 16) {
-  const b = new Builder();
-  const stacks = Math.max(2, segments);
-  const slices = Math.max(3, segments * 2);
-  b.grid(slices, stacks, (u, v) => {
-    const theta = u * Math.PI * 2;
-    const phi = v * Math.PI;
-    const x = Math.sin(phi) * Math.cos(theta);
-    const y = Math.cos(phi);
-    const z = Math.sin(phi) * Math.sin(theta);
-    return [x, y, z, x, y, z];
-  });
-  return b.build();
-}
-function createCylinder(segments = 16, solid = true) {
-  const b = new Builder();
-  const n = Math.max(3, segments);
-  b.grid(n, 1, (u, v) => {
-    const a = u * Math.PI * 2;
-    const x = Math.cos(a);
-    const z = Math.sin(a);
-    return [x, 1 - v * 2, z, x, 0, z];
-  });
-  if (solid) {
-    b.disc(n, 1, 1);
-    b.disc(n, -1, -1);
-  }
-  return b.build();
-}
-function createCone(segments = 16, solid = true) {
-  const b = new Builder();
-  const n = Math.max(3, segments);
-  const k = 1 / Math.sqrt(5);
-  b.grid(n, 1, (u, v) => {
-    const a = u * Math.PI * 2;
-    const x = Math.cos(a);
-    const z = Math.sin(a);
-    return [x * v, 1 - v * 2, z * v, 2 * x * k, k, 2 * z * k];
-  });
-  if (solid) b.disc(n, -1, -1);
-  return b.build();
-}
-function createPlane(divisions = 1) {
-  const b = new Builder();
-  const n = Math.max(1, divisions);
-  b.grid(n, n, (u, v) => [u * 2 - 1, 0, 1 - v * 2, 0, 1, 0]);
-  return b.build();
-}
-function createTorus(segments = 24, thickness = 0.25) {
-  const b = new Builder();
-  const n = Math.max(3, segments);
-  const tube = Math.max(3, Math.round(n / 2));
-  const ring = 1 - thickness;
-  b.grid(n, tube, (u, v) => {
-    const a = u * Math.PI * 2;
-    const t = v * Math.PI * 2;
-    const nx = Math.cos(t) * Math.cos(a);
-    const ny = Math.sin(t);
-    const nz = Math.cos(t) * Math.sin(a);
-    return [Math.cos(a) * ring + nx * thickness, ny * thickness, Math.sin(a) * ring + nz * thickness, nx, ny, nz];
-  });
-  return b.build();
 }
 
 // src/engine/scene/sprite.js
@@ -5793,10 +6048,10 @@ function createPhysicsCommands(engine) {
       nonNegative(bounce, "BodyBounce");
       act(handle, false, (id) => physics.backend.setRestitution(id, bounce));
     },
-    bodydamping(handle, linear, angular) {
-      nonNegative(linear, "BodyDamping linear");
+    bodydamping(handle, linear2, angular) {
+      nonNegative(linear2, "BodyDamping linear");
       nonNegative(angular, "BodyDamping angular");
-      act(handle, true, (id) => physics.backend.setDamping(id, linear, angular));
+      act(handle, true, (id) => physics.backend.setDamping(id, linear2, angular));
     },
     bodylockrotation(handle, pitch, yaw, roll) {
       act(handle, true, (id) => physics.backend.lockRotation(id, pitch !== 0, yaw !== 0, roll !== 0));
@@ -6747,6 +7002,284 @@ function createAudioCommands(engine) {
   };
 }
 
+// src/engine/scene/mesh-commands.js
+var MESH_COMMANDS = [
+  "CreateMesh%(parent = 0)",
+  "CreateSurface%(mesh)",
+  "CountSurfaces%(mesh)",
+  "GetSurface%(mesh, index)",
+  "ClearSurface(surface, vertices = 1, triangles = 1)",
+  "AddVertex%(surface, x#, y#, z#, u# = 0, v# = 0, w# = 1)",
+  "AddTriangle%(surface, v0, v1, v2)",
+  "VertexCoords(surface, index, x#, y#, z#)",
+  "VertexNormal(surface, index, nx#, ny#, nz#)",
+  "VertexColor(surface, index, r#, g#, b#, a# = 1)",
+  "VertexTexCoords(surface, index, u#, v#, w# = 1, set = 0)",
+  "CountVertices%(surface)",
+  "CountTriangles%(surface)",
+  "VertexX#(surface, index)",
+  "VertexY#(surface, index)",
+  "VertexZ#(surface, index)",
+  "VertexNX#(surface, index)",
+  "VertexNY#(surface, index)",
+  "VertexNZ#(surface, index)",
+  "VertexRed#(surface, index)",
+  "VertexGreen#(surface, index)",
+  "VertexBlue#(surface, index)",
+  "VertexAlpha#(surface, index)",
+  "VertexU#(surface, index, set = 0)",
+  "VertexV#(surface, index, set = 0)",
+  "TriangleVertex%(surface, triangle, corner)",
+  "UpdateNormals(mesh)",
+  "ScaleMesh(mesh, x#, y#, z#)",
+  "RotateMesh(mesh, pitch#, yaw#, roll#)",
+  "PositionMesh(mesh, x#, y#, z#)",
+  "FitMesh(mesh, x#, y#, z#, width#, height#, depth#, uniform = 0)",
+  "FlipMesh(mesh)",
+  "AddMesh(source, dest)",
+  "CopyMesh%(mesh, parent = 0)",
+  "MeshWidth#(mesh)",
+  "MeshHeight#(mesh)",
+  "MeshDepth#(mesh)"
+];
+var MESH_CONSTANTS = {
+  FX_VERTEXCOLOR: 2,
+  FX_VERTEXALPHA: 32
+};
+function transform(mesh, m, t) {
+  const [[a, b, c], [d, e, f], [g, h, i]] = m;
+  const co = [
+    [e * i - f * h, f * g - d * i, d * h - e * g],
+    [c * h - b * i, a * i - c * g, b * g - a * h],
+    [b * f - c * e, c * d - a * f, a * e - b * d]
+  ];
+  for (const s of mesh.surfaces) {
+    const p = s.positions;
+    const n = s.normals;
+    for (let k = 0; k < p.length; k += 3) {
+      const [x, y, z] = [p[k], p[k + 1], p[k + 2]];
+      p[k] = a * x + b * y + c * z + t[0];
+      p[k + 1] = d * x + e * y + f * z + t[1];
+      p[k + 2] = g * x + h * y + i * z + t[2];
+      const [nx, ny, nz] = [n[k], n[k + 1], n[k + 2]];
+      const ox = co[0][0] * nx + co[0][1] * ny + co[0][2] * nz;
+      const oy = co[1][0] * nx + co[1][1] * ny + co[1][2] * nz;
+      const oz = co[2][0] * nx + co[2][1] * ny + co[2][2] * nz;
+      const l = Math.hypot(ox, oy, oz) || 1;
+      n[k] = ox / l;
+      n[k + 1] = oy / l;
+      n[k + 2] = oz / l;
+    }
+  }
+  mesh.touch();
+}
+function createMeshCommands(engine) {
+  const world = engine.world;
+  const { entity, parentOf } = handleHelpers(world);
+  const newSurface = (mesh2) => {
+    const s = new Surface(mesh2);
+    world.addHandle(s);
+    mesh2.surfaces.push(s);
+    mesh2.touch();
+    return s;
+  };
+  const mesh = (handle) => {
+    const e = entity(handle);
+    if (e.kind !== "mesh" || !e.mesh) throw runtimeError(`Entity ${handle} is not a mesh`);
+    if (e.sprite) throw runtimeError(`Entity ${handle} is a sprite: its square cannot be changed`);
+    if (!(e.mesh instanceof EditableMesh)) {
+      e.mesh = EditableMesh.from(e.mesh);
+      for (const s of e.mesh.surfaces) world.addHandle(s);
+    }
+    return e.mesh;
+  };
+  const surface = (handle) => {
+    const s = world.handles.get(handle);
+    if (s instanceof Surface) return s;
+    if (handle === 0) throw runtimeError("Surface handle is 0 (no surface)");
+    if (s) throw runtimeError(`Handle ${handle} is ${describe(s)}, not a surface`);
+    throw runtimeError(`Surface ${handle} does not exist`);
+  };
+  const vertex2 = (s, index) => {
+    if (!(index >= 0 && index < s.vertexCount)) throw runtimeError(`Surface ${s.handle} has ${s.vertexCount} vertices (0 to ${s.vertexCount - 1}), not number ${index}`);
+    return index;
+  };
+  const uvSet = (set) => {
+    if (set !== 0) throw runtimeError(`Only texture coordinate set 0 is supported, not ${set}`);
+  };
+  const copyInto = (dest, source) => {
+    for (const from of source.surfaces) {
+      const s = newSurface(dest);
+      s.positions = from.positions.slice();
+      s.normals = from.normals.slice();
+      s.uvs = from.uvs.slice();
+      s.colors = from.colors.slice();
+      s.triangles = from.triangles.slice();
+    }
+    dest.colored = dest.colored || source.colored;
+    dest.touch();
+  };
+  return {
+    createmesh(parent) {
+      engine.autoGraphics();
+      return world.createMesh(new EditableMesh(), parentOf(parent)).id;
+    },
+    createsurface: (handle) => newSurface(mesh(handle)).handle,
+    countsurfaces: (handle) => mesh(handle).surfaces.length,
+    getsurface(handle, index) {
+      const m = mesh(handle);
+      if (!(index >= 1 && index <= m.surfaces.length)) throw runtimeError(`Mesh ${handle} has ${m.surfaces.length} surface${m.surfaces.length === 1 ? "" : "s"}, not number ${index} (they are numbered from 1)`);
+      return m.surfaces[index - 1].handle;
+    },
+    clearsurface(handle, vertices, triangles) {
+      surface(handle).clear(vertices !== 0, triangles !== 0);
+    },
+    addvertex: (handle, x, y, z, u, v) => surface(handle).addVertex(x, y, z, u, v),
+    addtriangle(handle, a, b, c) {
+      const s = surface(handle);
+      return s.addTriangle(vertex2(s, a), vertex2(s, b), vertex2(s, c));
+    },
+    vertexcoords(handle, index, x, y, z) {
+      const s = surface(handle);
+      s.setPosition(vertex2(s, index), x, y, z);
+    },
+    vertexnormal(handle, index, x, y, z) {
+      const s = surface(handle);
+      s.setNormal(vertex2(s, index), x, y, z);
+    },
+    vertexcolor(handle, index, r, g, b, a) {
+      const s = surface(handle);
+      s.setColor(vertex2(s, index), r, g, b, a);
+    },
+    vertextexcoords(handle, index, u, v, w, set) {
+      uvSet(set);
+      const s = surface(handle);
+      s.setUv(vertex2(s, index), u, v);
+    },
+    countvertices: (handle) => surface(handle).vertexCount,
+    counttriangles: (handle) => surface(handle).triangleCount,
+    vertexx: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3];
+    },
+    vertexy: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3 + 1];
+    },
+    vertexz: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3 + 2];
+    },
+    vertexnx: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3];
+    },
+    vertexny: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3 + 1];
+    },
+    vertexnz: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3 + 2];
+    },
+    vertexred: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 0);
+    },
+    vertexgreen: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 1);
+    },
+    vertexblue: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 2);
+    },
+    vertexalpha: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 3);
+    },
+    vertexu: (h, i, set) => {
+      uvSet(set);
+      const s = surface(h);
+      return s.uvs[vertex2(s, i) * 2];
+    },
+    vertexv: (h, i, set) => {
+      uvSet(set);
+      const s = surface(h);
+      return s.uvs[vertex2(s, i) * 2 + 1];
+    },
+    trianglevertex(handle, triangle, corner) {
+      const s = surface(handle);
+      if (!(triangle >= 0 && triangle < s.triangleCount)) throw runtimeError(`Surface ${handle} has ${s.triangleCount} triangles (0 to ${s.triangleCount - 1}), not number ${triangle}`);
+      if (!(corner >= 0 && corner <= 2)) throw runtimeError(`A triangle's corners are 0, 1 and 2, not ${corner}`);
+      return s.triangles[triangle * 3 + corner];
+    },
+    updatenormals(handle) {
+      for (const s of mesh(handle).surfaces) s.updateNormals();
+    },
+    scalemesh(handle, x, y, z) {
+      transform(mesh(handle), [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
+    },
+    rotatemesh(handle, pitch, yaw, roll) {
+      const q = new Quat().fromEuler(pitch, yaw, roll);
+      const col = (v) => new Vec3(...v).applyQuat(q);
+      const [i, j, k] = [col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])];
+      transform(mesh(handle), [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
+    },
+    positionmesh(handle, x, y, z) {
+      transform(mesh(handle), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
+    },
+    fitmesh(handle, x, y, z, width, height, depth, uniform) {
+      const m = mesh(handle);
+      const b = m.bounds;
+      if (b.isEmpty()) return;
+      const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+      let s = [width, height, depth].map((want, n) => size[n] > 0 ? want / size[n] : 1);
+      if (uniform) {
+        if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
+        else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
+        else s = [s[2], s[2], s[2]];
+      }
+      const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
+      const target = [x + width / 2, y + height / 2, z + depth / 2];
+      transform(m, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+    },
+    flipmesh(handle) {
+      const m = mesh(handle);
+      for (const s of m.surfaces) {
+        for (let k = 0; k < s.normals.length; k++) s.normals[k] = -s.normals[k];
+        const t = s.triangles;
+        for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
+      }
+      m.touch();
+    },
+    addmesh(source, dest) {
+      if (source === dest) throw runtimeError("A mesh cannot be added to itself");
+      copyInto(mesh(dest), mesh(source));
+    },
+    copymesh(handle, parent) {
+      const src = entity(handle);
+      const from = mesh(handle);
+      const e = world.createMesh(new EditableMesh(), parentOf(parent));
+      copyInto(e.mesh, from);
+      e.materials = src.materials.map((m) => m.clone());
+      return e.id;
+    },
+    meshwidth: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.x - b.min.x;
+    },
+    meshheight: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.y - b.min.y;
+    },
+    meshdepth: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.z - b.min.z;
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -6849,6 +7382,7 @@ var ENGINE_COMMANDS = [
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
+  ...MESH_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
@@ -6872,6 +7406,7 @@ var ENGINE_CONSTANTS = {
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
+  ...MESH_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
 function textureFlags(flags, command) {
@@ -6917,6 +7452,7 @@ function createEngineCommands(engine) {
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
+    ...createMeshCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -7017,6 +7553,8 @@ function createEngineCommands(engine) {
       m.fullbright = (flags & 1) !== 0;
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
+      m.vertexColors = (flags & 2) !== 0;
+      m.vertexAlpha = (flags & 32) !== 0;
       m.changed();
       const e = entity(handle);
       e.castShadow = (flags & 131072) === 0;
@@ -7411,8 +7949,8 @@ var Reader = class {
     if (!info) return { set: 0, transform: null };
     const tt = info.extensions && info.extensions.KHR_texture_transform;
     const set = tt && tt.texCoord !== void 0 ? tt.texCoord : info.texCoord || 0;
-    const transform = tt && (tt.offset || tt.rotation || tt.scale) ? tt : null;
-    return { set, transform };
+    const transform2 = tt && (tt.offset || tt.rotation || tt.scale) ? tt : null;
+    return { set, transform: transform2 };
   }
   // -------------------------------------------------------------- meshes
   mesh(index) {
@@ -7439,7 +7977,7 @@ var Reader = class {
       let tri = prim.indices !== void 0 ? Array.from(this.accessor(prim.indices)) : Array.from({ length: count }, (_, i) => i);
       tri = toTriangles(tri, mode);
       const matIndex = prim.material !== void 0 ? prim.material : -1;
-      const { set, transform } = this.uvSetup(matIndex);
+      const { set, transform: transform2 } = this.uvSetup(matIndex);
       const uvKey = `TEXCOORD_${set}`;
       const uv = attr[uvKey] !== void 0 ? this.accessor(attr[uvKey]) : null;
       const nor = attr.NORMAL !== void 0 ? this.accessor(attr.NORMAL) : null;
@@ -7457,10 +7995,10 @@ var Reader = class {
         if (nor) normals.push(-nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]);
         let u = uv ? uv[v * 2] : 0;
         let w = uv ? uv[v * 2 + 1] : 0;
-        if (transform) {
-          const [sx, sy] = transform.scale || [1, 1];
-          const r = transform.rotation || 0;
-          const [ox, oy] = transform.offset || [0, 0];
+        if (transform2) {
+          const [sx, sy] = transform2.scale || [1, 1];
+          const r = transform2.rotation || 0;
+          const [ox, oy] = transform2.offset || [0, 0];
           const c = Math.cos(r);
           const s = Math.sin(r);
           const tu = c * sx * u + s * sy * w + ox;
@@ -22204,8 +22742,8 @@ var LoadingManager = class {
       }
       return url;
     };
-    this.setURLModifier = function(transform) {
-      urlModifier = transform;
+    this.setURLModifier = function(transform2) {
+      urlModifier = transform2;
       return this;
     };
     this.addHandler = function(regex, loader) {
@@ -35581,7 +36119,7 @@ var ThreeBackend = class extends RenderBackend {
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
     const flags = tex ? m.texture : null;
-    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1 || flags !== null && flags.alpha;
+    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1 || m.vertexAlpha || flags !== null && flags.alpha;
     const cut = m.alphaMode === "mask" ? m.alphaCutoff : flags !== null && flags.masked ? 0.5 : 0;
     const mixing = m.blend === "add" || m.blend === "multiply";
     const options = {

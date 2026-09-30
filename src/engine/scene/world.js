@@ -5,6 +5,7 @@
 import { Entity } from './entity.js';
 import { Material } from './material.js';
 import { Texture } from './texture.js';
+import { EditableMesh } from './editable.js';
 
 export class World
 {
@@ -75,6 +76,11 @@ export class World
     e.alive = false;
     this.handles.delete(e.id);
     this.freedEntities.push(e.id);
+    // A built mesh no other entity uses: its surfaces go too.
+    if (e.mesh instanceof EditableMesh && !this.entities.some((o) => o.mesh === e.mesh))
+    {
+      for (const s of e.mesh.surfaces) this.handles.delete(s.handle);
+    }
   }
 
   freeTexture(t)
@@ -131,7 +137,7 @@ export class World
       const world = e.worldMatrix.e;
       if (e.kind === 'camera') cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
+      else if (e.kind === 'mesh' && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);

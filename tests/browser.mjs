@@ -1360,6 +1360,73 @@ PositionEntity s, EntityX(cam2), EntityY(cam2), EntityZ(cam2)`;
     await page.close();
   });
 
+  await check('built meshes: vertex colours with FX_VERTEXCOLOR, and changes show on the next frame', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A square 5 units ahead filling most of the view; its corners red,
+    // green, blue and white. At frame 20 its top-left corner moves away.
+    const scene = (fx) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+Global m, s
+m = CreateMesh()
+s = CreateSurface(m)
+AddVertex s, -2, 2, 5 : AddVertex s, 2, 2, 5 : AddVertex s, 2, -2, 5 : AddVertex s, -2, -2, 5
+AddTriangle s, 0, 1, 2 : AddTriangle s, 0, 2, 3
+VertexColor s, 0, 255, 0, 0
+VertexColor s, 1, 0, 255, 0
+VertexColor s, 2, 0, 0, 255
+VertexColor s, 3, 255, 255, 255
+EntityFX m, ${fx}
+Function Update()
+  If FrameCount() = 1 Then Print "first"
+  If FrameCount() = 20
+    VertexCoords s, 0, -2, 2, 50
+    Print "moved"
+  EndIf
+End Function
+`;
+    // The colour a little inside each corner of the square on screen.
+    const corners = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const at = (fx, fy) => Array.from(ctx.getImageData(Math.round(canvas.width * fx), Math.round(canvas.height * fy), 1, 1).data.slice(0, 3));
+      // 4 units wide at 5 ahead, with 60 degrees of view up and down and a
+      // 4:3 screen: the square spans x 0.24..0.76 and y 0.154..0.846.
+      return { tl: at(0.255, 0.17), tr: at(0.745, 0.17), br: at(0.745, 0.83), bl: at(0.255, 0.83) };
+    });
+    const run = async (text, mark) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction((t) => document.getElementById('console').textContent.includes(t), mark, { timeout: 10000 });
+      await page.waitForTimeout(250);
+    };
+    await run(scene('FX_FULLBRIGHT Or FX_VERTEXCOLOR'), 'first');
+    const coloured = await corners();
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'mesh-colours.png') });
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('moved'), null, { timeout: 10000 });
+    await page.waitForTimeout(250);
+    const moved = await corners();
+    await run(scene('FX_FULLBRIGHT'), 'first');
+    const plain = await corners();
+    const text = JSON.stringify({ coloured, moved, plain });
+    const is = (c, r, g, b) => Math.abs(c[0] - r) < 60 && Math.abs(c[1] - g) < 60 && Math.abs(c[2] - b) < 60;
+    assert(is(coloured.tl, 255, 0, 0) && is(coloured.tr, 0, 255, 0) && is(coloured.br, 0, 0, 255) && is(coloured.bl, 255, 255, 255), `vertex colours: ${text}`);
+    assert(Object.values(plain).every((c) => is(c, 255, 255, 255)), `without FX_VERTEXCOLOR the square is white: ${text}`);
+    // The moved corner is 50 ahead now: the top-left is no longer covered.
+    assert(is(moved.tl, 0, 0, 0) && is(moved.br, 0, 0, 255), `the change did not show: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

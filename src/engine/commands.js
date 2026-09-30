@@ -21,6 +21,7 @@ import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './co
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
 import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
+import { MESH_COMMANDS, MESH_CONSTANTS, createMeshCommands } from './scene/mesh-commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -134,6 +135,7 @@ export const ENGINE_COMMANDS = [
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
+  ...MESH_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 
@@ -158,6 +160,7 @@ export const ENGINE_CONSTANTS = {
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
+  ...MESH_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
 
@@ -221,6 +224,7 @@ export function createEngineCommands(engine)
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
+    ...createMeshCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -351,6 +355,8 @@ export function createEngineCommands(engine)
       m.fullbright = (flags & 1) !== 0;
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
+      m.vertexColors = (flags & 2) !== 0;
+      m.vertexAlpha = (flags & 32) !== 0;
       m.changed();
       const e = entity(handle);
       e.castShadow = (flags & 0x20000) === 0;

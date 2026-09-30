@@ -25,6 +25,7 @@ export class Material
     this.alphaMode = null;
     this.alphaCutoff = 0.5;
     this.vertexColors = false;
+    this.vertexAlpha = false;   // FX_VERTEXALPHA: the vertex colours' alpha blends
     this.name = '';
   }
 
@@ -47,6 +48,7 @@ export class Material
     m.alphaMode = this.alphaMode;
     m.alphaCutoff = this.alphaCutoff;
     m.vertexColors = this.vertexColors;
+    m.vertexAlpha = this.vertexAlpha;
     m.name = this.name;
     return m;
   }

@@ -11,6 +11,7 @@ what the tests use).
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
+- [Building meshes](#building-meshes)
 - [Looks](#looks)
 - [Textures](#textures)
 - [Moving and turning](#moving-and-turning)
@@ -120,6 +121,58 @@ For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
 which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
 
+## Building meshes
+
+A mesh is made of **surfaces**, and a surface of **vertices** (corners,
+numbered from 0 as they are added) and **triangles** (three vertices each).
+Build shapes of your own, or change any mesh, the built-in shapes and
+model parts too: a shape shares its geometry with all the others of its
+kind, so the first change gives it a copy of its own. `CopyEntity` of a
+built (or already changed) mesh shares it with the copy, so changing one
+changes both; `CopyMesh` always makes a separate one. Built meshes are drawn, picked, collide and take physics
+bodies like any other.
+
+A triangle is seen from the side where its corners run clockwise.
+
+```
+m = CreateMesh()
+s = CreateSurface(m)
+v0 = AddVertex(s, -1, 1, 0, 0, 0)     ; x, y, z, then the texture's u, v
+v1 = AddVertex(s, 1, 1, 0, 1, 0)
+v2 = AddVertex(s, 1, -1, 0, 1, 1)
+v3 = AddVertex(s, -1, -1, 0, 0, 1)
+AddTriangle s, v0, v1, v2
+AddTriangle s, v0, v2, v3
+UpdateNormals m                       ; work out how light falls on it
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateMesh%(parent = 0)` | An empty mesh entity. |
+| `CreateSurface%(mesh)` | A new, empty surface of the mesh. |
+| `CountSurfaces%(mesh)` `GetSurface%(mesh, index)` | Its surfaces, numbered from 1. |
+| `AddVertex%(surface, x#, y#, z#, u# = 0, v# = 0, w# = 1)` | Adds a corner; returns its number. (`w` is accepted for Blitz3D programs and not used.) |
+| `AddTriangle%(surface, v0, v1, v2)` | Adds a triangle of three corners; returns its number. |
+| `VertexCoords surface, index, x#, y#, z#` | Moves a corner. |
+| `VertexNormal surface, index, nx#, ny#, nz#` | Sets the way a corner faces, for lighting. |
+| `VertexColor surface, index, r#, g#, b#, a# = 1` | A corner's colour (0 to 255) and alpha (0 to 1), shown with `EntityFX` `FX_VERTEXCOLOR` (and the alpha with `FX_VERTEXALPHA`). |
+| `VertexTexCoords surface, index, u#, v#, w# = 1, set = 0` | A corner's place on the texture. Only set 0 exists. |
+| `CountVertices%(surface)` `CountTriangles%(surface)` | How many. |
+| `VertexX#` `VertexY#` `VertexZ#` `VertexNX#` `VertexNY#` `VertexNZ#` `VertexU#` `VertexV#` `(surface, index)` | Read a corner back. |
+| `VertexRed#` `VertexGreen#` `VertexBlue#` `VertexAlpha#` `(surface, index)` | Its colour. |
+| `TriangleVertex%(surface, triangle, corner)` | The vertex at corner 0, 1 or 2 of a triangle. |
+| `ClearSurface surface, vertices = True, triangles = True` | Empties it. |
+| `UpdateNormals mesh` | Smooth lighting: each corner faces the average way of the triangles around it (corners at the same place share it). |
+| `ScaleMesh mesh, x#, y#, z#` `RotateMesh mesh, pitch#, yaw#, roll#` `PositionMesh mesh, x#, y#, z#` | Changes the mesh itself (not the entity): every vertex moves. |
+| `FitMesh mesh, x#, y#, z#, width#, height#, depth#, uniform = False` | Scales and moves the mesh to fill that box; `uniform` keeps its proportions. |
+| `FlipMesh mesh` | Turns every triangle to face the other way. |
+| `AddMesh source, dest` | Adds copies of `source`'s surfaces to `dest`. |
+| `CopyMesh%(mesh, parent = 0)` | A new entity with a copy of the mesh (and its look). |
+| `MeshWidth#(mesh)` `MeshHeight#(mesh)` `MeshDepth#(mesh)` | The size of the box around it. |
+
+Changes are cheap: the mesh is rebuilt once, when it is next drawn or
+used, however many vertices were added.
+
 ## Looks
 
 | Command | What it does |
@@ -127,7 +180,7 @@ the entity is.
 | `EntityColor entity, r, g, b` | The surface colour (default white). |
 | `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible. |
 | `EntityShininess entity, shininess#` | 0 matte to 1 very shiny. |
-| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
+| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_VERTEXCOLOR` (uses the mesh's vertex colours), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_VERTEXALPHA` (the vertex colours' alpha blends), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
 | `EntityOrder entity, order` | Lower orders draw first (cameras too). |
 | `EntityBlend entity, blend` | How it mixes with what is behind: 1 by its alpha (the default), 2 multiplies (darkens: shade, stains), 3 adds (glows: fire, light). |
@@ -499,7 +552,7 @@ the top-left; text stays sharp at any page size.
 | `KEY_F1` ... `KEY_F12` | 112 ... 123 |
 | `MOUSE_LEFT` `MOUSE_RIGHT` `MOUSE_MIDDLE` | 1 2 3 |
 | `LIGHT_DIRECTIONAL` `LIGHT_POINT` | 1 2 |
-| `FX_FULLBRIGHT` `FX_FLAT` `FX_TWOSIDED` | 1 4 16 |
+| `FX_FULLBRIGHT` `FX_VERTEXCOLOR` `FX_FLAT` `FX_TWOSIDED` `FX_VERTEXALPHA` | 1 2 4 16 32 |
 | `FX_NOSHADOWCAST` `FX_NOSHADOWRECV` | 131072 262144 |
 | `TEX_COLOR` `TEX_ALPHA` `TEX_MASKED` `TEX_MIPMAP` `TEX_CLAMPU` `TEX_CLAMPV` | 1 2 4 8 16 32 |
 | `PICK_NONE` `PICK_SPHERE` `PICK_POLYGON` `PICK_BOX` | 0 1 2 3 |

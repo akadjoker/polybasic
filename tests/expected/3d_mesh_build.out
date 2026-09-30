@@ -1,0 +1,17 @@
+vertices 4, triangles 2, indices 3 1
+surfaces 1, first 1
+normal 0.0 0.0 -1.0
+corner 3, uv 1.0 1.0
+colour 255.0 128.0 0.0 0.5
+size 2.0 x 2.0 x 0.0
+scaled 4.0 x 6.0
+moved 8.0 3.0
+fitted 2.66667 x 4.0, from 0.666667 0.0
+turned normal 1 0 0
+flipped normal -1, corners 2 1
+copy surfaces 2, vertices 4
+cleared triangles 0, vertices 4
+cubes 6.0 and 2.0, cube surface vertices 24
+picked 1 at z 20.0
+constants 2 32
+Runtime error (3d_mesh_build.pb, line 50): Surface 2 has 4 vertices (0 to 3), not number 9
