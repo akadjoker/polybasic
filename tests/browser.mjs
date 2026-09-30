@@ -1113,14 +1113,15 @@ End Function
       assert(!/error/i.test(status), `${entry.id}: status "${status}"`);
       const consoleText = await playground.textContent('#console');
       assert(!/error/i.test(consoleText), `${entry.id}: console says ${consoleText}`);
-      if (entry.category === '3d')
+      // The language examples print to the console; all the others draw.
+      if (entry.category === 'language')
       {
-        const s = await pgStats();
-        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
+        await playground.waitForFunction(() => document.getElementById('console').textContent.trim().length > 0, null, { timeout: 10000 });
       }
       else
       {
-        await playground.waitForFunction(() => document.getElementById('console').textContent.trim().length > 0, null, { timeout: 10000 });
+        const s = await pgStats();
+        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
       }
       if (entry.id === 'spin' || entry.id === 'orbits') await playground.screenshot({ path: join(SHOTS, `playground-${entry.id}.png`) });
     }

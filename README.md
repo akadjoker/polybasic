@@ -61,7 +61,10 @@ full screen. Projects hold several files (programs, textures, glTF
 models), are kept in the browser, go out and come back as .zip files, and
 export as one web page that plays the game anywhere, even opened from the
 disk. Examples can be edited, shared as links, or saved as projects. The
-full story is in [docs/playground.md](docs/playground.md).
+examples under **Visual effects** show each 3D effect on its own, with keys
+to switch it: shadows, texture flags, sprites, building meshes, decals,
+ribbon trails, trees and grass. The full story is in
+[docs/playground.md](docs/playground.md).
 
 ![A project in the playground](docs/screenshots/playground-project.png)
 

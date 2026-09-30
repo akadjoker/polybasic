@@ -90,6 +90,8 @@ that take an `isGlobal` flag work in world coordinates when it is `True`.
 | `LightShadows light, on = True, area# = 40` | The light casts shadows (off by default). A directional light's shadows cover a square `area` units wide around what the camera looks at, moving with it: smaller is sharper, larger reaches further. A point light's reach as far as its `LightRange`. Every shape casts and receives shadows unless its `EntityFX` says otherwise. |
 | `AmbientLight r, g, b` | Light that comes from everywhere, so unlit sides are not black (default 64, 64, 64). |
 
+Try it: **Shadows** in the playground's Visual effects (`examples/shadows.pb`).
+
 ## Shapes and pivots
 
 All shapes fit in the -1..1 cube and are centred on their entity. Shapes of
@@ -124,6 +126,8 @@ For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
 which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
 
+Try it: **Sprites** in the playground's Visual effects (`examples/sprites.pb`).
+
 ## Trees
 
 ![Trees made by CreateTree, with their shadows](screenshots/trees.png)
@@ -145,6 +149,8 @@ milliseconds; for a forest, grow one of each kind and `CopyEntity` it:
 copies share the meshes, so a hundred trees cost little more to keep than
 one. Sizes, in units: a shrub is about 1 high, an oak 8, a willow 6, an ash
 8, a poplar 13, a beech 10 and a sequoia 38; `ScaleEntity` to taste.
+
+Try it: **Trees** in the playground's Visual effects (`examples/trees.pb`).
 
 ## Grass
 
@@ -181,6 +187,9 @@ thousand. (Measured in the test browser, which draws without a graphics
 card, 2000 tufts ran at 12 frames a second; a graphics card was not
 available to measure.)
 
+Try it: **Grass** in the playground's Visual effects (`examples/grass.pb`), and
+the **Meadow** example.
+
 ## Ribbon trails
 
 A trail is the ribbon a moving blade leaves behind it: a sword's swing, a
@@ -207,6 +216,8 @@ TrailColor trail, 80, 200, 255
 | `TrailFadeColor trail, r, g, b, alpha# = 0` | The colour it fades to (default: the head's colour, fully faded). |
 | `TrailEmit trail, on` | Stops (or starts again) growing; what is there fades away. |
 | `ClearTrail trail` | Removes the ribbon at once. |
+
+Try it: **Ribbon trails** in the playground's Visual effects (`examples/trails.pb`).
 
 ## Building meshes
 
@@ -260,12 +271,14 @@ UpdateNormals m                       ; work out how light falls on it
 Changes are cheap: the mesh is rebuilt once, when it is next drawn or
 used, however many vertices were added.
 
+Try it: **Building meshes** in the playground's Visual effects (`examples/meshes.pb`).
+
 ## Looks
 
 | Command | What it does |
 |---------|--------------|
 | `EntityColor entity, r, g, b` | The surface colour (default white). |
-| `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible. |
+| `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible: not drawn at all (as in Blitz3D), so it hides nothing and casts no shadow, but it is still picked and still collides. |
 | `EntityShininess entity, shininess#` | 0 matte to 1 very shiny. |
 | `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_VERTEXCOLOR` (uses the mesh's vertex colours), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_VERTEXALPHA` (the vertex colours' alpha blends), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
@@ -299,6 +312,8 @@ leaves the original alone.
 
 Flags 256 and 512 (video memory, high colour) are accepted and mean
 nothing here; sphere and cube maps (64, 128) are not supported.
+
+Try it: **Texture flags** in the playground's Visual effects (`examples/textures.pb`).
 
 ## Moving and turning
 
@@ -399,6 +414,8 @@ mode are found, and hidden entities never are.
 | `PickedTime#()` `PickedDistance#()` | How far along the line (0 to 1), and the distance from its start. |
 | `CameraProject%(camera, x#, y#, z#)` | Puts a world point on the screen: 1 if it is in front of the camera, and then `ProjectedX#()` and `ProjectedY#()` are its pixel, `ProjectedZ#()` its distance in front. For labels over 3D things in `Draw`. |
 | `CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)` | Presses a square of `texture` (0 for none: colour it with `EntityColor`) `size` wide onto the surfaces at x, y, z, which face the way nx, ny, nz: a scorch mark, a bullet hole, a footprint. Use it after a pick: `CreateDecal(tex, PickedX(), PickedY(), PickedZ(), PickedNX(), PickedNY(), PickedNZ(), 0.5)`. `angle` turns it, anticlockwise. It is cut to the shapes it lies on (surfaces facing another way are left out), sits just over them without flickering, and is lit as they are. With `entity` it goes on that entity only and moves with it; otherwise on every shown mesh there, where it stays. It is an ordinary mesh entity: `EntityAlpha`, `EntityBlend`, `FreeEntity` work on it. |
+
+Try it: **Decals** in the playground's Visual effects (`examples/decals.pb`).
 
 ## Collisions
 

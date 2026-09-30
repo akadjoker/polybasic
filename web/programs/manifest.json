@@ -1,6 +1,7 @@
 {
   "categories": [
     { "id": "3d", "title": "3D" },
+    { "id": "effects", "title": "Visual effects" },
     { "id": "language", "title": "Language" }
   ],
   "programs": [
@@ -90,6 +91,78 @@
         "assets/kenney/Textures/colormap.png",
         "assets/kenney/License.txt"
       ]
+    },
+    {
+      "id": "shadows",
+      "title": "Shadows",
+      "category": "effects",
+      "file": "../examples/shadows.pb",
+      "description": "The sun and a lamp cast shadows (LightShadows); a shape can cast none (FX_NOSHADOWCAST) and a surface take none (FX_NOSHADOWRECV).",
+      "controls": "Left/Right turn the view, A/D turn the sun, 1 to 4 switch the shadows",
+      "assets": []
+    },
+    {
+      "id": "textures",
+      "title": "Texture flags",
+      "category": "effects",
+      "file": "../examples/textures.pb",
+      "description": "A fence cut out with TEX_MASKED, a stained-glass window with TEX_ALPHA and a sign with TEX_CLAMPU and TEX_CLAMPV: each key swaps a texture with and without its flag.",
+      "controls": "Left/Right turn the view, 1 2 3 switch the flags",
+      "assets": []
+    },
+    {
+      "id": "sprites",
+      "title": "Sprites",
+      "category": "effects",
+      "file": "../examples/sprites.pb",
+      "description": "A campfire at night: glowing sparks (EntityBlend 3), smoke that blends (TEX_ALPHA) and signposts that stand upright (SpriteViewMode 4).",
+      "controls": "Left/Right turn the view, Space more wood",
+      "assets": []
+    },
+    {
+      "id": "meshes",
+      "title": "Building meshes",
+      "category": "effects",
+      "file": "../examples/meshes.pb",
+      "description": "A flag waving in the wind, its vertices moved every step (VertexCoords, UpdateNormals), and a gem built from triangles with vertex colours.",
+      "controls": "Left/Right turn the view, Up/Down wind, F flat or smooth",
+      "assets": []
+    },
+    {
+      "id": "decals",
+      "title": "Decals",
+      "category": "effects",
+      "file": "../examples/decals.pb",
+      "description": "Paint splats and scorch marks pressed onto what you click, cut to the shapes under them, and carried along by the sliding crate.",
+      "controls": "Click paint, right click or S + click scorch, Left/Right turn, C clean up",
+      "assets": []
+    },
+    {
+      "id": "trails",
+      "title": "Ribbon trails",
+      "category": "effects",
+      "file": "../examples/trails.pb",
+      "description": "A sword's swing, three comets and a ribbon you draw with the pointer, each the trail of two points as they move.",
+      "controls": "Space swing, hold the mouse and move to draw, 1 2 3 trail length",
+      "assets": []
+    },
+    {
+      "id": "trees",
+      "title": "Trees",
+      "category": "effects",
+      "file": "../examples/trees.pb",
+      "description": "The seven kinds CreateTree grows, with their names; every seed grows another tree of the same kind.",
+      "controls": "Left/Right walk round, Up/Down closer, Space new seed, W wind",
+      "assets": []
+    },
+    {
+      "id": "grass",
+      "title": "Grass",
+      "category": "effects",
+      "file": "../examples/grass.pb",
+      "description": "A field swaying in the wind, parted by a ball rolling through it; click to paint more tufts.",
+      "controls": "Arrows or WASD roll the ball, click to paint grass, 1/2 wind, C mow, R sow again",
+      "assets": []
     },
     {
       "id": "tour",
