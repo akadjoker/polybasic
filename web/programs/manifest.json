@@ -291,6 +291,30 @@
       ]
     },
     {
+      "id": "dragon",
+      "title": "Dragon",
+      "category": "blitz3d",
+      "file": "../examples/dragon.pb",
+      "description": "Mark Sibly's Blitz3D dragon sample, ported: an MD2 dragon idling (LoadMD2, AnimateMD2) in a see-through room over a mirror floor (CreateMirror). MD2 Dragon model courtesy of Polycount.",
+      "controls": "Left/Right turn round, Up/Down look higher or lower, A/Z zoom, Q/E roll",
+      "assets": [
+        "assets/blitz3d/dragon/dragon.md2",
+        "assets/blitz3d/dragon/dragon.bmp",
+        "assets/blitz3d/dragon/chorme-2.bmp"
+      ]
+    },
+    {
+      "id": "gcuk-animation",
+      "title": "Object Animation (GCUK tutorial)",
+      "category": "blitz3d",
+      "file": "../examples/gcuk-animation.pb",
+      "description": "Paul Gerfen's Blitz3D tutorial, ported: an MD2 gargoyle walks towards you with one range of its frames, then stands and breathes with another (AnimateMD2).",
+      "controls": "None: watch it walk up",
+      "assets": [
+        "assets/blitz3d/gcuk/gargoyle.md2"
+      ]
+    },
+    {
       "id": "tour",
       "title": "Language tour",
       "category": "language",

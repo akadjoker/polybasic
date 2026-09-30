@@ -116,6 +116,10 @@ open source release (https://github.com/blitz-research/blitz3d,
 _release/samples), Copyright (c) 2013 Blitz Research Ltd, under the same
 zlib/libpng licence as the Blitz3D compiler above. Models among them were
 converted to glTF for PolyBasic.
+The dragon (examples/assets/blitz3d/dragon) is credited in its sample as
+"MD2 Dragon model courtesy of Polycount"; the gargoyle
+(examples/assets/blitz3d/gcuk) comes with Paul Gerfen's GCUK tutorials
+(www.gamecoding.co.uk) in the same release.
 
 The playground's page layout and scripts follow the DivJS playground
 (https://github.com/akadjoker/divjs-playground), by the same author, MIT.

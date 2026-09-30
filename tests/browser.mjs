@@ -255,7 +255,11 @@ const canvasStats = (canvas) =>
     colours.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
     hash = (Math.imul(hash, 31) + d[i] + d[i + 1] * 7 + d[i + 2] * 13) | 0;
   }
-  return { colours: colours.size, hash, width: copy.width, height: copy.height, corner: Array.from(d.slice(0, 3)) };
+  // Pixels not of the corner's colour: a small thing drawn on a plain
+  // background shows here when the sampled colours miss it.
+  let drawn = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) drawn++;
+  return { colours: colours.size, drawn, hash, width: copy.width, height: copy.height, corner: Array.from(d.slice(0, 3)) };
 };
 
 // All the pixels of a canvas (RGBA bytes), found by a selector or the
@@ -1124,7 +1128,7 @@ End Function
       else
       {
         const s = await pgStats();
-        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
+        assert(s.colours > 20 || s.drawn > 1000, `${entry.id}: blank canvas (${s.colours} colours, ${s.drawn} pixels drawn)`);
       }
       if (entry.id === 'spin' || entry.id === 'orbits') await playground.screenshot({ path: join(SHOTS, `playground-${entry.id}.png`) });
     }
@@ -2171,6 +2175,77 @@ End Function
     noConsoleErrors(page);
     await page.close();
     console.log(`      ${a.count} flags, ${a.buffer / 3} vertices each; pose ${a.pose} -> ${b.pose} in the same buffers; once ended at frame ${once.time}; ${colours.colours} colours`);
+  });
+
+  await check('dragon.pb: the MD2 dragon idles, textured, and shows in the mirror floor', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/dragon.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const dragon = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.md2);
+      return { time: e.md2.time, animating: e.md2.animating, frames: e.md2.frameCount, textured: !!(e.material.texture && e.material.texture.loaded) };
+    });
+    await page.waitForTimeout(700);
+    const a = await dragon();
+    await page.waitForTimeout(500);
+    const b = await dragon();
+    await page.screenshot({ path: join(SHOTS, 'dragon.png') });
+    // The mirror: a column of pixels under the dragon's feet, seen with the
+    // mirror and without it.
+    const column = () => page.evaluate(() =>
+    {
+      const canvas = document.querySelector('canvas');
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const x = Math.round(canvas.width / 2);
+      return Array.from(ctx.getImageData(x, Math.round(canvas.height * 0.55), 1, Math.round(canvas.height * 0.4)).data);
+    });
+    const withMirror = await column();
+    await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      for (const e of engine.world.entities) if (e.kind === 'mirror') e.visible = false;
+    });
+    await page.waitForTimeout(300);
+    const without = await column();
+    let differ = 0;
+    for (let i = 0; i < withMirror.length; i += 4)
+    {
+      if (Math.abs(withMirror[i] - without[i]) + Math.abs(withMirror[i + 1] - without[i + 1]) + Math.abs(withMirror[i + 2] - without[i + 2]) > 30) differ++;
+    }
+    assert(a.frames === 200 && a.animating && b.time !== a.time && b.time >= 0 && b.time < 40, `dragon ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
+    assert(a.textured, 'the dragon has no texture');
+    assert(differ > 20, `the mirror changes only ${differ} pixels under the dragon`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      frame ${a.time.toFixed(2)} -> ${b.time.toFixed(2)} of ${a.frames}; the reflection changes ${differ} pixels under the dragon`);
+  });
+
+  await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const man = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.md2);
+      return { time: e.md2.time, first: e.md2.first, last: e.md2.last, z: e.worldPosition().z };
+    });
+    await page.waitForTimeout(500);
+    const a = await man();
+    await page.waitForTimeout(1500);
+    const b = await man();
+    await page.screenshot({ path: join(SHOTS, 'gcuk-animation.png') });
+    const colours = await playerStats(page);
+    assert(a.first === 32 && a.last === 46 && a.time >= 32 && a.time < 46, `walking frames ${JSON.stringify(a)}`);
+    assert(b.z < a.z - 20, `it did not come closer: z ${a.z} -> ${b.z}`);
+    assert(colours.colours > 20, `nothing drawn: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      frame ${a.time.toFixed(1)} of 32-46; z ${a.z.toFixed(0)} -> ${b.z.toFixed(0)}`);
   });
 
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>

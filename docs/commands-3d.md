@@ -101,6 +101,7 @@ the same kind share their geometry, so a thousand cubes cost little.
 | Command | Shape |
 |---------|-------|
 | `CreatePivot%(parent = 0)` | Nothing visible: a point to position, turn and hang other entities from. |
+| `CreateMirror%(parent = 0)` | A mirror: the flat plane through the entity's X and Z axes (the ground, where it starts). Everything is drawn reflected in it first, then as it is over that, as in Blitz3D: the reflection shows through a floor that is see-through (`EntityAlpha floor, 0.4`), or where nothing else is drawn. Move and turn it like any entity. |
 | `CreateCube%(parent = 0)` | A cube. |
 | `CreateSphere%(segments = 16, parent = 0)` | A sphere; more segments look rounder. |
 | `CreateCylinder%(segments = 16, solid = True, parent = 0)` | A cylinder along Y; `solid = False` leaves the ends open. |

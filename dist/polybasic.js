@@ -4260,11 +4260,13 @@ var World = class {
     const cameras = [];
     const lights = [];
     const items = [];
+    const mirrors = [];
     for (const e of this.handles.values()) {
       if (!(e instanceof Entity) || !e.shown) continue;
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
+      else if (e.kind === "mirror") mirrors.push({ id: e.id, world });
       else if (e.kind === "grass" && e.grass.count) items.push(this.grassItem(e, world));
       else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
@@ -4278,6 +4280,7 @@ var World = class {
       cameras,
       lights,
       items,
+      mirrors,
       freedEntities: this.freedEntities,
       freedTextures: this.freedTextures
     };
@@ -9661,6 +9664,7 @@ var ENGINE_COMMANDS = [
   "AmbientLight(r, g, b)",
   // Shapes and pivots
   "CreatePivot%(parent = 0)",
+  "CreateMirror%(parent = 0)",
   "CreateCube%(parent = 0)",
   "CreateSphere%(segments = 16, parent = 0)",
   "CreateCylinder%(segments = 16, solid = 1, parent = 0)",
@@ -9928,6 +9932,10 @@ function createEngineCommands(engine) {
     // ---------------------------------------------------------- shapes
     createpivot(parent) {
       return world.createEntity("pivot", parentOf(parent)).id;
+    },
+    createmirror(parent) {
+      engine.autoGraphics();
+      return world.createEntity("mirror", parentOf(parent)).id;
     },
     createcube: (parent) => shape(engine.sharedMesh("cube", () => createCube()), parent),
     createsphere: (segments, parent) => shape(engine.sharedMesh("sphere" + segments, () => primitive(createSphere(clampSegments(segments)), "sphere")), parent),
@@ -38985,6 +38993,14 @@ function mirrorInto(target, world) {
   for (const i of MIRRORED) e[i] = -e[i];
   return target;
 }
+function reflection(world) {
+  const m = new Mat4().fromArray(world);
+  const inverse = m.clone();
+  inverse.invert();
+  const flip = new Mat4();
+  flip.e[5] = -1;
+  return m.multiply(flip).multiply(inverse);
+}
 function imagePixels(image) {
   if (!image) return null;
   const canvas = document.createElement("canvas");
@@ -39099,8 +39115,21 @@ var ThreeBackend = class extends RenderBackend {
       r.setClearColor(srgb(new Color(), cam.clearColor), 1);
       r.clear(true, true, true);
       const camera = this.syncCamera(cam, w / h);
-      this.faceSprites(cam.world);
       this.fitShadows(camera);
+      const mirrors = frame.mirrors || [];
+      for (const m of mirrors) {
+        const reflect = reflection(m.world);
+        this.faceSprites(new Mat4().multiplyMatrices(reflect, new Mat4().fromArray(cam.world)).e);
+        mirrorInto(this.scene.matrix, reflect.e);
+        this.scene.matrixAutoUpdate = false;
+        this.scene.updateMatrixWorld(true);
+        r.render(this.scene, camera);
+      }
+      if (mirrors.length) {
+        this.scene.matrix.identity();
+        this.scene.updateMatrixWorld(true);
+      }
+      this.faceSprites(cam.world);
       r.render(this.scene, camera);
     }
   }
