@@ -7,7 +7,10 @@ import { newHit, sweepTriangle, sweepSphere, rayTriangle, raySphere } from '../.
 import { screenRay, projectPoint } from '../../src/engine/collide/camera.js';
 import { createSphere, createTorus } from '../../src/engine/scene/mesh.js';
 import { World } from '../../src/engine/scene/world.js';
-import { pickLine } from '../../src/engine/collide/picking.js';
+import { pickLine, meshTrianglesNear } from '../../src/engine/collide/picking.js';
+import { Collisions } from '../../src/engine/collide/collisions.js';
+import { boxTriangles } from '../../src/engine/collide/shapes.js';
+import { createCube } from '../../src/engine/scene/mesh.js';
 import { createPlane } from '../../src/engine/scene/mesh.js';
 import { Vec3 } from '../../src/engine/math/vec3.js';
 import { assert, near } from './assert.mjs';
@@ -297,5 +300,96 @@ test('picked normals stay perpendicular under a parent with uneven scale', () =>
   near(p.y, 0.2, 1e-12, 'on the line');
   near(p.clone().sub(plane.worldPosition()).dot(n), 0, 1e-12, 'on the surface');
 });
+
+test('random fast moves never end inside a mesh or a box (ellipsoids, slide and stop)', () =>
+{
+  const rnd = random(5);
+  for (const response of [1, 2, 3])
+  {
+    const world = new World();
+    const collisions = new Collisions(world);
+    collisions.set(1, 2, 2, response);
+    collisions.set(1, 3, 3, response);
+    const solids = [];
+    // Turned, unevenly scaled spheres, tori and cubes as meshes (type 2)
+    // and cubes as boxes (type 3).
+    for (let i = 0; i < 24; i++)
+    {
+      const kind = i % 4;
+      const mesh = kind === 0 ? createSphere(10) : kind === 1 ? createTorus(16, 0.35) : createCube();
+      const e = world.createMesh(mesh);
+      e.setPosition(rnd() * 16 - 8, rnd() * 16 - 8, rnd() * 16 - 8, false);
+      e.setRotation(rnd() * 360, rnd() * 360, rnd() * 360, false);
+      e.setScale(0.5 + rnd() * 2, 0.5 + rnd() * 2, 0.5 + rnd() * 2);
+      e.collisionType = kind === 3 ? 3 : 2;
+      solids.push(e);
+    }
+    const movers = [];
+    for (let i = 0; i < 8; i++)
+    {
+      const m = world.createEntity('pivot');
+      m.radiusX = 0.2 + rnd() * 0.5;
+      m.radiusY = 0.2 + rnd() * 0.8;
+      m.collisionType = 1;
+      // Start somewhere clear of everything.
+      for (;;)
+      {
+        m.setPosition(rnd() * 20 - 10, rnd() * 20 - 10, rnd() * 20 - 10, false);
+        if (clearance(m, solids) > 1) break;
+      }
+      movers.push(m);
+    }
+    collisions.resetAll();
+    let contacts = 0;
+    for (let step = 0; step < 150; step++)
+    {
+      for (const m of movers)
+      {
+        // Up to 3 units a step: often more than the thinnest walls.
+        m.translate(rnd() * 6 - 3, rnd() * 6 - 3, rnd() * 6 - 3, true);
+        const p = m.worldPosition();
+        // Keep them in the area.
+        if (Math.abs(p.x) > 10 || Math.abs(p.y) > 10 || Math.abs(p.z) > 10) m.translate(-p.x * 0.2, -p.y * 0.2, -p.z * 0.2, true);
+      }
+      collisions.update();
+      for (const m of movers)
+      {
+        contacts += m.collisions.length;
+        const c = clearance(m, solids);
+        assert(c > 1 - 1e-6, `response ${response}, step ${step}: entity ${m.id} is inside something (ellipsoid distance ${c})`);
+      }
+    }
+    assert(contacts > 100, `response ${response}: only ${contacts} contacts, the test is too easy`);
+  }
+});
+
+function nearTriangles(e, p, pad)
+{
+  const out = [];
+  meshTrianglesNear(e, p, new Vec3(), pad, (t) => out.push(Array.from(t)));
+  return out;
+}
+
+// The smallest distance from a mover to any triangle of the solids, in its
+// ellipsoid space (1 means touching).
+function clearance(m, solids)
+{
+  const p = m.worldPosition();
+  const s = new Vec3(1 / m.radiusX, 1 / m.radiusY, 1 / m.radiusX);
+  const centre = new Vec3(p.x * s.x, p.y * s.y, p.z * s.z);
+  let best = Infinity;
+  for (const e of solids)
+  {
+    const tris = e.collisionType === 3
+      ? Array.from({ length: 12 }, (_, k) => Array.from(boxTriangles(e).subarray(k * 9, k * 9 + 9)))
+      : nearTriangles(e, p, [m.radiusX * 3, m.radiusY * 3, m.radiusX * 3]);
+    for (const t of tris)
+    {
+      const scaled = t.map((v, i) => v * [s.x, s.y, s.z][i % 3]);
+      best = Math.min(best, closestOnTriangle(centre, scaled).distanceTo(centre));
+    }
+  }
+  return best;
+}
 
 export default unit;

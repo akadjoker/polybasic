@@ -142,21 +142,25 @@ function rayMesh(e, origin, line, best)
 // are brought into the world, scaled by 1 / r, and swept against.
 function sweepMesh(e, origin, line, r, best)
 {
-  const tris = meshTrianglesNear(e, origin, line, r);
   const s = 1 / r;
-  for (const tri of tris)
+  meshTrianglesNear(e, origin, line, r, (tri) =>
   {
     for (let i = 0; i < 9; i++) tri[i] *= s;
     sweepScaled(best, r, (h) => sweepTriangle(origin.x * s, origin.y * s, origin.z * s, line.x * s, line.y * s, line.z * s, tri, true, h));
-  }
+  });
 }
 
-// The world-space triangles of a mesh entity that a move from origin along
-// line, padded by `pad` (per axis: a number or [x, y, z]), could touch.
-export function meshTrianglesNear(e, origin, line, pad)
+// Calls visit(tri) with each world-space triangle (9 numbers, in a buffer
+// that is reused: copy it to keep it) of a mesh entity that a move from
+// origin along line, padded by `pad` (a number or [x, y, z]), could touch.
+// `inv` is the inverse of the entity's world matrix when the caller has it.
+export function meshTrianglesNear(e, origin, line, pad, visit, inv = null)
 {
-  const inv = e.worldMatrix.clone();
-  if (!inv.invert()) return [];
+  if (!inv)
+  {
+    inv = e.worldMatrix.clone();
+    if (!inv.invert()) return;
+  }
   const [px, py, pz] = Array.isArray(pad) ? pad : [pad, pad, pad];
   const lo = [Math.min(origin.x, origin.x + line.x) - px, Math.min(origin.y, origin.y + line.y) - py, Math.min(origin.z, origin.z + line.z) - pz];
   const hi = [Math.max(origin.x, origin.x + line.x) + px, Math.max(origin.y, origin.y + line.y) + py, Math.max(origin.z, origin.z + line.z) + pz];
@@ -174,33 +178,27 @@ export function meshTrianglesNear(e, origin, line, pad)
     lhi[2] = Math.max(lhi[2], p.z);
   }
   const bvh = meshBvh(e.mesh);
-  const m = e.worldMatrix;
+  const m = e.worldMatrix.e;
   // A mirrored entity turns its triangles inside out; they are turned back
   // so one-sided tests keep the right front.
-  const mirrored = m.determinant() < 0;
-  const out = [];
+  const mirrored = e.worldMatrix.determinant() < 0;
+  const local = new Float64Array(9);
+  const tri = new Float64Array(9);
   bvh.queryBox(llo[0], llo[1], llo[2], lhi[0], lhi[1], lhi[2], (t) =>
   {
-    const tri = bvh.corners(t, new Float64Array(9));
+    bvh.corners(t, local);
     for (let k = 0; k < 3; k++)
     {
-      p.set(tri[k * 3], tri[k * 3 + 1], tri[k * 3 + 2]).applyMat4(m);
-      tri[k * 3] = p.x;
-      tri[k * 3 + 1] = p.y;
-      tri[k * 3 + 2] = p.z;
+      const x = local[k * 3];
+      const y = local[k * 3 + 1];
+      const z = local[k * 3 + 2];
+      const o = (mirrored && k > 0 ? 3 - k : k) * 3;
+      tri[o] = m[0] * x + m[4] * y + m[8] * z + m[12];
+      tri[o + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+      tri[o + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
     }
-    if (mirrored)
-    {
-      for (let k = 0; k < 3; k++)
-      {
-        const t2 = tri[3 + k];
-        tri[3 + k] = tri[6 + k];
-        tri[6 + k] = t2;
-      }
-    }
-    out.push(tri);
+    visit(tri);
   });
-  return out;
 }
 
 // A normal from an entity's space to the world: multiply by the inverse

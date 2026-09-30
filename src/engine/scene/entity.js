@@ -40,6 +40,8 @@ export class Entity
     this.radiusX = 1;         // sphere / ellipsoid radii, in world units
     this.radiusY = 1;
     this.box = null;          // [x, y, z, width, height, depth] in its own space; null: the mesh bounds
+    this.collisionFrom = null;  // world position the next collision sweep starts from
+    this.collisions = [];       // what it ran into in the last step
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
   }

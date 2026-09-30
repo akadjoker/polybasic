@@ -15,6 +15,7 @@ import { NullBackend } from './render/null/null-backend.js';
 import { NullOverlay } from './overlay/overlay.js';
 import { Input } from './input/input.js';
 import { createEngineCommands } from './commands.js';
+import { Collisions } from './collide/collisions.js';
 
 export const DEFAULT_WIDTH = 800;
 export const DEFAULT_HEIGHT = 600;
@@ -37,6 +38,8 @@ export class Engine
   constructor(options = {})
   {
     this.world = new World();
+    this.collisions = new Collisions(this.world);
+    this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -158,12 +161,16 @@ export class Engine
 
   beginStep()
   {
+    // Whatever the main body did to positions was setting up, not moving:
+    // collisions start from where everything is now.
+    if (this.steps++ === 0) this.collisions.resetAll();
     this.input.sample();
   }
 
   // After each Update: the world moves on by one step.
   endStep()
   {
+    this.collisions.update();
   }
 
   renderFrame()

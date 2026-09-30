@@ -85,6 +85,7 @@ export class World
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
+    e.collisionFrom = null;
     e.radiusX = src.radiusX;
     e.radiusY = src.radiusY;
     e.box = src.box ? [...src.box] : null;

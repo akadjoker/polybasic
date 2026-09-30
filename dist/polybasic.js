@@ -3361,6 +3361,8 @@ var Entity = class {
     this.radiusX = 1;
     this.radiusY = 1;
     this.box = null;
+    this.collisionFrom = null;
+    this.collisions = [];
     this.worldMatrixCache = new Mat4();
     this.worldDirty = true;
   }
@@ -3642,6 +3644,7 @@ var World = class {
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
+    e.collisionFrom = null;
     e.radiusX = src.radiusX;
     e.radiusY = src.radiusY;
     e.box = src.box ? [...src.box] : null;
@@ -4660,29 +4663,23 @@ function shapeBounds(e, mode) {
   return { min: lo, max: hi };
 }
 function segmentNearBox(ox, oy, oz, lx, ly, lz, box, pad, limit) {
-  let t0 = 0;
-  let t1 = limit;
-  const o = [ox, oy, oz];
-  const d = [lx, ly, lz];
-  for (let a = 0; a < 3; a++) {
-    const lo = box.min[a] - pad;
-    const hi = box.max[a] + pad;
-    if (Math.abs(d[a]) < 1e-15) {
-      if (o[a] < lo || o[a] > hi) return false;
-      continue;
-    }
-    let n = (lo - o[a]) / d[a];
-    let f = (hi - o[a]) / d[a];
-    if (n > f) {
-      const t = n;
-      n = f;
-      f = t;
-    }
-    t0 = Math.max(t0, n);
-    t1 = Math.min(t1, f);
-    if (t0 > t1) return false;
+  span[0] = 0;
+  span[1] = limit;
+  return slabNear(ox, lx, box.min[0] - pad, box.max[0] + pad) && slabNear(oy, ly, box.min[1] - pad, box.max[1] + pad) && slabNear(oz, lz, box.min[2] - pad, box.max[2] + pad);
+}
+var span = new Float64Array(2);
+function slabNear(o, d, lo, hi) {
+  if (Math.abs(d) < 1e-15) return o >= lo && o <= hi;
+  let n = (lo - o) / d;
+  let f = (hi - o) / d;
+  if (n > f) {
+    const t = n;
+    n = f;
+    f = t;
   }
-  return true;
+  if (n > span[0]) span[0] = n;
+  if (f < span[1]) span[1] = f;
+  return span[0] <= span[1];
 }
 
 // src/engine/collide/picking.js
@@ -4779,16 +4776,17 @@ function rayMesh(e, origin, line, best) {
   best.nz = n.z;
 }
 function sweepMesh(e, origin, line, r, best) {
-  const tris = meshTrianglesNear(e, origin, line, r);
   const s = 1 / r;
-  for (const tri of tris) {
+  meshTrianglesNear(e, origin, line, r, (tri) => {
     for (let i = 0; i < 9; i++) tri[i] *= s;
     sweepScaled(best, r, (h) => sweepTriangle(origin.x * s, origin.y * s, origin.z * s, line.x * s, line.y * s, line.z * s, tri, true, h));
-  }
+  });
 }
-function meshTrianglesNear(e, origin, line, pad) {
-  const inv = e.worldMatrix.clone();
-  if (!inv.invert()) return [];
+function meshTrianglesNear(e, origin, line, pad, visit, inv = null) {
+  if (!inv) {
+    inv = e.worldMatrix.clone();
+    if (!inv.invert()) return;
+  }
   const [px, py, pz] = Array.isArray(pad) ? pad : [pad, pad, pad];
   const lo = [Math.min(origin.x, origin.x + line.x) - px, Math.min(origin.y, origin.y + line.y) - py, Math.min(origin.z, origin.z + line.z) - pz];
   const hi = [Math.max(origin.x, origin.x + line.x) + px, Math.max(origin.y, origin.y + line.y) + py, Math.max(origin.z, origin.z + line.z) + pz];
@@ -4805,27 +4803,23 @@ function meshTrianglesNear(e, origin, line, pad) {
     lhi[2] = Math.max(lhi[2], p.z);
   }
   const bvh = meshBvh(e.mesh);
-  const m = e.worldMatrix;
-  const mirrored = m.determinant() < 0;
-  const out = [];
+  const m = e.worldMatrix.e;
+  const mirrored = e.worldMatrix.determinant() < 0;
+  const local = new Float64Array(9);
+  const tri = new Float64Array(9);
   bvh.queryBox(llo[0], llo[1], llo[2], lhi[0], lhi[1], lhi[2], (t) => {
-    const tri = bvh.corners(t, new Float64Array(9));
+    bvh.corners(t, local);
     for (let k = 0; k < 3; k++) {
-      p.set(tri[k * 3], tri[k * 3 + 1], tri[k * 3 + 2]).applyMat4(m);
-      tri[k * 3] = p.x;
-      tri[k * 3 + 1] = p.y;
-      tri[k * 3 + 2] = p.z;
+      const x = local[k * 3];
+      const y = local[k * 3 + 1];
+      const z = local[k * 3 + 2];
+      const o = (mirrored && k > 0 ? 3 - k : k) * 3;
+      tri[o] = m[0] * x + m[4] * y + m[8] * z + m[12];
+      tri[o + 1] = m[1] * x + m[5] * y + m[9] * z + m[13];
+      tri[o + 2] = m[2] * x + m[6] * y + m[10] * z + m[14];
     }
-    if (mirrored) {
-      for (let k = 0; k < 3; k++) {
-        const t2 = tri[3 + k];
-        tri[3 + k] = tri[6 + k];
-        tri[6 + k] = t2;
-      }
-    }
-    out.push(tri);
+    visit(tri);
   });
-  return out;
 }
 function normalToWorld(inv, nx, ny, nz) {
   const e = inv.e;
@@ -4867,6 +4861,220 @@ function projectPoint(camera, point, width, height) {
   };
 }
 
+// src/engine/collide/collisions.js
+var COLLIDE_SPHERE = 1;
+var COLLIDE_POLYGON = 2;
+var COLLIDE_BOX = 3;
+var RESPONSE_STOP = 1;
+var RESPONSE_SLIDE = 2;
+var RESPONSE_SLIDE_NO_DOWNHILL = 3;
+var MAX_SLIDES = 8;
+var GAP = 1e-6;
+var TINY = 1e-12;
+var Collisions = class {
+  constructor(world) {
+    this.world = world;
+    this.rules = /* @__PURE__ */ new Map();
+    this.cache = /* @__PURE__ */ new Map();
+    this.tri = new Float64Array(9);
+  }
+  // The world box of an entity's shape for a method, cached for the step.
+  boundsOf(e, method) {
+    let c = this.cache.get(e);
+    if (!c) {
+      c = { bounds: [], boxTris: null, inv: void 0 };
+      this.cache.set(e, c);
+    }
+    if (c.bounds[method] === void 0) c.bounds[method] = shapeBounds(e, method);
+    return c.bounds[method];
+  }
+  // The inverse world matrix, or null when there is none (a zero scale).
+  inverseOf(e) {
+    const c = this.cache.get(e);
+    if (c.inv === void 0) {
+      const inv = e.worldMatrix.clone();
+      c.inv = inv.invert() ? inv : null;
+    }
+    return c.inv;
+  }
+  boxTrianglesOf(e) {
+    const c = this.cache.get(e);
+    if (!c.boxTris) c.boxTris = boxTriangles(e);
+    return c.boxTris;
+  }
+  set(src, dst, method, response) {
+    let list = this.rules.get(src);
+    if (!list) {
+      list = [];
+      this.rules.set(src, list);
+    }
+    const i = list.findIndex((r) => r.dst === dst);
+    const rule = { dst, method, response };
+    if (i >= 0) list[i] = rule;
+    else list.push(rule);
+  }
+  clear() {
+    this.rules.clear();
+  }
+  // Forgets where an entity was: its next move starts from here, so a
+  // PositionEntity that follows is a jump, not a sweep.
+  reset(e) {
+    e.collisionFrom = e.worldPosition();
+  }
+  resetAll() {
+    for (const e of this.world.handles.values()) {
+      if (e instanceof Entity && e.collisionType) this.reset(e);
+    }
+  }
+  // One step: every entity of a source type that moved is swept.
+  update() {
+    if (this.rules.size === 0) {
+      for (const e of this.world.handles.values()) {
+        if (e instanceof Entity && e.collisionType) {
+          e.collisions.length = 0;
+          this.reset(e);
+        }
+      }
+      return;
+    }
+    const byType = /* @__PURE__ */ new Map();
+    const movers = [];
+    for (const e of this.world.handles.values()) {
+      if (!(e instanceof Entity) || !e.collisionType) continue;
+      let list = byType.get(e.collisionType);
+      if (!list) {
+        list = [];
+        byType.set(e.collisionType, list);
+      }
+      list.push(e);
+      if (this.rules.has(e.collisionType)) movers.push(e);
+      else {
+        e.collisions.length = 0;
+        this.reset(e);
+      }
+    }
+    this.cache.clear();
+    for (const e of movers) {
+      e.collisions.length = 0;
+      const to = e.worldPosition();
+      const from = e.collisionFrom || to;
+      if (!e.shown || from.distanceTo(to) < TINY) {
+        e.collisionFrom = to;
+        continue;
+      }
+      const end = this.sweep(e, from, to.clone().sub(from), byType);
+      if (!end.equals(to, 0)) e.setPosition(end.x, end.y, end.z, true);
+      e.collisionFrom = e.worldPosition();
+      this.cache.delete(e);
+    }
+    this.cache.clear();
+  }
+  // Moves entity e from `from` along `move` (world), returns where it ends.
+  sweep(e, from, move, byType) {
+    const rx = e.radiusX;
+    const ry = e.radiusY;
+    const toE = (v) => new Vec3(v.x / rx, v.y / ry, v.z / rx);
+    const toW = (v) => new Vec3(v.x * rx, v.y * ry, v.z * rx);
+    const reach = move.length() + Math.max(rx, ry);
+    const lo = [from.x - reach, from.y - reach, from.z - reach];
+    const hi = [from.x + reach, from.y + reach, from.z + reach];
+    const targets = [];
+    for (const rule of this.rules.get(e.collisionType)) {
+      for (const other of byType.get(rule.dst) || []) {
+        if (other === e || !other.shown) continue;
+        const b = this.boundsOf(other, rule.method);
+        if (!b || b.min[0] > hi[0] || b.max[0] < lo[0] || b.min[1] > hi[1] || b.max[1] < lo[1] || b.min[2] > hi[2] || b.max[2] < lo[2]) continue;
+        targets.push({ other, rule, bounds: b });
+      }
+    }
+    if (targets.length === 0) return from.clone().add(move);
+    let pos = toE(from);
+    let vel = toE(move);
+    for (let slide = 0; slide < MAX_SLIDES; slide++) {
+      if (vel.length() < TINY) break;
+      const found = this.nearest(e, pos, vel, targets, rx, ry);
+      if (!found) {
+        pos.add(vel);
+        break;
+      }
+      const { hit, other, rule } = found;
+      const n = new Vec3(hit.nx, hit.ny, hit.nz);
+      const worldNormal = new Vec3(n.x / rx, n.y / ry, n.z / rx).normalize();
+      const contact = toW(new Vec3(hit.x, hit.y, hit.z));
+      e.collisions.push({
+        entity: other,
+        x: contact.x,
+        y: contact.y,
+        z: contact.z,
+        nx: worldNormal.x,
+        ny: worldNormal.y,
+        nz: worldNormal.z
+      });
+      const rest = vel.clone().scale(1 - hit.t);
+      const travel = vel.length() * hit.t;
+      if (travel > GAP) pos.add(vel.normalize().scale(travel - GAP));
+      if (rule.response === RESPONSE_STOP) break;
+      if (rule.response === RESPONSE_SLIDE_NO_DOWNHILL && worldNormal.y > 0 && rest.y < 0) rest.y = 0;
+      vel = rest.sub(n.scale(rest.dot(n)));
+    }
+    return toW(pos);
+  }
+  // The first contact along the move, in ellipsoid space, or null.
+  nearest(e, pos, vel, targets, rx, ry) {
+    const hit = newHit(1);
+    let best = null;
+    const wPos = new Vec3(pos.x * rx, pos.y * ry, pos.z * rx);
+    const wVel = new Vec3(vel.x * rx, vel.y * ry, vel.z * rx);
+    const pad = Math.max(rx, ry);
+    const tri = this.tri;
+    const toE = (src, offset) => {
+      for (let k = 0; k < 9; k += 3) {
+        tri[k] = src[offset + k] / rx;
+        tri[k + 1] = src[offset + k + 1] / ry;
+        tri[k + 2] = src[offset + k + 2] / rx;
+      }
+      return tri;
+    };
+    for (const target of targets) {
+      const { other, rule, bounds } = target;
+      if (!segmentNearBox(wPos.x, wPos.y, wPos.z, wVel.x, wVel.y, wVel.z, bounds, pad, hit.t)) continue;
+      const before = hit.t;
+      if (rule.method === COLLIDE_SPHERE) this.sphereHit(other, wPos, wVel, rx, ry, hit);
+      else if (rule.method === COLLIDE_POLYGON) {
+        const inv = other.mesh ? this.inverseOf(other) : null;
+        if (!inv) continue;
+        meshTrianglesNear(other, wPos, wVel, [rx, ry, rx], (t) => {
+          sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(t, 0), true, hit);
+        }, inv);
+      } else {
+        const boxTris = this.boxTrianglesOf(other);
+        for (let k = 0; k < 12; k++) {
+          sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(boxTris, k * 9), false, hit);
+        }
+      }
+      if (hit.t < before) best = target;
+    }
+    return best ? { hit, other: best.other, rule: best.rule } : null;
+  }
+  // Sphere against sphere uses the mover's horizontal radius as a sphere
+  // (exact when both radii are equal). The hit is worked out in world
+  // units and brought into ellipsoid space.
+  sphereHit(other, wPos, wVel, rx, ry, hit) {
+    const c = other.worldPosition();
+    const s = 1 / rx;
+    const h = newHit(hit.t);
+    if (!sweepSphere(wPos.x * s, wPos.y * s, wPos.z * s, wVel.x * s, wVel.y * s, wVel.z * s, c.x * s, c.y * s, c.z * s, other.radiusX * s, h)) return;
+    const n = new Vec3(h.nx * rx, h.ny * ry, h.nz * rx).normalize();
+    hit.t = h.t;
+    hit.x = h.x;
+    hit.y = h.y * rx / ry;
+    hit.z = h.z;
+    hit.nx = n.x;
+    hit.ny = n.y;
+    hit.nz = n.z;
+  }
+};
+
 // src/engine/collide/commands.js
 var COLLIDE_COMMANDS = [
   // Shapes for picking and collisions
@@ -4887,6 +5095,21 @@ var COLLIDE_COMMANDS = [
   "PickedNZ#()",
   "PickedTime#()",
   "PickedDistance#()",
+  // Collisions
+  "EntityType(entity, type)",
+  "GetEntityType%(entity)",
+  "Collisions(srcType, dstType, method, response)",
+  "ClearCollisions()",
+  "ResetEntity(entity)",
+  "CountCollisions%(entity)",
+  "CollisionEntity%(entity, index)",
+  "CollisionX#(entity, index)",
+  "CollisionY#(entity, index)",
+  "CollisionZ#(entity, index)",
+  "CollisionNX#(entity, index)",
+  "CollisionNY#(entity, index)",
+  "CollisionNZ#(entity, index)",
+  "EntityCollided%(entity, type)",
   // From the world to the screen
   "CameraProject%(camera, x#, y#, z#)",
   "ProjectedX#()",
@@ -4897,13 +5120,31 @@ var COLLIDE_CONSTANTS = {
   PICK_NONE,
   PICK_SPHERE,
   PICK_POLYGON,
-  PICK_BOX
+  PICK_BOX,
+  COLLIDE_SPHERE,
+  COLLIDE_POLYGON,
+  COLLIDE_BOX,
+  RESPONSE_STOP,
+  RESPONSE_SLIDE,
+  RESPONSE_SLIDE_NO_DOWNHILL
 };
+var MAX_TYPE = 999;
 function createCollideCommands(engine) {
   const world = engine.world;
   const { entity, ofKind } = handleHelpers(world);
   let picked = emptyPick();
   let projected = { x: 0, y: 0, depth: 0 };
+  const collisions = engine.collisions;
+  const collision = (handle, index) => {
+    const list = entity(handle).collisions;
+    const c = list[index - 1];
+    if (!c) throw runtimeError(`Entity ${handle} has ${list.length} collision${list.length === 1 ? "" : "s"} this step, not number ${index}`);
+    return c;
+  };
+  const type = (t, what) => {
+    if (t < 1 || t > MAX_TYPE) throw runtimeError(`${what} must be 1 to ${MAX_TYPE}, not ${t}`);
+    return t;
+  };
   const pick = (origin, line, radius, accept) => {
     picked = pickLine(world, origin, line, radius, accept);
     return picked.entity ? picked.entity.id : 0;
@@ -4955,6 +5196,44 @@ function createCollideCommands(engine) {
     pickednz: () => tidy(picked.nz),
     pickedtime: () => tidy(picked.t),
     pickeddistance: () => tidy(picked.distance),
+    entitytype(handle, t) {
+      const e = entity(handle);
+      e.collisionType = t === 0 ? 0 : type(t, "EntityType type");
+      collisions.reset(e);
+    },
+    getentitytype: (handle) => entity(handle).collisionType,
+    collisions(src, dst, method, response) {
+      type(src, "Collisions source type");
+      type(dst, "Collisions destination type");
+      if (method < COLLIDE_SPHERE || method > COLLIDE_BOX) throw runtimeError(`Collisions method must be COLLIDE_SPHERE, COLLIDE_POLYGON or COLLIDE_BOX (1 to 3), not ${method}`);
+      if (response < RESPONSE_STOP || response > RESPONSE_SLIDE_NO_DOWNHILL) throw runtimeError(`Collisions response must be RESPONSE_STOP, RESPONSE_SLIDE or RESPONSE_SLIDE_NO_DOWNHILL (1 to 3), not ${response}`);
+      collisions.set(src, dst, method, response);
+    },
+    clearcollisions() {
+      collisions.clear();
+    },
+    resetentity(handle) {
+      const e = entity(handle);
+      collisions.reset(e);
+      e.collisions.length = 0;
+    },
+    countcollisions: (handle) => entity(handle).collisions.length,
+    collisionentity(handle, index) {
+      const c = collision(handle, index);
+      return c.entity.alive ? c.entity.id : 0;
+    },
+    collisionx: (handle, index) => tidy(collision(handle, index).x),
+    collisiony: (handle, index) => tidy(collision(handle, index).y),
+    collisionz: (handle, index) => tidy(collision(handle, index).z),
+    collisionnx: (handle, index) => tidy(collision(handle, index).nx),
+    collisionny: (handle, index) => tidy(collision(handle, index).ny),
+    collisionnz: (handle, index) => tidy(collision(handle, index).nz),
+    entitycollided(handle, t) {
+      for (const c of entity(handle).collisions) {
+        if (c.entity.alive && c.entity.collisionType === t) return c.entity.id;
+      }
+      return 0;
+    },
     cameraproject(camera, x, y, z) {
       const cam = ofKind(camera, "camera", "camera");
       const p = projectPoint(cam, new Vec3(x, y, z), engine.width, engine.height);
@@ -5336,6 +5615,8 @@ var Engine = class {
   //              platform can lay out its canvases
   constructor(options = {}) {
     this.world = new World();
+    this.collisions = new Collisions(this.world);
+    this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -5432,10 +5713,12 @@ var Engine = class {
     return drain();
   }
   beginStep() {
+    if (this.steps++ === 0) this.collisions.resetAll();
     this.input.sample();
   }
   // After each Update: the world moves on by one step.
   endStep() {
+    this.collisions.update();
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
