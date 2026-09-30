@@ -50,6 +50,20 @@ export class World
     return t;
   }
 
+  // Gives any other object kept by the engine (a sound, a song) a handle
+  // in the same space, so mixing handles up is reported clearly.
+  addHandle(object)
+  {
+    object.handle = this.nextHandle++;
+    this.handles.set(object.handle, object);
+    return object.handle;
+  }
+
+  removeHandle(object)
+  {
+    this.handles.delete(object.handle);
+  }
+
   // Frees an entity and all its children.
   freeEntity(e)
   {

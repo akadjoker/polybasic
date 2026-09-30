@@ -19,6 +19,15 @@ export const tidy = (v) =>
   return r === 0 ? 0 : r;
 };
 
+// What a handle's object is, for error messages: "an entity", "a texture",
+// or the `handleKind` of other objects kept under handles ("a sound").
+export function describe(object)
+{
+  if (object instanceof Entity) return 'an entity';
+  if (object instanceof Texture) return 'a texture';
+  return object && object.handleKind ? object.handleKind : 'something else';
+}
+
 export function handleHelpers(world)
 {
   const entity = (handle) =>
@@ -26,7 +35,7 @@ export function handleHelpers(world)
     const e = world.handles.get(handle);
     if (e instanceof Entity) return e;
     if (handle === 0) throw runtimeError('Entity handle is 0 (no entity)');
-    if (e instanceof Texture) throw runtimeError(`Handle ${handle} is a texture, not an entity`);
+    if (e) throw runtimeError(`Handle ${handle} is ${describe(e)}, not an entity`);
     throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
   };
   const parentOf = (handle) => (handle === 0 ? null : entity(handle));
@@ -35,7 +44,7 @@ export function handleHelpers(world)
     const t = world.handles.get(handle);
     if (t instanceof Texture) return t;
     if (handle === 0) throw runtimeError('Texture handle is 0 (no texture)');
-    if (t instanceof Entity) throw runtimeError(`Handle ${handle} is an entity, not a texture`);
+    if (t) throw runtimeError(`Handle ${handle} is ${describe(t)}, not a texture`);
     throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
   };
   const ofKind = (handle, kind, what) =>

@@ -2,14 +2,15 @@
 // together and plugs into the runner's frame loop:
 //
 //   before main:        prepare() loads what the program needs (physics)
-//   when it stops:      stop() releases the physics world
+//   when it stops:      stop() releases the physics world and silences the sound
 //   after main:         whenReady() waits for the files main started loading
-//   every Update step:  input.sample()  ->  Update()  ->  endStep() (animations, physics, collisions)
+//   every Update step:  input.sample()  ->  Update()  ->  endStep() (animations, physics, collisions, 3D sound)
 //   every frame:        world matrices + backend.render()  ->  Draw() on the overlay
 //
 // It is platform-neutral. src/engine/browser.js builds one with the three.js
-// backend, a canvas overlay and DOM input; in Node the defaults (null
-// backend, null overlay, no input events) run the same programs headless.
+// backend, Web Audio, a canvas overlay and DOM input; in Node the defaults
+// (null backends, null overlay, no input events) run the same programs
+// headless.
 
 import { World } from './scene/world.js';
 import { NullBackend } from './render/null/null-backend.js';
@@ -20,6 +21,8 @@ import { Collisions } from './collide/collisions.js';
 import { Physics } from './physics/physics.js';
 import { Models } from './model/model.js';
 import { PHYSICS_KEYS } from './physics/commands.js';
+import { Audio } from './audio/audio.js';
+import { NullAudio } from './audio/null/null-audio.js';
 import { STEP_MS } from '../runtime/runtime.js';
 
 export const DEFAULT_WIDTH = 800;
@@ -29,12 +32,13 @@ export class Engine
 {
   // options:
   //   backend    a RenderBackend (default: NullBackend)
+  //   audio      an AudioBackend (default: NullAudio)
   //   overlay    the 2D layer (default: NullOverlay)
   //   input      an Input (default: a fresh one, fed by nobody)
   //   loadImage  (url) => Promise<image>, used by LoadTexture
   //   loadFile   (url) => Promise<ArrayBuffer | Uint8Array>, used by
-  //              LoadMesh (and, without loadImage, to check that a texture
-  //              file exists)
+  //              LoadMesh, LoadSound and PlayMusic (and, without loadImage,
+  //              to check that a texture file exists)
   //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
   //              inside a model file
   //   loadPhysics () => Promise<PhysicsBackend>, a ready physics backend
@@ -50,6 +54,7 @@ export class Engine
     this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
     this.steps = 0;
+    this.audio = new Audio(this, options.audio || new NullAudio());
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -157,6 +162,17 @@ export class Engine
     return this.models.load(file, resolveUrl(this.baseUrl, file), parent);
   }
 
+  // Sound files, relative to the program like every other file.
+  loadSound(file)
+  {
+    return this.audio.load(file, resolveUrl(this.baseUrl, file));
+  }
+
+  playMusic(file, loop)
+  {
+    return this.audio.playMusic(file, resolveUrl(this.baseUrl, file), loop);
+  }
+
   // ----------------------------------------------------- runner hooks
 
   // Called before main with the commands the program uses. Returns a
@@ -186,12 +202,14 @@ export class Engine
   }
 
   // After each Update: the world moves on by one step. Animations, then
-  // physics, then collisions, which see where bodies ended up.
+  // physics, then collisions, which see where bodies ended up; then sounds
+  // placed in the world follow where everything is now.
   endStep()
   {
     this.models.step(STEP_MS / 1000);
     this.physics.step(STEP_MS / 1000);
     this.collisions.update();
+    this.audio.step();
   }
 
   // The program stopped (for whatever reason): let go of what only a
@@ -199,6 +217,7 @@ export class Engine
   stop()
   {
     this.physics.dispose();
+    this.audio.stopAll();
   }
 
   renderFrame()

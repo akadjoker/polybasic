@@ -18,6 +18,7 @@ import { KEYS } from './input/input.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
+import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -120,7 +121,8 @@ export const ENGINE_COMMANDS = [
 
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
-  ...MODEL_COMMANDS
+  ...MODEL_COMMANDS,
+  ...AUDIO_COMMANDS
 ];
 
 export const ENGINE_CONSTANTS = {
@@ -135,7 +137,8 @@ export const ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
-  ...MODEL_CONSTANTS
+  ...MODEL_CONSTANTS,
+  ...AUDIO_CONSTANTS
 };
 
 
@@ -162,6 +165,7 @@ export function createEngineCommands(engine)
     ...createCollideCommands(engine),
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
+    ...createAudioCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
