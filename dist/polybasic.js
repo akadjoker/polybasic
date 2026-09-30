@@ -3550,7 +3550,7 @@ var World = class {
   constructor() {
     this.handles = /* @__PURE__ */ new Map();
     this.nextHandle = 1;
-    this.ambient = [0.25, 0.25, 0.25];
+    this.ambient = [64 / 255, 64 / 255, 64 / 255];
     this.clearColor = [0, 0, 0];
     this.freedMeshes = [];
     this.freedTextures = [];

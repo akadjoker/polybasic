@@ -36,8 +36,9 @@ does not own an endless loop. Instead:
      `DeltaTime#()` returns that step in seconds (1/60), which is handy for
      writing speeds in "units per second".
    - `Function Draw()` runs once per displayed frame, after the Updates for
-     that frame. In phase 2 the 3D scene is drawn automatically; Draw is for
-     2D things drawn on top (and, for now, for printing).
+     that frame and after the 3D scene has been drawn; it is for 2D things
+     drawn on top (text, scores, bars). See
+     [commands-3d.md](commands-3d.md#what-happens-in-a-frame).
 3. **`End` stops the program**: no more Update or Draw calls.
 
 A program with no `Update` and no `Draw` simply runs its main part and
@@ -421,7 +422,8 @@ commands, and `RuntimeError "message"` from your own code.
 ## Built-in commands
 
 Commands with a return value are used in expressions; the others are
-statements. Angles are in degrees.
+statements. Angles are in degrees. This is the core set; the 3D, 2D and
+input commands are listed in [commands-3d.md](commands-3d.md).
 
 | Command | Result |
 |---------|--------|
@@ -477,7 +479,8 @@ deliberate:
 - **`Local x` resets `x`** each time the line runs.
 - **Type sigils must touch the name** (`x%`, not `x %`), which is what lets
   `$FF` and `%101` be read as numbers anywhere else.
-- **`Min`, `Max` and `DeltaTime` are new**; `Handle`/`Object`, banks, files
-  and the graphics commands are not in phase 1.
+- **`Min`, `Max` and `DeltaTime` are new**; `Handle`/`Object`, banks and
+  files are not there. The 3D, 2D and input commands are PolyBasic's own
+  (see [commands-3d.md](commands-3d.md)), in the spirit of Blitz3D's.
 - Reversed comparison spellings (`=<`, `=>`, `><`) are not accepted.
 - `Next` may name its loop variable (`Next i`), and it is checked.

@@ -87,6 +87,9 @@ let session = null;          // the running program: { controller, engine, done 
 let settingDoc = false;      // true while the page replaces the document itself
 let sharedUnsaved = false;   // shared code on screen, not saved until the user edits it
 let saveTimer = 0;
+// Bumped by every run() and stop(): a run overtaken while it was still
+// loading must not start.
+let runToken = 0;
 const sourceCache = new Map();
 
 // ── Storage (may be unavailable: private windows, blocked site data) ────
@@ -461,7 +464,9 @@ async function run()
   }
   for (const w of compiled.warnings) logErrorAt('Warning', w.message, w.line, w.column, 'warn');
 
+  const token = runToken;
   const module = await loadProgram(compiled.js);
+  if (token !== runToken) return;
   const baseUrl = current.file ? new URL(current.file, window.location.href).href : window.location.href;
   const engine = screen.newEngine({ baseUrl });
   const controller = new AbortController();
@@ -491,6 +496,7 @@ async function run()
 
 function stop()
 {
+  runToken++;
   if (session)
   {
     session.controller.abort();

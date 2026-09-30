@@ -20,3 +20,8 @@ jobs:
       - run: npm run lint
       - run: npm test
       - run: npm run bench
+      # dist/polybasic.js and web/vendor/codemirror.js are committed so the
+      # web pages work without a build step: they must match the sources.
+      - run: npm run build && npm run build:vendor && git diff --exit-code -- dist/ web/vendor/
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

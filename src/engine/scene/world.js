@@ -14,7 +14,7 @@ export class World
     // passed where an entity is expected is reported clearly.
     this.handles = new Map();
     this.nextHandle = 1;
-    this.ambient = [0.25, 0.25, 0.25];
+    this.ambient = [64 / 255, 64 / 255, 64 / 255];
     this.clearColor = [0, 0, 0];
     this.freedMeshes = [];
     this.freedTextures = [];

@@ -293,20 +293,15 @@ try
 
   const playground = await openPage(browser, `${base}/web/`, { width: 1400, height: 850 });
   const pgStats = () => playground.evaluate(`(${canvasStats})(window.polybasicPlayground.getScreen().canvas)`);
-  const pgFrames = () => playground.evaluate(() =>
-  {
-    const s = window.polybasicPlayground.getSession();
-    return s ? s.engine.frames : -1;
-  });
   const openExample = async (id) =>
   {
     await playground.evaluate((x) => window.polybasicPlayground.openProgram(x), id);
-    const start = await pgFrames();
-    await playground.waitForFunction((n) =>
+    // A few frames of the new run, and for console programs their output.
+    await playground.waitForFunction(() =>
     {
       const s = window.polybasicPlayground.getSession();
-      return s && s.engine.frames > n + 5;
-    }, start < 0 ? 0 : 0, { timeout: 20000 }).catch(() => {});
+      return !s || s.engine.frames > 5 || document.getElementById('status').textContent !== 'Running';
+    }, null, { timeout: 20000 });
     await playground.waitForTimeout(600);
   };
 
@@ -326,7 +321,10 @@ try
         const s = await pgStats();
         assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
       }
-      else assert(consoleText.trim().length > 0, `${entry.id}: printed nothing`);
+      else
+      {
+        await playground.waitForFunction(() => document.getElementById('console').textContent.trim().length > 0, null, { timeout: 10000 });
+      }
       if (entry.id === 'spin' || entry.id === 'orbits') await playground.screenshot({ path: join(SHOTS, `playground-${entry.id}.png`) });
     }
     noConsoleErrors(playground);
@@ -367,6 +365,9 @@ try
     const consoleText = await playground.textContent('#console');
     assert(/Compile error: .*\(line 3, column 10\)/.test(consoleText), consoleText);
     assert((await playground.textContent('#status')) === 'Compile error', 'status');
+    await playground.waitForTimeout(300);
+    const blank = await pgStats();
+    assert(blank.colours <= 2, `the previous picture is still on screen (${blank.colours} colours)`);
     await playground.screenshot({ path: join(SHOTS, 'playground-error.png') });
   });
 

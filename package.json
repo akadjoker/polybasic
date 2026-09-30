@@ -1,6 +1,6 @@
 {
   "name": "polybasic",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A friendly BASIC for making games in the browser, compiled to JavaScript.",
   "type": "module",
   "license": "MIT",
