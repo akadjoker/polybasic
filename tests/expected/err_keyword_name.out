@@ -1,0 +1,1 @@
+err_keyword_name.pb:1:7: error: 'next' is a keyword and cannot be used as a variable name

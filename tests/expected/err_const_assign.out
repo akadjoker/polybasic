@@ -1,0 +1,1 @@
+err_const_assign.pb:2:1: error: 'SPEED' is a Const and cannot be changed

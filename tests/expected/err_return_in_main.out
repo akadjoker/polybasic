@@ -1,0 +1,1 @@
+err_return_in_main.pb:2:1: error: 'Return' can only be used inside a Function (use End to stop the program)

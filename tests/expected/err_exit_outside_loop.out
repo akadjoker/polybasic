@@ -1,0 +1,1 @@
+err_exit_outside_loop.pb:1:11: error: 'Exit' can only be used inside a loop

@@ -1,0 +1,1 @@
+err_step_zero.pb:1:21: error: The Step of a For loop cannot be 0

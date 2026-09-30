@@ -1,0 +1,1 @@
+err_local_twice.pb:3:9: error: Local 'x' is already declared (or used) earlier in this Function

@@ -1,0 +1,1 @@
+err_string_condition.pb:2:4: error: A condition must be a number or an object, not a String (compare it, e.g. name$ <> "")

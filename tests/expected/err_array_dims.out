@@ -1,0 +1,1 @@
+err_array_dims.pb:2:1: error: Array 'grid' has 2 dimensions but 1 index was given

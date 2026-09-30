@@ -1,0 +1,4 @@
+update 1
+update 2
+update 3
+Runtime error (rt_update.pb, line 6): Division by zero

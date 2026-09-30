@@ -67,6 +67,7 @@ export class NodeHost extends Host
     super();
     this.fakeTime = Boolean(options.fakeTime);
     this.clock = 0;
+    this.frames = 0;
     this.out = options.out || ((text) => process.stdout.write(text));
     this.err = options.err || ((text) => process.stderr.write(text));
     this.start = performance.now();
@@ -99,7 +100,10 @@ export class NodeHost extends Host
     {
       return nextTurn(() =>
       {
-        this.clock += FRAME_MS;
+        // Computed from the frame count, not accumulated, so the clock
+        // reads exactly 1000 after 60 frames.
+        this.frames++;
+        this.clock = this.frames * 1000 / 60;
         callback(this.clock);
       });
     }

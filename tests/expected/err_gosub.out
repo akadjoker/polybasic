@@ -1,0 +1,1 @@
+err_gosub.pb:1:1: error: Gosub is not part of PolyBasic: move the code into a Function and call it

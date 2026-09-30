@@ -1,0 +1,1 @@
+err_goto.pb:1:1: error: Goto is not part of PolyBasic: use loops, Exit and functions instead

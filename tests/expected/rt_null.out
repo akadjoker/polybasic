@@ -1,0 +1,2 @@
+ok
+Runtime error (rt_null.pb, line 6): Object is Null (it was never created, or was set to Null)

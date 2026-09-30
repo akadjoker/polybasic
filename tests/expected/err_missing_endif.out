@@ -1,0 +1,1 @@
+err_missing_endif.pb:4:1: error: If on line 1 is missing its 'EndIf'

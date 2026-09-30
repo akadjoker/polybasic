@@ -286,6 +286,7 @@ class Analyser
       case 'assign':
         s.target = this.lvalue(s.target, scope);
         s.expr = this.convert(this.expr(s.expr, scope), s.target.type, s.expr.pos);
+        assigned(s.target);
         return;
       case 'callStmt':
         s.call = this.call(s.call, scope, true);
@@ -342,6 +343,7 @@ class Analyser
       case 'read':
         s.target = this.lvalue(s.target, scope);
         if (s.target.type.kind === 'struct') fail('Read can only fill Int, Float or String variables', s.pos);
+        assigned(s.target);
         return;
       case 'dim':
         for (const d of s.dims) d.sizes = d.sizes.map((e) => this.convert(this.expr(e, scope), INT, e.pos));
@@ -369,6 +371,7 @@ class Analyser
   forLoop(s, scope)
   {
     const v = this.lvalue(s.variable, scope);
+    assigned(v);
     if (!isNumeric(v.type)) fail(`The loop variable of a For must be an Int or a Float, not ${typeLabel(v.type)}`, s.variable.pos);
     s.variable = v;
     s.from = this.convert(this.expr(s.from, scope), v.type, s.from.pos);
@@ -393,6 +396,7 @@ class Analyser
       s.variable.tag = { typeName: s.typeName };
     }
     const v = this.lvalue(s.variable, scope);
+    assigned(v);
     if (v.type !== struct) fail(`The loop variable must be a ${struct.name} object (write ${s.variable.name.text}.${struct.name})`, s.variable.pos);
     s.variable = v;
     s.struct = struct;
@@ -475,8 +479,9 @@ class Analyser
         {
           if (this.arrays.has(key)) fail(`'${node.name.text}' is an array; use it with an index, like ${node.name.text}(0)`, node.pos);
           decl = { kind: 'local', name: node.name.text, key, type: tagType || INT, js: 'l_' + key, vector: null };
+          decl.implicit = true;
+          decl.assigned = false;
           scope.vars.set(key, decl);
-          if (scope.fn) this.checkShadowedMainLocal(decl, node, scope);
         }
         else if (tagType && tagType !== decl.type)
         {
@@ -523,13 +528,16 @@ class Analyser
     }
   }
 
-  // A Function that silently creates a local with the same name as a
-  // variable of the main program is the classic Blitz bug: the programmer
-  // meant the main program's variable, which needs to be Global.
+  // A Function that reads an undeclared variable which has the same name as
+  // a variable of the main program is the classic Blitz bug: the programmer
+  // meant the main program's variable, which needs to be Global. Reading
+  // before any assignment is the tell; `For i = ...` in a Function is fine.
   checkShadowedMainLocal(decl, node, scope)
   {
+    if (!scope.fn || !decl.implicit || decl.assigned || decl.warned) return;
     if (this.mainScope && this.mainScope.vars.has(decl.key))
     {
+      decl.warned = true;
       this.warnings.push({
         file: node.pos.file,
         line: node.pos.line,
@@ -613,6 +621,7 @@ class Analyser
   rvalue(node, scope)
   {
     const v = this.variable(node, scope);
+    if (v.kind === 'var') this.checkShadowedMainLocal(v.decl, node, scope);
     if ((v.kind === 'var' && v.decl.vector) || (v.kind === 'field' && v.vector))
     {
       fail(`'${v.kind === 'var' ? v.decl.name : v.field.name}' is an array; use one element, like ${v.kind === 'var' ? v.decl.name : v.field.name}[0]`, node.pos);
@@ -819,6 +828,12 @@ class Analyser
 }
 
 const SPECIAL = new Set(['int', 'float', 'str', 'abs', 'sgn', 'min', 'max']);
+
+// Marks a variable as written, for the shadowing warning above.
+function assigned(v)
+{
+  if (v.kind === 'var') v.decl.assigned = true;
+}
 
 function isLiteral(e)
 {

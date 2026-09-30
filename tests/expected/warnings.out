@@ -1,0 +1,2 @@
+warnings.pb:5:11: warning: 'score' in Function AddPoints is a new local variable, not the one from the main program. Declare it with Global to share it.
+5 10 3

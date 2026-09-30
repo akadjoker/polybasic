@@ -1,0 +1,1 @@
+err_string_minus.pb:2:12: error: '-' cannot be used on Strings (only + joins them)

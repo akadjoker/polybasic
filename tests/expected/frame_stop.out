@@ -1,0 +1,6 @@
+start
+update 250
+update 500
+update 750
+update 1000
+[stopped after 1000 updates]

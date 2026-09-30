@@ -1,0 +1,1 @@
+err_label.pb:1:1: error: Labels are not part of PolyBasic (there is no Goto or Gosub)

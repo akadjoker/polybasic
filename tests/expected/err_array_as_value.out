@@ -1,0 +1,1 @@
+err_array_as_value.pb:2:5: error: 'v' is an array; use one element, like v[0]

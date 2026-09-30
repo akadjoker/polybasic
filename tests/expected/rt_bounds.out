@@ -1,0 +1,3 @@
+start
+0
+Runtime error (rt_bounds.pb, line 4): Index 10 is out of bounds for array 'a' (valid: 0 to 3)

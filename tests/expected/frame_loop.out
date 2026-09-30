@@ -1,0 +1,4 @@
+setup done, dt=0.0166667
+frame 30 t=500ms: 20.0 18.0 16.5 bounces=6
+frame 60 t=1000ms: 20.0 20.0 20.0 bounces=76
+[ended]

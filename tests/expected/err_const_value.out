@@ -1,0 +1,1 @@
+err_const_value.pb:2:15: error: The value of Const 'MAX' must be known before the program runs

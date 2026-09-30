@@ -1,0 +1,1 @@
+err_data_in_function.pb:2:3: error: 'Data' can only be used in the main program, not inside a Function
