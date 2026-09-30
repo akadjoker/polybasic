@@ -16,6 +16,13 @@ export class Material
     this.flat = false;        // faceted instead of smooth shading
     this.twoSided = false;
     this.texture = null;
+    // From model files: how alpha is used ('opaque', 'mask' below
+    // alphaCutoff is not drawn, 'blend'), or null to go by `alpha` as the
+    // built-in shapes do; and whether the mesh's vertex colours tint it.
+    this.alphaMode = null;
+    this.alphaCutoff = 0.5;
+    this.vertexColors = false;
+    this.name = '';
   }
 
   changed()
@@ -33,6 +40,10 @@ export class Material
     m.flat = this.flat;
     m.twoSided = this.twoSided;
     m.texture = this.texture;
+    m.alphaMode = this.alphaMode;
+    m.alphaCutoff = this.alphaCutoff;
+    m.vertexColors = this.vertexColors;
+    m.name = this.name;
     return m;
   }
 }

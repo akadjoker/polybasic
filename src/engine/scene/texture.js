@@ -19,6 +19,11 @@ export class Texture
     this.failed = false;
     this.scaleU = 1;
     this.scaleV = 1;
+    // Past the edges: 'repeat', 'clamp' or 'mirror'. Close up: blend
+    // pixels, or keep them sharp (`nearest`, the default for created ones).
+    this.wrapU = 'repeat';
+    this.wrapV = 'repeat';
+    this.nearest = this.pixels !== null;
   }
 
   fill(r, g, b, a = 255)
