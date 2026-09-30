@@ -1841,6 +1841,71 @@ End Function
     console.log(`      ${facts.shadows}`);
   });
 
+  await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/meadow.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const walker = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+      const p = e.worldPosition();
+      return { x: p.x, y: p.y, z: p.z };
+    });
+    const start = await walker();
+    const scene = await page.evaluate(() =>
+    {
+      const world = window.polybasicPlayer.state.engine.world;
+      const grass = world.entities.find((e) => e.grass);
+      return {
+        tufts: grass.grass.count,
+        pushers: grass.grass.pushers.length,
+        trees: world.entities.filter((e) => e.name === 'twigs').length,
+        shadows: world.entities.filter((e) => e.kind === 'light' && e.light.shadows > 0).length
+      };
+    });
+    assert(scene.tufts === 5000 && scene.pushers === 1, `grass: ${JSON.stringify(scene)}`);
+    assert(scene.trees === 11 && scene.shadows === 1, `trees and sun: ${JSON.stringify(scene)}`);
+
+    // Walk forward, on the ground, over the hills. Wait on the game, not
+    // the clock: software WebGL draws this scene slowly.
+    await page.keyboard.down('ArrowUp');
+    try
+    {
+      await page.waitForFunction((s) =>
+      {
+        const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+        return e.worldPosition().z > s.z + 1;
+      }, start, { timeout: 60000 });
+    }
+    finally
+    {
+      await page.keyboard.up('ArrowUp');
+    }
+    const after = await walker();
+    // Standing on the hills: the ellipsoid's centre 0.55 over the ground.
+    const ground = (x, z) => 1.2 * Math.sin(x * 14 * Math.PI / 180) * Math.cos(z * 11.5 * Math.PI / 180) + 0.6 * Math.sin((x + z) * 7.5 * Math.PI / 180);
+    assert(Math.abs(after.y - 0.55 - ground(after.x, after.z)) < 0.1, `the walker is not on the ground: ${JSON.stringify(after)}, ground ${ground(after.x, after.z).toFixed(3)}`);
+
+    // A click on the ground below the walker plants a flower there.
+    const box = await page.locator('canvas').first().boundingBox();
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.8);
+    await page.waitForFunction(() => window.polybasicPlayer.state.engine.world.entities.some((e) => e.decal), null, { timeout: 20000 });
+    const flower = await page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.decal);
+      return { triangles: e.mesh.indices.length / 3, y: e.worldPosition().y };
+    });
+    assert(flower.triangles > 0, `the flower has no triangles: ${JSON.stringify(flower)}`);
+
+    const trails = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.trail).map((e) => e.trail.samples.length));
+    assert(trails.length === 8 && trails.every((n) => n > 1), `firefly trails: ${JSON.stringify(trails)}`);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(SHOTS, 'meadow.png') });
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      walked ${start.z.toFixed(2)} -> ${after.z.toFixed(2)} at y ${after.y.toFixed(2)}, flower of ${flower.triangles} triangles, trail samples ${trails.join(' ')}`);
+  });
+
   await check('sound: Web Audio plays made sounds and songs; a 3D sound comes from the side it is drawn on', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

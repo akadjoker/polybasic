@@ -148,6 +148,8 @@ one. Sizes, in units: a shrub is about 1 high, an oak 8, a willow 6, an ash
 
 ## Grass
 
+![Meadow (examples/meadow.pb): grass painted onto built hills, trees, shadows and fireflies with trails](screenshots/meadow.png)
+
 A field of grass is many tufts, each three crossed cards of blades, drawn
 all at once. The wind sways them, and things that walk through lean them
 aside, without the program doing anything each step: the tufts are placed

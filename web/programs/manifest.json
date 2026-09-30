@@ -79,6 +79,19 @@
       "assets": []
     },
     {
+      "id": "meadow",
+      "title": "Meadow",
+      "category": "3d",
+      "file": "../examples/meadow.pb",
+      "description": "Everything drawn by code: hills built from a height function, grown trees, grass that parts as you walk through it, sun shadows, fireflies with ribbon trails, and flowers pressed onto the ground where you click.",
+      "controls": "Arrows or WASD walk, click or tap the ground to plant a flower",
+      "assets": [
+        "assets/kenney/character.glb",
+        "assets/kenney/Textures/colormap.png",
+        "assets/kenney/License.txt"
+      ]
+    },
+    {
       "id": "tour",
       "title": "Language tour",
       "category": "language",

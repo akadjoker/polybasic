@@ -79,6 +79,8 @@ python3 -m http.server 8080
 
 ![Coin Hop: Kenney's glTF models, collisions and animations](docs/screenshots/coin-hop.png)
 
+![Meadow: hills, trees, grass, shadows and fireflies, all made by code](docs/screenshots/meadow.png)
+
 ## Using it from the command line
 
 Requires Node.js 20 or newer. In Node the engine runs headless: the whole
