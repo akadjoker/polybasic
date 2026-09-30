@@ -566,12 +566,33 @@ try
       return { x: p.x, y: p.y, z: p.z };
     });
     const start = await player();
+    // Wait on the game, not the clock: a slow machine runs fewer frames.
+    const until = async (what, test) =>
+    {
+      try
+      {
+        await page.waitForFunction(test, start, { timeout: 15000 });
+      }
+      catch
+      {
+        const keys = await page.evaluate(() => [...window.polybasicPlayer.state.engine.input.down]);
+        throw new Error(`${what}: player ${JSON.stringify(await player())}, keys held ${JSON.stringify(keys)}`);
+      }
+    };
     await page.keyboard.down('ArrowUp');
-    await page.waitForTimeout(550);
+    await until('running forward', (s) =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+      return e.worldPosition().z > s.z + 1;
+    });
     await page.keyboard.press('Space');
-    await page.waitForTimeout(900);
+    await until('jumping onto the next platform', (s) =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+      const p = e.worldPosition();
+      return p.z > s.z + 2 && p.y > s.y + 0.5;
+    });
     await page.keyboard.up('ArrowUp');
-    await page.waitForTimeout(600);
     const after = await player();
     const coins = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.model && e.visible && e.parent === null && e.model.loaded && e.children.length && e.children[0].name === 'coin').length);
     assert(after.z > start.z + 2 && after.y > start.y + 0.5, `the player did not run and jump up: ${JSON.stringify(start)} -> ${JSON.stringify(after)}`);
