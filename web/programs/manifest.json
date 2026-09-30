@@ -70,6 +70,15 @@
       "assets": []
     },
     {
+      "id": "sound-lab",
+      "title": "Sound Lab",
+      "category": "3d",
+      "file": "../examples/sound-lab.pb",
+      "description": "Sound made by the engine, with no files: ready-made effects, a song with a beat to follow, and a bee heard in 3D, from ear to ear and higher as it comes closer.",
+      "controls": "1 to 8 play effects, Space a variation, Left/Right turn, M music on or off",
+      "assets": []
+    },
+    {
       "id": "tour",
       "title": "Language tour",
       "category": "language",

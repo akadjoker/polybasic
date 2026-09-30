@@ -5,7 +5,8 @@
 ; The character and the platforms are glTF models by Kenney (CC0), in
 ; assets/kenney. The character walks into the platforms' own triangles:
 ; collisions keep it on top, and its walk, idle and jump animations come
-; from the model file.
+; from the model file. The sounds and the tune are made by the engine: no
+; sound files.
 
 Graphics3D 800, 600
 
@@ -22,6 +23,7 @@ End Type
 
 Global player, guy, camera, fallSpeed#, onGround, pose$
 Global coinModel, collected, total, timer#
+Global jumpSound, coinSound, fallSound, winSound
 
 ; --- The level ----------------------------------------------------------
 
@@ -33,6 +35,23 @@ RotateEntity sun, 55, -30, 0
 AmbientLight 140, 140, 150
 
 Collisions TYPE_PLAYER, TYPE_GROUND, COLLIDE_POLYGON, RESPONSE_SLIDE_NO_DOWNHILL
+
+; --- Sound ----------------------------------------------------------------
+
+; The ears ride on the camera: a coin picked up on the left is heard on
+; the left.
+CreateListener camera
+jumpSound = CreateSfx(SFX_JUMP)
+coinSound = CreateSfx(SFX_COIN)
+fallSound = CreateSfx(SFX_HIT, 3)
+winSound = CreateSfx(SFX_POWERUP)
+; A little tune: one step is a sixteenth note.
+tune = CreateSong(112)
+SongTrack tune, INST_PLUCK, "C5 . E5 . G5 . E5 . | D5 . F5 . A5 . F5 . | E5 . G5 . C6 . G5 . | D5 . B4 . G4 . . .", 0.35
+SongTrack tune, INST_BASS, "C3 - - - . . . . | D3 - - - . . . . | C3 - - - . . . . | G2 - - - . . . .", 0.5
+SongTrack tune, INST_DRUMS, "k . h . s . h . | k . h . s . h h", 0.35
+MusicVolume 0.6
+PlaySong tune
 
 ; x, y, z and model of each platform.
 Data 0, 0, 0, "platform-large"
@@ -124,7 +143,10 @@ Function Update()
     ; Face the way we run: yaw 0 looks along +Z, positive yaw turns left.
     RotateEntity guy, 0, ATan2(-dx, dz), 0
   EndIf
-  If onGround And KeyHit(KEY_SPACE) Then fallSpeed = JUMP
+  If onGround And KeyHit(KEY_SPACE)
+    fallSpeed = JUMP
+    PlaySound jumpSound
+  EndIf
 
   fallSpeed = fallSpeed - GRAVITY * DeltaTime()
   TranslateEntity player, dx * DeltaTime(), fallSpeed * DeltaTime(), dz * DeltaTime()
@@ -137,14 +159,23 @@ Function Update()
     Play("idle", ANIM_LOOP)
   EndIf
 
-  If EntityY(player) < -8 Then Respawn()
+  If EntityY(player) < -8
+    PlaySound fallSound
+    Respawn()
+  EndIf
 
   For c.Coin = Each Coin
     TurnEntity c\mesh, 0, 3, 0
     If EntityDistance(player, c\mesh) < 0.8
+      ; The chime comes from where the coin was.
+      EmitSound coinSound, c\mesh
       FreeEntity c\mesh
       Delete c
       collected = collected + 1
+      If collected = total
+        StopSong
+        PlaySound winSound
+      EndIf
     EndIf
   Next
   If collected < total Then timer = timer + DeltaTime()
