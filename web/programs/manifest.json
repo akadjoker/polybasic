@@ -1,10 +1,83 @@
 {
   "categories": [
+    { "id": "tutorials", "title": "Tutorials" },
     { "id": "3d", "title": "3D" },
     { "id": "effects", "title": "Visual effects" },
     { "id": "language", "title": "Language" }
   ],
   "programs": [
+    {
+      "id": "t01-move",
+      "title": "1. Moving with the keys",
+      "category": "tutorials",
+      "file": "../examples/t01-move.pb",
+      "description": "Turn and drive along an entity's own axes (TurnEntity, MoveEntity), or slide along the world's axes (TranslateEntity), at speeds in units per second.",
+      "controls": "Arrows or WASD move, C changes between the tank and the ball, R resets",
+      "assets": []
+    },
+    {
+      "id": "t02-animation",
+      "title": "2. Controlling an animation",
+      "category": "tutorials",
+      "file": "../examples/t02-animation.pb",
+      "description": "Pick a model's animation, change its speed, pause it and step through it, and play a jump once before going back.",
+      "controls": "1-4 pick an animation, Up/Down speed, P pause, Left/Right step while paused, Space jump, Q/E turn",
+      "assets": [
+        "assets/kenney/character.glb",
+        "assets/kenney/Textures/colormap.png",
+        "assets/kenney/License.txt"
+      ]
+    },
+    {
+      "id": "t03-character",
+      "title": "3. Walking a character",
+      "category": "tutorials",
+      "file": "../examples/t03-character.pb",
+      "description": "A character that walks where the camera looks, runs and jumps, with collisions, animations that follow what it does, and a camera that follows it without going into walls.",
+      "controls": "Arrows or WASD walk, Shift runs, Space jumps, Q/E or drag turn the camera",
+      "assets": [
+        "assets/kenney/character.glb",
+        "assets/kenney/Textures/colormap.png",
+        "assets/kenney/License.txt"
+      ]
+    },
+    {
+      "id": "t04-fps",
+      "title": "4. First-person camera",
+      "category": "tutorials",
+      "file": "../examples/t04-fps.pb",
+      "description": "Mouse look (LockPointer), walking and jumping in a walled courtyard: the body turns left and right, the camera looks up and down.",
+      "controls": "Click to take the mouse (Esc gives it back) or drag to look, WASD walk, Shift run, Space jump",
+      "assets": []
+    },
+    {
+      "id": "t05-freelook",
+      "title": "5. Free-look camera",
+      "category": "tutorials",
+      "file": "../examples/t05-freelook.pb",
+      "description": "A camera that flies anywhere: forward is wherever it looks.",
+      "controls": "Drag to look (right click takes the mouse), WASD fly, Q/E down and up, Shift faster, R back to the start",
+      "assets": []
+    },
+    {
+      "id": "t06-orbit",
+      "title": "6. Orbit camera",
+      "category": "tutorials",
+      "file": "../examples/t06-orbit.pb",
+      "description": "Turn round a model and zoom, as model viewers do; the camera stands back by each model's size.",
+      "controls": "Drag to turn, mouse wheel or Z/X zoom, N next model",
+      "assets": [
+        "assets/kenney/character.glb",
+        "assets/kenney/coin.glb",
+        "assets/kenney/flag.glb",
+        "assets/kenney/platform.glb",
+        "assets/kenney/brick.glb",
+        "assets/kenney/block-coin.glb",
+        "assets/kenney/cloud.glb",
+        "assets/kenney/Textures/colormap.png",
+        "assets/kenney/License.txt"
+      ]
+    },
     {
       "id": "spin",
       "title": "Spinning cube",

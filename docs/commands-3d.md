@@ -266,7 +266,7 @@ UpdateNormals m                       ; work out how light falls on it
 | `FlipMesh mesh` | Turns every triangle to face the other way. |
 | `AddMesh source, dest` | Adds copies of `source`'s surfaces to `dest`. |
 | `CopyMesh%(mesh, parent = 0)` | A new entity with a copy of the mesh (and its look). |
-| `MeshWidth#(mesh)` `MeshHeight#(mesh)` `MeshDepth#(mesh)` | The size of the box around it. |
+| `MeshWidth#(mesh)` `MeshHeight#(mesh)` `MeshDepth#(mesh)` | The size of the box around it. For a loaded model, the box around all its parts, in the model's own space (0 while it is loading). |
 
 Changes are cheap: the mesh is rebuilt once, when it is next drawn or
 used, however many vertices were added.
@@ -621,6 +621,7 @@ exactly one Update, however the frames fall.
 | `MouseXSpeed%()` `MouseYSpeed%()` | How far the pointer moved since the last Update. |
 | `MouseWheel%()` | Wheel steps since the last Update (positive = away from you). |
 | `LockPointer on = True` | Hides the pointer and keeps it in the game on the next click, for mouse-look; `MouseXSpeed` and `MouseYSpeed` keep working. `LockPointer False` releases it. |
+| `PointerLocked%()` | 1 while the game holds the pointer (after `LockPointer` and a click; the player's Esc lets it go). Without it, mouse-look usually waits for a drag, so that moving the pointer over the page does not turn the view. |
 
 On a touch screen the first finger is the mouse: touching is
 `MouseDown(MOUSE_LEFT)`, and dragging moves `MouseX`/`MouseY`.

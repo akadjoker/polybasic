@@ -150,6 +150,7 @@ export const ENGINE_COMMANDS = [
   'MouseYSpeed%()',
   'MouseWheel%()',
   'LockPointer(on = 1)',
+  'PointerLocked%()',
 
   // 2D drawing on top of the 3D picture (in Draw)
   'Color(r, g, b)',
@@ -746,6 +747,7 @@ export function createEngineCommands(engine)
       engine.input.pointerLockWanted = on !== 0;
       if (!on && engine.unlockPointer) engine.unlockPointer();
     },
+    pointerlocked: () => (engine.input.pointerLocked ? 1 : 0),
 
     // --------------------------------------------------------------- 2D
     color(r, g, b)

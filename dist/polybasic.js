@@ -4480,6 +4480,7 @@ var Input = class {
     this.moveY = 0;
     this.wheel = 0;
     this.pointerLockWanted = false;
+    this.pointerLocked = false;
     this.step = {
       down: /* @__PURE__ */ new Set(),
       hits: /* @__PURE__ */ new Map(),
@@ -8143,6 +8144,23 @@ function createMeshCommands(engine) {
     mesh2.touch();
     return s;
   };
+  const measured = (handle) => {
+    const e = entity(handle);
+    if (e.kind === "mesh" && e.mesh && !e.sprite && !e.trail) return e.mesh.bounds;
+    if (!e.model) throw runtimeError(`Entity ${handle} is not a mesh or a model`);
+    const box = new Aabb();
+    const toModel = e.worldMatrix.clone();
+    toModel.invert();
+    const visit = (n) => {
+      if (n !== e && n.mesh && !n.mesh.bounds.isEmpty()) {
+        const part = n.mesh.bounds.transformed(n.worldMatrix.clone().premultiply(toModel));
+        box.expandByPoint(part.min).expandByPoint(part.max);
+      }
+      for (const c of n.children) visit(c);
+    };
+    visit(e);
+    return box;
+  };
   const mesh = (handle) => {
     const e = entity(handle);
     if (e.kind !== "mesh" || !e.mesh) throw runtimeError(`Entity ${handle} is not a mesh`);
@@ -8327,15 +8345,15 @@ function createMeshCommands(engine) {
       return e.id;
     },
     meshwidth: (handle) => {
-      const b = mesh(handle).bounds;
+      const b = measured(handle);
       return b.isEmpty() ? 0 : b.max.x - b.min.x;
     },
     meshheight: (handle) => {
-      const b = mesh(handle).bounds;
+      const b = measured(handle);
       return b.isEmpty() ? 0 : b.max.y - b.min.y;
     },
     meshdepth: (handle) => {
-      const b = mesh(handle).bounds;
+      const b = measured(handle);
       return b.isEmpty() ? 0 : b.max.z - b.min.z;
     }
   };
@@ -8451,6 +8469,7 @@ var ENGINE_COMMANDS = [
   "MouseYSpeed%()",
   "MouseWheel%()",
   "LockPointer(on = 1)",
+  "PointerLocked%()",
   // 2D drawing on top of the 3D picture (in Draw)
   "Color(r, g, b)",
   "FontSize(size)",
@@ -8935,6 +8954,7 @@ function createEngineCommands(engine) {
       engine.input.pointerLockWanted = on !== 0;
       if (!on && engine.unlockPointer) engine.unlockPointer();
     },
+    pointerlocked: () => engine.input.pointerLocked ? 1 : 0,
     // --------------------------------------------------------------- 2D
     color(r, g, b) {
       style.color = [byte(r), byte(g), byte(b)];
@@ -37977,6 +37997,9 @@ function attachDomInput(input, element, toLogical) {
   on(element, "pointerup", up);
   on(element, "pointercancel", up);
   on(element, "contextmenu", (e) => e.preventDefault());
+  on(document, "pointerlockchange", () => {
+    input.pointerLocked = locked();
+  });
   on(element, "wheel", (e) => {
     input.wheelTurn(e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0);
     e.preventDefault();

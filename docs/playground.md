@@ -3,7 +3,10 @@
 The playground (`web/index.html`) is where PolyBasic programs are written
 and run in the browser. It has two kinds of programs:
 
-- **Examples**, listed under *3D* and *Language*. Edits to an example are
+- **Examples**, listed under *Tutorials*, *3D*, *Visual effects* and
+  *Language*. The tutorials go step by step, from moving with the keys to
+  first-person and orbit cameras, and [tutorials.md](tutorials.md) explains
+  each one. Edits to an example are
   kept in this browser (the list marks it *edited*); **Reset** goes back to
   the original, and **Share** copies a link that carries the code.
 - **Your projects**, listed under *Your projects*. A project is a set of

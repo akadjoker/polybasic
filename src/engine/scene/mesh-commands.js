@@ -13,6 +13,7 @@ import { runtimeError } from '../../runtime/errors.js';
 import { EditableMesh, Surface } from './editable.js';
 import { Quat } from '../math/quat.js';
 import { Vec3 } from '../math/vec3.js';
+import { Aabb } from '../math/aabb.js';
 
 export const MESH_COMMANDS = [
   'CreateMesh%(parent = 0)',
@@ -105,6 +106,29 @@ export function createMeshCommands(engine)
     mesh.surfaces.push(s);
     mesh.touch();
     return s;
+  };
+  // The box that MeshWidth and the like measure: a mesh's own, or, for a
+  // loaded model, the box around all its parts in the model's space
+  // (empty while it is still loading). Measuring changes nothing.
+  const measured = (handle) =>
+  {
+    const e = entity(handle);
+    if (e.kind === 'mesh' && e.mesh && !e.sprite && !e.trail) return e.mesh.bounds;
+    if (!e.model) throw runtimeError(`Entity ${handle} is not a mesh or a model`);
+    const box = new Aabb();
+    const toModel = e.worldMatrix.clone();
+    toModel.invert();
+    const visit = (n) =>
+    {
+      if (n !== e && n.mesh && !n.mesh.bounds.isEmpty())
+      {
+        const part = n.mesh.bounds.transformed(n.worldMatrix.clone().premultiply(toModel));
+        box.expandByPoint(part.min).expandByPoint(part.max);
+      }
+      for (const c of n.children) visit(c);
+    };
+    visit(e);
+    return box;
   };
   // The mesh of an entity, made its own and changeable.
   const mesh = (handle) =>
@@ -281,8 +305,8 @@ export function createMeshCommands(engine)
       e.materials = src.materials.map((m) => m.clone());
       return e.id;
     },
-    meshwidth: (handle) => { const b = mesh(handle).bounds; return b.isEmpty() ? 0 : b.max.x - b.min.x; },
-    meshheight: (handle) => { const b = mesh(handle).bounds; return b.isEmpty() ? 0 : b.max.y - b.min.y; },
-    meshdepth: (handle) => { const b = mesh(handle).bounds; return b.isEmpty() ? 0 : b.max.z - b.min.z; }
+    meshwidth: (handle) => { const b = measured(handle); return b.isEmpty() ? 0 : b.max.x - b.min.x; },
+    meshheight: (handle) => { const b = measured(handle); return b.isEmpty() ? 0 : b.max.y - b.min.y; },
+    meshdepth: (handle) => { const b = measured(handle); return b.isEmpty() ? 0 : b.max.z - b.min.z; }
   };
 }
