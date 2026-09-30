@@ -87,6 +87,15 @@ export function createScreen(container)
     colorSpaceConversion: 'none'
   });
 
+  // The physics engine is a separate file next to this one (the browser
+  // build is dist/polybasic.js, physics dist/physics.js), fetched only by
+  // programs that use physics.
+  const loadPhysics = async () =>
+  {
+    const { RapierBackend } = await import(new URL('./physics.js', import.meta.url).href);
+    return RapierBackend.create();
+  };
+
   return {
     element: box,
     canvas: gl,
@@ -118,6 +127,7 @@ export function createScreen(container)
         loadImage,
         loadFile,
         decodeImage,
+        loadPhysics,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) =>
         {

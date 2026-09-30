@@ -2699,6 +2699,13 @@ async function loadProgram(js) {
   return import(url);
 }
 async function runProgram(module, host, options = {}) {
+  try {
+    return await run(module, host, options);
+  } finally {
+    if (options.engine && options.engine.stop) options.engine.stop();
+  }
+}
+async function run(module, host, options) {
   const rt = createRuntime(host, options);
   const engine = options.engine || null;
   const result = { status: "finished", updates: 0 };
@@ -3439,6 +3446,13 @@ var Entity = class {
     const q = new Quat().fromEuler(pitch, yaw, roll);
     if (global && this.parent) q.premultiply(this.parent.worldRotation().invert());
     this.rotation.copy(q.normalize());
+    this.touch();
+  }
+  // Sets the rotation from a quaternion in world space.
+  setWorldRotation(q) {
+    const r = q.clone();
+    if (this.parent) r.premultiply(this.parent.worldRotation().invert());
+    this.rotation.copy(r.normalize());
     this.touch();
   }
   // Turns by the given angles: about the entity's own axes, or about the
@@ -5246,6 +5260,347 @@ function createCollideCommands(engine) {
   };
 }
 
+// src/engine/physics/physics.js
+var BODY_STATIC = 1;
+var BODY_DYNAMIC = 2;
+var BODY_KINEMATIC = 3;
+var SHAPE_AUTO = 0;
+var SHAPE_BOX = 1;
+var SHAPE_SPHERE = 2;
+var SHAPE_CAPSULE = 3;
+var SHAPE_CYLINDER = 4;
+var SHAPE_HULL = 5;
+var SHAPE_MESH = 6;
+var TYPES = { [BODY_STATIC]: "static", [BODY_DYNAMIC]: "dynamic", [BODY_KINEMATIC]: "kinematic" };
+var DEFAULT_GRAVITY = [0, -19.6, 0];
+var Physics = class {
+  constructor(world, load) {
+    this.world = world;
+    this.load = load;
+    this.backend = null;
+    this.loading = null;
+    this.gravity = [...DEFAULT_GRAVITY];
+    this.bodies = /* @__PURE__ */ new Map();
+  }
+  get available() {
+    return Boolean(this.load);
+  }
+  // Loads the backend (once). Returns a promise, or null when it is there.
+  prepare() {
+    if (this.backend || !this.load) return null;
+    if (!this.loading) {
+      this.loading = this.load().then((backend) => {
+        this.backend = backend;
+        backend.setGravity(...this.gravity);
+      });
+    }
+    return this.loading;
+  }
+  setGravity(x, y, z) {
+    this.gravity = [x, y, z];
+    if (this.backend) this.backend.setGravity(x, y, z);
+  }
+  body(e) {
+    return this.bodies.get(e) || null;
+  }
+  // Gives entity e a body of `kind` (BODY_...) with a shape (SHAPE_...).
+  // Throws an Error with a message for the program when it cannot.
+  add(e, kind, shapeKind, options) {
+    this.remove(e);
+    const type = TYPES[kind];
+    const position = e.worldPosition();
+    const rotation = e.worldRotation();
+    const { shape, offset } = buildShape(e, type, shapeKind);
+    const id = this.backend.createBody({
+      type,
+      position: [position.x, position.y, position.z],
+      rotation: [rotation.x, rotation.y, rotation.z, rotation.w],
+      shape,
+      offset,
+      ...options
+    });
+    this.bodies.set(e, { id, type, position, rotation });
+  }
+  remove(e) {
+    const b = this.bodies.get(e);
+    if (!b) return;
+    this.backend.removeBody(b.id);
+    this.bodies.delete(e);
+  }
+  // One step of dt seconds (see the top of this file).
+  step(dt) {
+    if (!this.backend || this.bodies.size === 0) return;
+    for (const [e, b] of this.bodies) {
+      if (!e.alive) {
+        this.backend.removeBody(b.id);
+        this.bodies.delete(e);
+        continue;
+      }
+      const p = e.worldPosition();
+      const q = e.worldRotation();
+      if (!p.equals(b.position, 0) || !sameQuat(q, b.rotation)) {
+        this.backend.setTransform(b.id, [p.x, p.y, p.z], [q.x, q.y, q.z, q.w]);
+        b.position = p;
+        b.rotation = q;
+      }
+    }
+    this.backend.step(dt);
+    for (const [e, b] of this.bodies) {
+      if (b.type === "static") continue;
+      const t = this.backend.transform(b.id);
+      const p = new Vec3(...t.position);
+      const q = new Quat(...t.rotation);
+      if (b.type === "dynamic" || !p.equals(b.position, 0) || !sameQuat(q, b.rotation)) {
+        e.setPosition(p.x, p.y, p.z, true);
+        e.setWorldRotation(q);
+      }
+      b.position = e.worldPosition();
+      b.rotation = e.worldRotation();
+    }
+  }
+  // The entities whose bodies touch e's.
+  contacts(e) {
+    const b = this.bodies.get(e);
+    if (!b) return [];
+    const byId = /* @__PURE__ */ new Map();
+    for (const [other, ob] of this.bodies) byId.set(ob.id, other);
+    return this.backend.contacts(b.id).map((id) => byId.get(id)).filter((o) => o && o.alive);
+  }
+  dispose() {
+    if (this.backend) this.backend.dispose();
+    this.backend = null;
+    this.bodies.clear();
+  }
+};
+function sameQuat(a, b) {
+  return a.x === b.x && a.y === b.y && a.z === b.z && a.w === b.w;
+}
+function buildShape(e, type, kind) {
+  const points = bodyPoints(e);
+  if (kind === SHAPE_AUTO) kind = autoKind(e, type, points);
+  if ((kind === SHAPE_HULL || kind === SHAPE_MESH) && !points.triangles.length) {
+    throw new Error(`Entity ${e.id} has no mesh to make a ${kind === SHAPE_HULL ? "SHAPE_HULL" : "SHAPE_MESH"} from`);
+  }
+  if (kind === SHAPE_MESH && type === "dynamic") {
+    throw new Error("SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX");
+  }
+  if (kind === SHAPE_MESH) {
+    return { shape: { kind: "mesh", vertices: Float32Array.from(points.positions), indices: Uint32Array.from(points.triangles) }, offset: [0, 0, 0] };
+  }
+  if (kind === SHAPE_HULL) {
+    return { shape: { kind: "hull", points: Float32Array.from(points.positions) }, offset: [0, 0, 0] };
+  }
+  let min;
+  let max;
+  if (points.count) {
+    min = points.min;
+    max = points.max;
+  } else {
+    const r = e.radiusX;
+    min = [-r, -r, -r];
+    max = [r, r, r];
+  }
+  const half = [0, 1, 2].map((a) => Math.max(1e-4, (max[a] - min[a]) / 2));
+  const offset = [0, 1, 2].map((a) => (max[a] + min[a]) / 2);
+  const round = Math.max(half[0], half[2]);
+  switch (kind) {
+    case SHAPE_BOX:
+      return { shape: { kind: "box", half }, offset };
+    case SHAPE_SPHERE:
+      return { shape: { kind: "sphere", radius: Math.max(...half) }, offset };
+    case SHAPE_CAPSULE:
+      return { shape: { kind: "capsule", halfHeight: Math.max(0, half[1] - round), radius: round }, offset };
+    case SHAPE_CYLINDER:
+      return { shape: { kind: "cylinder", halfHeight: half[1], radius: round }, offset };
+    default:
+      throw new Error(`Unknown shape ${kind}`);
+  }
+}
+function autoKind(e, type, points) {
+  if (!points.count) return SHAPE_SPHERE;
+  if (e.box) return SHAPE_BOX;
+  if (e.mesh && points.meshes === 1) {
+    if (e.mesh.primitive === "sphere") return SHAPE_SPHERE;
+    if (e.mesh.primitive === "cylinder") return SHAPE_CYLINDER;
+  }
+  return type === "dynamic" ? SHAPE_BOX : SHAPE_MESH;
+}
+function bodyPoints(e) {
+  const origin = e.worldPosition();
+  const toBody = e.worldRotation().invert();
+  const positions = [];
+  const triangles = [];
+  let meshes = 0;
+  const add = (x, y, z, m) => {
+    const p = new Vec3(x, y, z).applyMat4(m).sub(origin).applyQuat(toBody);
+    positions.push(p.x, p.y, p.z);
+  };
+  if (e.box) {
+    const { min: min2, max: max2 } = localBox(e);
+    for (let i = 0; i < 8; i++) add(i & 1 ? max2[0] : min2[0], i & 2 ? max2[1] : min2[1], i & 4 ? max2[2] : min2[2], e.worldMatrix);
+  } else {
+    const visit = (n) => {
+      if (n.mesh && n.mesh.positions.length) {
+        meshes++;
+        const base = positions.length / 3;
+        const m = n.worldMatrix;
+        const p = n.mesh.positions;
+        for (let i = 0; i < p.length; i += 3) add(p[i], p[i + 1], p[i + 2], m);
+        for (const i of n.mesh.indices) triangles.push(base + i);
+      }
+      for (const c of n.children) visit(c);
+    };
+    visit(e);
+  }
+  const min = [Infinity, Infinity, Infinity];
+  const max = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) {
+    for (let a = 0; a < 3; a++) {
+      min[a] = Math.min(min[a], positions[i + a]);
+      max[a] = Math.max(max[a], positions[i + a]);
+    }
+  }
+  return { positions, triangles, meshes, count: positions.length / 3, min, max };
+}
+
+// src/engine/physics/commands.js
+var PHYSICS_COMMANDS = [
+  "PhysicsGravity(x#, y#, z#)",
+  "EntityBody(entity, kind = 2, shape = 0)",
+  "FreeBody(entity)",
+  "EntityHasBody%(entity)",
+  "BodyMass(entity, mass#)",
+  "BodyFriction(entity, friction#)",
+  "BodyBounce(entity, bounce#)",
+  "BodyDamping(entity, linear#, angular#)",
+  "BodyLockRotation(entity, pitch, yaw, roll)",
+  "ApplyForce(entity, x#, y#, z#)",
+  "ApplyImpulse(entity, x#, y#, z#)",
+  "ApplyTorque(entity, pitch#, yaw#, roll#)",
+  "SetVelocity(entity, x#, y#, z#)",
+  "SetAngularVelocity(entity, pitch#, yaw#, roll#)",
+  "BodyVX#(entity)",
+  "BodyVY#(entity)",
+  "BodyVZ#(entity)",
+  "BodyPitchSpeed#(entity)",
+  "BodyYawSpeed#(entity)",
+  "BodyRollSpeed#(entity)",
+  "CountContacts%(entity)",
+  "ContactEntity%(entity, index)"
+];
+var PHYSICS_KEYS = new Set(PHYSICS_COMMANDS.map((s) => s.slice(0, s.search(/[%#$(]/)).toLowerCase()));
+var PHYSICS_CONSTANTS = {
+  BODY_STATIC,
+  BODY_DYNAMIC,
+  BODY_KINEMATIC,
+  SHAPE_AUTO,
+  SHAPE_BOX,
+  SHAPE_SPHERE,
+  SHAPE_CAPSULE,
+  SHAPE_CYLINDER,
+  SHAPE_HULL,
+  SHAPE_MESH
+};
+var DEFAULTS = {
+  mass: 1,
+  friction: 0.5,
+  restitution: 0,
+  linearDamping: 0,
+  angularDamping: 0.05,
+  ccd: true
+};
+var DEG5 = Math.PI / 180;
+var toAxes = (pitch, yaw, roll) => [pitch * DEG5, -yaw * DEG5, roll * DEG5];
+function createPhysicsCommands(engine) {
+  const physics = engine.physics;
+  const { entity } = handleHelpers(engine.world);
+  const ready = () => {
+    if (!physics.backend) throw runtimeError("Physics is not available here (no physics engine was loaded)");
+  };
+  const bodyOf = (handle, dynamicOnly = false) => {
+    ready();
+    const e = entity(handle);
+    const b = physics.body(e);
+    if (!b) throw runtimeError(`Entity ${handle} has no body (give it one with EntityBody)`);
+    if (dynamicOnly && b.type !== "dynamic") throw runtimeError(`Entity ${handle} has a ${b.type} body; only a dynamic body (BODY_DYNAMIC) can be pushed or weighed`);
+    return b;
+  };
+  const nonNegative = (v, what) => {
+    if (!(v >= 0)) throw runtimeError(`${what} must be 0 or more, not ${v}`);
+    return v;
+  };
+  return {
+    physicsgravity(x, y, z) {
+      ready();
+      physics.setGravity(x, y, z);
+    },
+    entitybody(handle, kind, shape) {
+      ready();
+      if (kind < BODY_STATIC || kind > BODY_KINEMATIC) throw runtimeError(`EntityBody kind must be BODY_STATIC, BODY_DYNAMIC or BODY_KINEMATIC (1 to 3), not ${kind}`);
+      if (shape < SHAPE_AUTO || shape > SHAPE_MESH) throw runtimeError(`EntityBody shape must be one of the SHAPE_ constants (0 to 6), not ${shape}`);
+      const e = entity(handle);
+      try {
+        physics.add(e, kind, shape, DEFAULTS);
+      } catch (err) {
+        throw runtimeError(`EntityBody: ${err.message}`);
+      }
+    },
+    freebody(handle) {
+      ready();
+      physics.remove(entity(handle));
+    },
+    entityhasbody: (handle) => physics.body(entity(handle)) ? 1 : 0,
+    bodymass(handle, mass) {
+      if (!(mass > 0)) throw runtimeError(`BodyMass must be more than 0, not ${mass}`);
+      physics.backend.setMass(bodyOf(handle, true).id, mass);
+    },
+    bodyfriction(handle, friction) {
+      physics.backend.setFriction(bodyOf(handle).id, nonNegative(friction, "BodyFriction"));
+    },
+    bodybounce(handle, bounce) {
+      physics.backend.setRestitution(bodyOf(handle).id, nonNegative(bounce, "BodyBounce"));
+    },
+    bodydamping(handle, linear, angular) {
+      physics.backend.setDamping(bodyOf(handle, true).id, nonNegative(linear, "BodyDamping linear"), nonNegative(angular, "BodyDamping angular"));
+    },
+    bodylockrotation(handle, pitch, yaw, roll) {
+      physics.backend.lockRotation(bodyOf(handle, true).id, pitch !== 0, yaw !== 0, roll !== 0);
+    },
+    applyforce(handle, x, y, z) {
+      physics.backend.applyForce(bodyOf(handle, true).id, [x, y, z]);
+    },
+    applyimpulse(handle, x, y, z) {
+      physics.backend.applyImpulse(bodyOf(handle, true).id, [x, y, z]);
+    },
+    applytorque(handle, pitch, yaw, roll) {
+      physics.backend.applyTorque(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+    },
+    setvelocity(handle, x, y, z) {
+      physics.backend.setVelocity(bodyOf(handle, true).id, [x, y, z]);
+    },
+    setangularvelocity(handle, pitch, yaw, roll) {
+      physics.backend.setAngularVelocity(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+    },
+    bodyvx: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[0]),
+    bodyvy: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[1]),
+    bodyvz: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[2]),
+    bodypitchspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[0] / DEG5),
+    bodyyawspeed: (handle) => tidy(-physics.backend.angularVelocity(bodyOf(handle).id)[1] / DEG5),
+    bodyrollspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[2] / DEG5),
+    countcontacts(handle) {
+      bodyOf(handle);
+      return physics.contacts(entity(handle)).length;
+    },
+    contactentity(handle, index) {
+      bodyOf(handle);
+      const list = physics.contacts(entity(handle));
+      const other = list[index - 1];
+      if (!other) throw runtimeError(`Entity ${handle} touches ${list.length} bod${list.length === 1 ? "y" : "ies"}, not number ${index}`);
+      return other.id;
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -5336,7 +5691,8 @@ var ENGINE_COMMANDS = [
   "Oval(x, y, width, height, solid = 1)",
   "Line(x1, y1, x2, y2)",
   "Plot(x, y)",
-  ...COLLIDE_COMMANDS
+  ...COLLIDE_COMMANDS,
+  ...PHYSICS_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
   ...KEYS,
@@ -5348,7 +5704,8 @@ var ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
-  ...COLLIDE_CONSTANTS
+  ...COLLIDE_CONSTANTS,
+  ...PHYSICS_CONSTANTS
 };
 function createEngineCommands(engine) {
   const world = engine.world;
@@ -5366,6 +5723,7 @@ function createEngineCommands(engine) {
   const step = () => engine.input.step;
   return {
     ...createCollideCommands(engine),
+    ...createPhysicsCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -5417,8 +5775,8 @@ function createEngineCommands(engine) {
       return world.createEntity("pivot", parentOf(parent)).id;
     },
     createcube: (parent) => shape(engine.sharedMesh("cube", () => createCube()), parent),
-    createsphere: (segments, parent) => shape(engine.sharedMesh("sphere" + segments, () => createSphere(clampSegments(segments))), parent),
-    createcylinder: (segments, solid, parent) => shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => createCylinder(clampSegments(segments), solid !== 0)), parent),
+    createsphere: (segments, parent) => shape(engine.sharedMesh("sphere" + segments, () => primitive(createSphere(clampSegments(segments)), "sphere")), parent),
+    createcylinder: (segments, solid, parent) => shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => primitive(createCylinder(clampSegments(segments), solid !== 0), "cylinder")), parent),
     createcone: (segments, solid, parent) => shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) => shape(engine.sharedMesh("plane" + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
     createtorus: (segments, thickness, parent) => shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
@@ -5592,6 +5950,10 @@ function createEngineCommands(engine) {
     }
   };
 }
+function primitive(mesh, kind) {
+  mesh.primitive = kind;
+  return mesh;
+}
 function clampSegments(n) {
   return Math.max(3, Math.min(128, n));
 }
@@ -5610,12 +5972,16 @@ var Engine = class {
   //              file exists)
   //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
   //              inside a model file
+  //   loadPhysics () => Promise<PhysicsBackend>, a ready physics backend
+  //              (see physics/backend.js); without it the physics
+  //              commands report that physics is not available
   //   baseUrl    file paths are relative to this (the .pb's URL)
   //   onResize   (width, height) => void, called by Graphics3D so the
   //              platform can lay out its canvases
   constructor(options = {}) {
     this.world = new World();
     this.collisions = new Collisions(this.world);
+    this.physics = new Physics(this.world, options.loadPhysics || null);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
@@ -5702,6 +6068,7 @@ var Engine = class {
   // Called before main with the commands the program uses. Returns a
   // promise when something must be loaded first, or null.
   prepare(uses) {
+    if (uses.some((name) => PHYSICS_KEYS.has(name))) return this.physics.prepare();
     return null;
   }
   // After main: a promise that settles once every file started so far has
@@ -5716,9 +6083,16 @@ var Engine = class {
     if (this.steps++ === 0) this.collisions.resetAll();
     this.input.sample();
   }
-  // After each Update: the world moves on by one step.
+  // After each Update: the world moves on by one step. Physics first, so
+  // collisions see where bodies ended up.
   endStep() {
+    this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
+  }
+  // The program stopped (for whatever reason): let go of what only a
+  // running program needs. The scene stays on screen.
+  stop() {
+    this.physics.dispose();
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
@@ -33401,6 +33775,10 @@ function createScreen(container) {
     premultiplyAlpha: "none",
     colorSpaceConversion: "none"
   });
+  const loadPhysics = async () => {
+    const { RapierBackend } = await import(new URL("./physics.js", import.meta.url).href);
+    return RapierBackend.create();
+  };
   return {
     element: box,
     canvas: gl,
@@ -33437,6 +33815,7 @@ function createScreen(container) {
         loadImage,
         loadFile,
         decodeImage,
+        loadPhysics,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) => {
           width = w;

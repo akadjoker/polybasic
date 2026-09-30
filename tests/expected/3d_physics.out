@@ -1,0 +1,12 @@
+bodies: floor 1 crate 1 camera-less pivot 0
+impulse 5 on mass 1: vx 5.0
+impulse 5 on mass 2: vx 2.5
+falling for a second: vy -19.6
+spinner: yaw 90 (within 0.01: 1), yaw speed 90, pitch speed 0.0
+puck pushed along: 1
+crate resting: y 1, still: 1
+crate touches 1 body: the floor 1
+crate after the jump: y 1
+FreeBody: has body 0, entity still there 1
+a freed entity's body is gone too, the rest runs on
+Runtime error (3d_physics.pb, line 78): EntityBody: SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX

@@ -16,6 +16,7 @@ import {
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
+import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -116,7 +117,8 @@ export const ENGINE_COMMANDS = [
   'Line(x1, y1, x2, y2)',
   'Plot(x, y)',
 
-  ...COLLIDE_COMMANDS
+  ...COLLIDE_COMMANDS,
+  ...PHYSICS_COMMANDS
 ];
 
 export const ENGINE_CONSTANTS = {
@@ -129,7 +131,8 @@ export const ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
-  ...COLLIDE_CONSTANTS
+  ...COLLIDE_CONSTANTS,
+  ...PHYSICS_CONSTANTS
 };
 
 
@@ -154,6 +157,7 @@ export function createEngineCommands(engine)
 
   return {
     ...createCollideCommands(engine),
+    ...createPhysicsCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -221,9 +225,9 @@ export function createEngineCommands(engine)
     },
     createcube: (parent) => shape(engine.sharedMesh('cube', () => createCube()), parent),
     createsphere: (segments, parent) =>
-      shape(engine.sharedMesh('sphere' + segments, () => createSphere(clampSegments(segments))), parent),
+      shape(engine.sharedMesh('sphere' + segments, () => primitive(createSphere(clampSegments(segments)), 'sphere')), parent),
     createcylinder: (segments, solid, parent) =>
-      shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => createCylinder(clampSegments(segments), solid !== 0)), parent),
+      shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => primitive(createCylinder(clampSegments(segments), solid !== 0), 'cylinder')), parent),
     createcone: (segments, solid, parent) =>
       shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) =>
@@ -443,6 +447,14 @@ export function createEngineCommands(engine)
       engine.overlay.rect(x, y, 1, 1, true, style);
     }
   };
+}
+
+// Marks a built-in mesh with its shape, so a physics body made from it can
+// be a true sphere or cylinder rather than its triangles.
+function primitive(mesh, kind)
+{
+  mesh.primitive = kind;
+  return mesh;
 }
 
 function clampSegments(n)

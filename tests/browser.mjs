@@ -10,6 +10,8 @@
 //     (three.js backend) as in Node (null backend), and three.js draws each
 //     object with our world matrix mirrored into its coordinate system;
 //   - CameraPick and CameraProject agree with the pixels three.js drew;
+//   - physics: the Rapier file is fetched only when a program needs it,
+//     and the motion is the same as in Node;
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
@@ -22,6 +24,7 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../src/index.js';
+import { nodeEngineOptions } from '../src/node.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Screenshots of every run go to tests/output (not committed); the ones in
@@ -141,7 +144,7 @@ async function waitRunning(page)
 async function nodeMatrices(file, frames)
 {
   const { js } = compile(readFileSync(join(ROOT, file), 'utf8'), { file });
-  const engine = new Engine();
+  const engine = new Engine(nodeEngineOptions(join(ROOT, file)));
   await runProgram(await loadProgram(js), new CaptureHost(), { engine, maxUpdates: frames });
   return engine.world.entities.map((e) => [e.id, Array.from(e.worldMatrix.e)]);
 }
@@ -364,6 +367,51 @@ try
     console.log(`      ${facts.picking}`);
     await page.screenshot({ path: join(SHOTS, 'picking.png') });
     noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('physics: dist/physics.js only for programs that use it, the same motion as in Node', async () =>
+  {
+    const fetched = (page) =>
+    {
+      page.physicsRequests = [];
+      page.on('request', (r) =>
+      {
+        if (r.url().endsWith('/dist/physics.js')) page.physicsRequests.push(r.url());
+      });
+    };
+    // A program without physics does not fetch it.
+    const plain = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    fetched(plain);
+    await plain.goto(`${base}/web/player.html?src=../examples/spin.pb&frames=10`);
+    await plain.waitForFunction(() => window.polybasicPlayer.state.status === 'stopped', null, { timeout: 20000 });
+    assert(plain.physicsRequests.length === 0, 'spin.pb fetched the physics engine');
+    await plain.close();
+
+    const frames = 150;
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    fetched(page);
+    const messages = [];
+    page.on('console', (m) =>
+    {
+      if (m.type() === 'error' || m.type() === 'warning') messages.push(`${m.type()}: ${m.text()}`);
+    });
+    page.on('pageerror', (e) => messages.push(`pageerror: ${e.message}`));
+    await page.goto(`${base}/web/player.html?src=../tests/browser/physics.pb&frames=${frames}`);
+    await page.waitForFunction(() => ['stopped', 'error'].includes(window.polybasicPlayer.state.status), null, { timeout: 30000 });
+    assert(await page.evaluate(() => window.polybasicPlayer.state.status) === 'stopped', await page.evaluate(() => window.polybasicPlayer.state.output));
+    assert(page.physicsRequests.length === 1, `physics.js fetched ${page.physicsRequests.length} times`);
+    const browserSide = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.map((e) => [e.id, Array.from(e.worldMatrix.e)]));
+    const nodeSide = await nodeMatrices('tests/browser/physics.pb', frames);
+    const diff = maxDifference(browserSide, nodeSide);
+    // The things fell and came to rest on the floor or the ramp.
+    const heights = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.kind === 'mesh').map((e) => e.worldPosition().y));
+    assert(Math.max(...heights) < 5, `nothing fell: ${heights}`);
+    facts.physics = `${browserSide.length} entities after ${frames} updates, max difference from Node ${diff}`;
+    console.log(`      ${facts.physics}`);
+    assert(diff === 0, `browser and Node differ by ${diff}`);
+    assert(messages.length === 0, `console:\n${messages.join('\n')}`);
+    await page.screenshot({ path: join(SHOTS, 'physics.png') });
     await page.close();
   });
 

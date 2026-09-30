@@ -2,8 +2,9 @@
 // together and plugs into the runner's frame loop:
 //
 //   before main:        prepare() loads what the program needs (physics)
+//   when it stops:      stop() releases the physics world
 //   after main:         whenReady() waits for the files main started loading
-//   every Update step:  input.sample()  ->  Update()  ->  endStep()
+//   every Update step:  input.sample()  ->  Update()  ->  endStep() (physics, collisions)
 //   every frame:        world matrices + backend.render()  ->  Draw() on the overlay
 //
 // It is platform-neutral. src/engine/browser.js builds one with the three.js
@@ -16,6 +17,9 @@ import { NullOverlay } from './overlay/overlay.js';
 import { Input } from './input/input.js';
 import { createEngineCommands } from './commands.js';
 import { Collisions } from './collide/collisions.js';
+import { Physics } from './physics/physics.js';
+import { PHYSICS_KEYS } from './physics/commands.js';
+import { STEP_MS } from '../runtime/runtime.js';
 
 export const DEFAULT_WIDTH = 800;
 export const DEFAULT_HEIGHT = 600;
@@ -32,6 +36,9 @@ export class Engine
   //              file exists)
   //   decodeImage (bytes, mimeType) => Promise<image>, for images stored
   //              inside a model file
+  //   loadPhysics () => Promise<PhysicsBackend>, a ready physics backend
+  //              (see physics/backend.js); without it the physics
+  //              commands report that physics is not available
   //   baseUrl    file paths are relative to this (the .pb's URL)
   //   onResize   (width, height) => void, called by Graphics3D so the
   //              platform can lay out its canvases
@@ -39,6 +46,7 @@ export class Engine
   {
     this.world = new World();
     this.collisions = new Collisions(this.world);
+    this.physics = new Physics(this.world, options.loadPhysics || null);
     this.steps = 0;
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
@@ -146,6 +154,7 @@ export class Engine
   // promise when something must be loaded first, or null.
   prepare(uses)
   {
+    if (uses.some((name) => PHYSICS_KEYS.has(name))) return this.physics.prepare();
     return null;
   }
 
@@ -167,10 +176,19 @@ export class Engine
     this.input.sample();
   }
 
-  // After each Update: the world moves on by one step.
+  // After each Update: the world moves on by one step. Physics first, so
+  // collisions see where bodies ended up.
   endStep()
   {
+    this.physics.step(STEP_MS / 1000);
     this.collisions.update();
+  }
+
+  // The program stopped (for whatever reason): let go of what only a
+  // running program needs. The scene stays on screen.
+  stop()
+  {
+    this.physics.dispose();
   }
 
   renderFrame()
