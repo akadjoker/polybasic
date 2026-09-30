@@ -96,6 +96,13 @@ physics commands, includes Rapier's JavaScript bindings and WebAssembly
   Licensed under the Apache License, Version 2.0; the full text is at the
   end of this file.
 
+Kenney models
+-------------
+
+The models in examples/assets/kenney (and their texture) are by Kenney
+(www.kenney.nl), CC0 1.0 Universal (public domain), from Kenney's Starter
+Kit 3D Platformer. See examples/assets/kenney/License.txt.
+
 The playground's page layout and scripts follow the DivJS playground
 (https://github.com/akadjoker/divjs-playground), by the same author, MIT.
 
