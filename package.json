@@ -1,0 +1,34 @@
+{
+  "name": "polybasic",
+  "version": "0.1.0",
+  "description": "A friendly BASIC for making games in the browser, compiled to JavaScript.",
+  "type": "module",
+  "license": "MIT",
+  "author": "akadjoker",
+  "bin": {
+    "polybasic": "bin/polybasic.mjs"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./compiler": "./src/compiler/index.js",
+    "./runtime": "./src/runtime/index.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "docs",
+    "LICENSE",
+    "LICENSE-THIRD-PARTY"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node tests/run.mjs",
+    "lint": "eslint .",
+    "bench": "node tests/bench.mjs"
+  },
+  "devDependencies": {
+    "eslint": "^9.39.5"
+  }
+}
