@@ -77,6 +77,12 @@ export function attachDomInput(input, element, toLogical)
   on(element, 'pointerup', up);
   on(element, 'pointercancel', up);
   on(element, 'contextmenu', (e) => e.preventDefault());
+  // Whether the game holds the pointer (the browser lets go on Esc).
+  on(document, 'pointerlockchange', () =>
+  {
+    input.pointerLocked = locked();
+  });
+
   on(element, 'wheel', (e) =>
   {
     input.wheelTurn(e.deltaY > 0 ? -1 : e.deltaY < 0 ? 1 : 0);

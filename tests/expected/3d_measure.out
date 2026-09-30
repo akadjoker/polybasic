@@ -1,0 +1,5 @@
+while loading: 0.0 0.0 0.0
+cube (its scale does not count): 2.0 2.0 2.0
+model: 1.2 1.1 0.635
+a pivot is neither:
+Runtime error (3d_measure.pb, line 19): Entity 11 is not a mesh or a model

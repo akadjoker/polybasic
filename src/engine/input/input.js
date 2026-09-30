@@ -43,6 +43,7 @@ export class Input
     this.moveY = 0;
     this.wheel = 0;
     this.pointerLockWanted = false;
+    this.pointerLocked = false;    // the pointer is held by the game now
     // The view of the current Update step.
     this.step = {
       down: new Set(), hits: new Map(), ups: new Map(),
