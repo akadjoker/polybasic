@@ -3366,6 +3366,8 @@ var Entity = class {
     this.alive = true;
     this.mesh = null;
     this.materials = [];
+    this.surfaces = null;
+    this.brush = null;
     this.camera = null;
     this.light = null;
     this.sprite = null;
@@ -4207,6 +4209,8 @@ var World = class {
     e.receiveShadow = src.receiveShadow;
     e.mesh = src.mesh;
     e.materials = src.materials.map((m) => m.clone());
+    e.surfaces = src.surfaces;
+    e.brush = src.brush ? src.brush.clone() : null;
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     e.sprite = src.sprite ? { ...src.sprite } : null;
@@ -5536,6 +5540,41 @@ function bladePixels(size = 64) {
     }
   }
   return px;
+}
+
+// src/engine/scene/brush.js
+function newBrush() {
+  const b = new Material();
+  b.blend = null;
+  return b;
+}
+function combine(out, surface, brush) {
+  out.color = surface.color.map((c, i) => c * brush.color[i]);
+  const own = surface.alphaMode === "opaque" ? 1 : surface.alpha;
+  out.alpha = own * brush.alpha;
+  out.alphaMode = surface.alphaMode === "opaque" && out.alpha < 1 ? "blend" : surface.alphaMode;
+  out.alphaCutoff = surface.alphaCutoff;
+  out.shininess = Math.min(1, surface.shininess + brush.shininess);
+  out.blend = brush.blend || surface.blend;
+  out.fullbright = surface.fullbright || brush.fullbright;
+  out.flat = surface.flat || brush.flat;
+  out.twoSided = surface.twoSided || brush.twoSided;
+  out.vertexColors = surface.vertexColors || brush.vertexColors;
+  out.vertexAlpha = surface.vertexAlpha || brush.vertexAlpha;
+  out.texture = brush.texture || surface.texture;
+  out.decal = surface.decal;
+  out.name = surface.name;
+  out.changed();
+}
+function paintModel(root) {
+  const brush = root.brush;
+  if (!brush || !root.model || !root.model.loaded) return;
+  for (const part of root.model.nodes) {
+    if (!part || !part.surfaces) continue;
+    part.surfaces.forEach((s, i) => combine(part.materials[i], s, brush));
+    part.castShadow = root.castShadow;
+    part.receiveShadow = root.receiveShadow;
+  }
 }
 
 // src/engine/collide/bvh.js
@@ -8139,6 +8178,12 @@ function transform(mesh, m, t) {
   }
   mesh.touch();
 }
+function affine(mat) {
+  const e = mat.e;
+  return { m: [[e[0], e[4], e[8]], [e[1], e[5], e[9]], [e[2], e[6], e[10]]], t: [e[12], e[13], e[14]] };
+}
+var mul3 = (a, b) => a.map((row) => [0, 1, 2].map((c) => row[0] * b[0][c] + row[1] * b[1][c] + row[2] * b[2][c]));
+var mulv = (a, v) => a.map((row) => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
 function createMeshCommands(engine) {
   const world = engine.world;
   const { entity, parentOf } = handleHelpers(world);
@@ -8165,6 +8210,60 @@ function createMeshCommands(engine) {
     };
     visit(e);
     return box;
+  };
+  const reshape = (handle, fn) => {
+    const e = entity(handle);
+    if (!e.model) {
+      fn(mesh(handle), (m, t) => ({ m, t }));
+      return;
+    }
+    engine.models.whenLoaded(e, () => {
+      const toModel = e.worldMatrix.clone();
+      toModel.invert();
+      const visit = (n) => {
+        if (n !== e && n.mesh && n.kind === "mesh") {
+          if (!(n.mesh instanceof EditableMesh)) {
+            n.mesh = EditableMesh.from(n.mesh);
+            for (const surface2 of n.mesh.surfaces) world.addHandle(surface2);
+          }
+          const P = affine(n.worldMatrix.clone().premultiply(toModel));
+          const back = n.worldMatrix.clone().premultiply(toModel);
+          back.invert();
+          const Pi = affine(back);
+          fn(n.mesh, (m, t) => ({
+            m: mul3(Pi.m, mul3(m, P.m)),
+            t: mulv(Pi.m, mulv(m, P.t).map((v, k) => v + t[k])).map((v, k) => v + Pi.t[k])
+          }));
+        }
+        for (const c of n.children) visit(c);
+      };
+      visit(e);
+    });
+  };
+  const change = (handle, m, t) => reshape(handle, (mesh2, into) => {
+    const own = into(m, t);
+    transform(mesh2, own.m, own.t);
+  });
+  const fit = (handle, b, x, y, z, width, height, depth, uniform) => {
+    if (b.isEmpty()) return;
+    const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+    let s = [width, height, depth].map((want, n) => size[n] > 0 ? want / size[n] : 1);
+    if (uniform) {
+      if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
+      else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
+      else s = [s[2], s[2], s[2]];
+    }
+    const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
+    const target = [x + width / 2, y + height / 2, z + depth / 2];
+    change(handle, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+  };
+  const flip = (m) => {
+    for (const surface2 of m.surfaces) {
+      for (let k = 0; k < surface2.normals.length; k++) surface2.normals[k] = -surface2.normals[k];
+      const t = surface2.triangles;
+      for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
+    }
+    m.touch();
   };
   const mesh = (handle) => {
     const e = entity(handle);
@@ -8302,40 +8401,24 @@ function createMeshCommands(engine) {
       for (const s of mesh(handle).surfaces) s.updateNormals();
     },
     scalemesh(handle, x, y, z) {
-      transform(mesh(handle), [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
+      change(handle, [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
     },
     rotatemesh(handle, pitch, yaw, roll) {
       const q = new Quat().fromEuler(pitch, yaw, roll);
       const col = (v) => new Vec3(...v).applyQuat(q);
       const [i, j, k] = [col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])];
-      transform(mesh(handle), [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
+      change(handle, [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
     },
     positionmesh(handle, x, y, z) {
-      transform(mesh(handle), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
+      change(handle, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
     },
     fitmesh(handle, x, y, z, width, height, depth, uniform) {
-      const m = mesh(handle);
-      const b = m.bounds;
-      if (b.isEmpty()) return;
-      const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
-      let s = [width, height, depth].map((want, n) => size[n] > 0 ? want / size[n] : 1);
-      if (uniform) {
-        if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
-        else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
-        else s = [s[2], s[2], s[2]];
-      }
-      const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
-      const target = [x + width / 2, y + height / 2, z + depth / 2];
-      transform(m, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+      const e = entity(handle);
+      if (e.model) engine.models.whenLoaded(e, () => fit(handle, measured(handle), x, y, z, width, height, depth, uniform));
+      else fit(handle, mesh(handle).bounds, x, y, z, width, height, depth, uniform);
     },
     flipmesh(handle) {
-      const m = mesh(handle);
-      for (const s of m.surfaces) {
-        for (let k = 0; k < s.normals.length; k++) s.normals[k] = -s.normals[k];
-        const t = s.triangles;
-        for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
-      }
-      m.touch();
+      reshape(handle, (m) => flip(m));
     },
     addmesh(source, dest) {
       if (source === dest) throw runtimeError("A mesh cannot be added to itself");
@@ -8782,6 +8865,7 @@ var ENGINE_COMMANDS = [
   "RotateEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)",
   "TurnEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)",
   "PointEntity(entity, target, roll# = 0)",
+  "AlignToVector(entity, x#, y#, z#, axis, rate# = 1)",
   "ScaleEntity(entity, x#, y#, z#)",
   "EntityX#(entity, isGlobal = 0)",
   "EntityY#(entity, isGlobal = 0)",
@@ -8870,10 +8954,17 @@ function textureFlags(flags, command) {
 function createEngineCommands(engine) {
   const world = engine.world;
   const { entity, parentOf, texture, ofKind } = handleHelpers(world);
-  const material = (handle) => {
+  const look = (handle, change) => {
     const e = entity(handle);
+    if (e.model) {
+      if (!e.brush) e.brush = newBrush();
+      change(e.brush);
+      paintModel(e);
+      return;
+    }
     if (!e.material) throw runtimeError(`Entity ${handle} is a ${e.kind}, which has no surface to colour`);
-    return e.material;
+    change(e.material);
+    e.material.changed();
   };
   const shape = (mesh, parent) => {
     engine.autoGraphics();
@@ -9144,36 +9235,37 @@ function createEngineCommands(engine) {
     createtorus: (segments, thickness, parent) => shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
     // ----------------------------------------------------------- looks
     entitycolor(handle, r, g, b) {
-      const m = material(handle);
-      m.color = [unit(r), unit(g), unit(b)];
-      m.changed();
+      look(handle, (m) => {
+        m.color = [unit(r), unit(g), unit(b)];
+      });
     },
     entityalpha(handle, alpha) {
-      const m = material(handle);
-      m.alpha = Math.max(0, Math.min(1, alpha));
-      m.changed();
+      look(handle, (m) => {
+        m.alpha = Math.max(0, Math.min(1, alpha));
+      });
     },
     entityshininess(handle, shininess) {
-      const m = material(handle);
-      m.shininess = Math.max(0, Math.min(1, shininess));
-      m.changed();
+      look(handle, (m) => {
+        m.shininess = Math.max(0, Math.min(1, shininess));
+      });
     },
     entityfx(handle, flags) {
-      const m = material(handle);
-      m.fullbright = (flags & 1) !== 0;
-      m.flat = (flags & 4) !== 0;
-      m.twoSided = (flags & 16) !== 0;
-      m.vertexColors = (flags & 2) !== 0;
-      m.vertexAlpha = (flags & 32) !== 0;
-      m.changed();
       const e = entity(handle);
       e.castShadow = (flags & 131072) === 0;
       e.receiveShadow = (flags & 262144) === 0;
+      look(handle, (m) => {
+        m.fullbright = (flags & 1) !== 0;
+        m.flat = (flags & 4) !== 0;
+        m.twoSided = (flags & 16) !== 0;
+        m.vertexColors = (flags & 2) !== 0;
+        m.vertexAlpha = (flags & 32) !== 0;
+      });
     },
     entitytexture(handle, tex) {
-      const m = material(handle);
-      m.texture = tex === 0 ? null : texture(tex);
-      m.changed();
+      const t = tex === 0 ? null : texture(tex);
+      look(handle, (m) => {
+        m.texture = t;
+      });
     },
     entityorder(handle, order) {
       entity(handle).order = order;
@@ -9181,9 +9273,9 @@ function createEngineCommands(engine) {
     entityblend(handle, blend) {
       const modes = { 1: "alpha", 2: "multiply", 3: "add" };
       if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
-      const m = material(handle);
-      m.blend = modes[blend];
-      m.changed();
+      look(handle, (m) => {
+        m.blend = modes[blend];
+      });
     },
     // -------------------------------------------------------- textures
     loadtexture(file, flags) {
@@ -9237,6 +9329,25 @@ function createEngineCommands(engine) {
     pointentity(handle, target, roll) {
       const e = entity(handle);
       e.pointAt(entity(target).worldPosition(), roll);
+    },
+    // Blitz3D's AlignToVector: turns the entity's axis (1 X, 2 Y, 3 Z)
+    // towards the vector by `rate` of the angle, the shortest way; from
+    // pointing straight away, about its Y, Z or X axis respectively.
+    aligntovector(handle, x, y, z, axis, rate) {
+      if (axis < 1 || axis > 3) throw runtimeError(`AlignToVector axis must be 1 (X), 2 (Y) or 3 (Z), not ${axis}`);
+      const e = entity(handle);
+      const to = new Vec3(x, y, z);
+      const length2 = to.length();
+      if (length2 <= 1e-6) return;
+      to.scale(1 / length2);
+      const q = e.worldRotation();
+      const unit2 = (i) => new Vec3(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuat(q);
+      const from = unit2(axis - 1);
+      const dot2 = Math.max(-1, Math.min(1, from.dot(to)));
+      if (dot2 >= 1 - 1e-6) return;
+      const about = dot2 <= -1 + 1e-6 ? unit2(axis % 3) : from.clone().cross(to).normalize();
+      const turn = new Quat().setAxisAngle(about.x, about.y, about.z, Math.acos(dot2) * rate * 180 / Math.PI);
+      e.setWorldRotation(q.premultiply(turn));
     },
     scaleentity(handle, x, y, z) {
       entity(handle).setScale(x, y, z);
@@ -9922,6 +10033,27 @@ var Models = class {
     this.engine = engine;
     this.chain = Promise.resolve();
     this.animated = /* @__PURE__ */ new Set();
+    this.preloaded = /* @__PURE__ */ new Map();
+    this.ready = /* @__PURE__ */ new Map();
+  }
+  io(file) {
+    const engine = this.engine;
+    return {
+      loadFile: engine.loadFile,
+      loadImage: engine.loadImage,
+      decodeImage: engine.decodeImage,
+      track: (p) => engine.track(p),
+      warn: (text) => engine.warn(`LoadMesh "${file}": ${text}`)
+    };
+  }
+  // Reads a model before main runs, so LoadMesh of it has its parts at once
+  // (as Blitz3D programs expect: they change a mesh right after loading it).
+  preload(file, url) {
+    if (this.preloaded.has(url) || !this.engine.loadFile) return null;
+    const reading = this.engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
+    this.preloaded.set(url, reading);
+    return reading.then((data) => this.ready.set(url, data), () => {
+    });
   }
   load(file, url, parent) {
     const engine = this.engine;
@@ -9935,14 +10067,12 @@ var Models = class {
       fail2("this platform cannot read files");
       return root;
     }
-    const io = {
-      loadFile: engine.loadFile,
-      loadImage: engine.loadImage,
-      decodeImage: engine.decodeImage,
-      track: (p) => engine.track(p),
-      warn: (text) => engine.warn(`LoadMesh "${file}": ${text}`)
-    };
-    const reading = engine.loadFile(url).then((bytes) => readGltf(bytes, url, io));
+    const known = this.ready.get(url);
+    if (known) {
+      this.build(root, known);
+      return root;
+    }
+    const reading = this.preloaded.get(url) || engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
     reading.catch(() => {
     });
     const build = this.chain.then(() => reading).then((data) => {
@@ -9978,6 +10108,7 @@ var Models = class {
       if (n.mesh >= 0) {
         const m2 = data.meshes[n.mesh];
         e = world.createMesh(m2.mesh, parent);
+        e.surfaces = m2.materials;
         e.materials = m2.materials.map((mat) => mat.clone());
       } else e = world.createEntity("pivot", parent);
       e.name = n.name;
@@ -9994,6 +10125,7 @@ var Models = class {
     m.data = data;
     m.nodes = nodes;
     m.loaded = true;
+    paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
     for (const w of waiting) w.fn();
@@ -10393,6 +10525,10 @@ var Engine = class {
     const jobs = [];
     if (uses.some((name) => PHYSICS_KEYS.has(name))) jobs.push(this.physics.prepare());
     for (const [command, file] of files) {
+      if (command === "loadmesh" && this.loadFile) {
+        jobs.push(this.models.preload(file, this.resolve(file)));
+        continue;
+      }
       if (command !== "loadterrain" || !this.loadFile) continue;
       const url = resolveUrl(this.baseUrl, file);
       if (this.heightmaps.has(url)) continue;

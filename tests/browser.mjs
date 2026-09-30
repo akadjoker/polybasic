@@ -2061,6 +2061,47 @@ End Function
     console.log(`      heights ${before.sum} -> ${raised.sum}; ${colours.colours} colours; with shading ${before.up} of ${before.vertices} normals straight up, without all`);
   });
 
+  await check('driver.pb: the car lands on the terrain, drives with Up, stays on the ground, wears its brush', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/driver.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const car = () => page.evaluate(() =>
+    {
+      const world = window.polybasicPlayer.state.engine.world;
+      const e = world.entities.find((x) => x.model);
+      const t = world.entities.find((x) => x.terrain);
+      const p = e.worldPosition();
+      const cell = Math.floor(1000 / t.terrain.size);
+      const ground = t.terrain.heightAt((p.x + 500) / cell, (p.z + 500) / cell) * 70;
+      const parts = e.model.nodes.filter((n) => n && n.surfaces);
+      const shiny = parts.every((n) => n.materials.every((m) => m.shininess === 1));
+      return { x: p.x, y: p.y, z: p.z, ground, parts: parts.length, shiny };
+    });
+    await page.waitForFunction(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.model);
+      return e && e.collisions.length > 0;
+    }, null, { timeout: 20000 });
+    await page.waitForTimeout(300);
+    const landed = await car();
+    await page.keyboard.down('ArrowUp');
+    await page.waitForTimeout(2500);
+    await page.keyboard.up('ArrowUp');
+    const driven = await car();
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: join(SHOTS, 'driver.png') });
+    const colours = await playerStats(page);
+    assert(Math.abs(landed.y - landed.ground - 1) < 0.3, `landed at ${landed.y}, ground ${landed.ground}`);
+    const travelled = Math.hypot(driven.x - landed.x, driven.z - landed.z);
+    assert(travelled > 40, `drove only ${travelled.toFixed(1)} units`);
+    assert(driven.y > driven.ground && driven.y < driven.ground + 3, `after driving at ${driven.y}, ground ${driven.ground}`);
+    assert(landed.parts > 0 && landed.shiny, `EntityShininess did not reach the car's ${landed.parts} parts`);
+    assert(colours.colours > 200, `the scene is not textured: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      landed at ${landed.y.toFixed(2)} over ${landed.ground.toFixed(2)}; drove ${travelled.toFixed(1)} units; ${landed.parts} parts; ${colours.colours} colours`);
+  });
+
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/meadow.pb`, { width: 800, height: 600 });
