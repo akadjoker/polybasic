@@ -440,6 +440,9 @@ uniform vec4 pbPushers[8];`)
         specular: new THREE.Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    // Fully faded out (EntityAlpha 0) is not drawn at all, as in Blitz3D:
+    // it hides nothing behind it and casts no shadow, and is still picked.
+    material.visible = m.alphaMode === 'opaque' || m.alpha > 0;
     this.materials.set(m.id, { material, key });
     return material;
   }

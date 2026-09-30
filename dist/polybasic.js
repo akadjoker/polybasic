@@ -37752,6 +37752,7 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
         specular: new Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    material.visible = m.alphaMode === "opaque" || m.alpha > 0;
     this.materials.set(m.id, { material, key });
     return material;
   }

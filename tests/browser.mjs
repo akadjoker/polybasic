@@ -85,8 +85,12 @@ function startServer()
 const results = [];
 const facts = {};
 
+// ONLY=text runs just the checks whose name has that text in it.
+const ONLY = process.env.ONLY || '';
+
 async function check(name, fn)
 {
+  if (ONLY && !name.includes(ONLY)) return;
   const started = Date.now();
   try
   {
@@ -1261,6 +1265,79 @@ For y = 0 To 3 : For x = 0 To 3 : TexturePixel tex, x, y, 255, 255, 255, 128 : N
     await page.click('#stopBtn');
     noConsoleErrors(page);
     await page.close();
+  });
+
+  await check('EntityAlpha 0: not drawn, hides nothing behind it, still picked', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // Looking down on a see-through green floor, with an invisible square
+    // above it, drawn first (EntityOrder): were the square drawn at all, its
+    // depth would hide the floor.
+    const scene = (alpha) => `Graphics3D 640, 480
+Global cam, square
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 255
+PositionEntity cam, 0, 6, 0
+RotateEntity cam, 90, 0, 0
+floor = CreatePlane()
+ScaleEntity floor, 3, 1, 3
+EntityColor floor, 0, 255, 0
+EntityFX floor, FX_FULLBRIGHT
+EntityAlpha floor, 0.9
+square = CreatePlane()
+PositionEntity square, 0, 2, 0
+ScaleEntity square, 3, 1, 3
+EntityColor square, 255, 0, 0
+EntityFX square, FX_FULLBRIGHT
+EntityAlpha square, ${alpha}
+EntityOrder square, -1
+EntityPickMode square, PICK_POLYGON
+Function Update()
+  If FrameCount() = 1 Then Print "picked " + (CameraPick(cam, 320, 240) = square)
+End Function
+`;
+    const look = async (alpha) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(alpha));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('picked'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      const picked = (await page.textContent('#console')).includes('picked 1');
+      const colours = await page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { green: 0, red: 0, blue: 0 };
+        for (let i = 0; i < d.length; i += 4)
+        {
+          const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+          if (g > 180 && r < 60 && b < 60) n.green++;
+          else if (r > 100 && g < 60) n.red++;
+          else if (b > 200 && r < 40 && g < 40) n.blue++;
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+      return { picked, ...colours };
+    };
+    const faded = await look(0);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'alpha-zero.png') });
+    const half = await look(0.5);
+    const text = JSON.stringify({ faded, half }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    assert(faded.picked && half.picked, `the square is not picked: ${text}`);
+    assert(faded.green > 0.3 && faded.red === 0, `alpha 0 still covers the floor: ${text}`);
+    assert(half.red > 0.3, `alpha 0.5 is not drawn: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      alpha 0: green ${(faded.green * 100).toFixed(1)}%, red ${(faded.red * 100).toFixed(1)}%; alpha 0.5: red ${(half.red * 100).toFixed(1)}%`);
   });
 
   await check('sprites: they face the camera by view mode, and a loaded one glows', async () =>
