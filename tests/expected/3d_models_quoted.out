@@ -1,0 +1,5 @@
+right after LoadMesh: loaded 1, 1 part, 4 animations
+fitted at once: 1.83333 high
+animating: 1
+a bad animation number is an error at once:
+Runtime error (3d_models_quoted.pb, line 14): Model 16 has 0 animations, not number 1

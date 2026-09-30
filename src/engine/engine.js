@@ -191,6 +191,11 @@ export class Engine
     // the terrain by TerrainSize right after loading it).
     for (const [command, file] of files)
     {
+      if (command === 'loadmesh' && this.loadFile)
+      {
+        jobs.push(this.models.preload(file, this.resolve(file)));
+        continue;
+      }
       if (command !== 'loadterrain' || !this.loadFile) continue;
       const url = resolveUrl(this.baseUrl, file);
       if (this.heightmaps.has(url)) continue;

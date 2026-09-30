@@ -474,7 +474,7 @@ test('LoadMesh in a program: the pivot at once, the parts before the first Updat
 {
   const source = `
 Global guy, copy
-guy = LoadMesh("character.glb")
+guy = LoadMesh(Later("character.glb"))
 Print "loaded in main: " + MeshLoaded(guy)
 Function Update()
   f = FrameCount()
@@ -496,6 +496,9 @@ Function Update()
     Print "stopped: " + Animating(guy)
     End
   EndIf
+End Function
+Function Later$(name$)
+  Return name
 End Function
 `;
   const module = await loadProgram(compile(source, { file: 'test.pb' }).js);

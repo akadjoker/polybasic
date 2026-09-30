@@ -3,19 +3,19 @@
 Const KENNEY$ = "../../examples/assets/kenney/"
 Global ground, coin, copy1, copy2, crate, ball
 
-ground = LoadMesh(KENNEY + "platform-large.glb")
+ground = LoadMesh(Asset("platform-large.glb"))
 EntityPickMode ground, PICK_POLYGON
 EntityType ground, 2
 EntityBody ground, BODY_STATIC
 
-coin = LoadMesh(KENNEY + "coin.glb")
+coin = LoadMesh(Asset("coin.glb"))
 copy1 = CopyEntity(coin)
 PositionEntity copy1, 1, 2, 0
 copy2 = CopyEntity(copy1)
 PositionEntity copy2, -1, 2, 0
 Animate coin, 1
 
-crate = LoadMesh(KENNEY + "brick.glb")
+crate = LoadMesh(Asset("brick.glb"))
 PositionEntity crate, 0, 3, 1.5
 EntityBody crate
 BodyMass crate, 2
@@ -44,4 +44,9 @@ Function Update()
     End
   EndIf
   TranslateEntity ball, 0, -0.2, 0
+End Function
+
+; A name made at run time, not in quotes: the model arrives after main.
+Function Asset$(name$)
+  Return KENNEY + name
 End Function

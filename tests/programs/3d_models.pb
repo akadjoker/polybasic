@@ -2,8 +2,8 @@
 Const KENNEY$ = "../../examples/assets/kenney/"
 Global platform, guy, ball, crate, walker
 
-platform = LoadMesh(KENNEY + "platform-large.glb")
-guy = LoadMesh(KENNEY + "character.glb")
+platform = LoadMesh(Asset("platform-large.glb"))
+guy = LoadMesh(Asset("character.glb"))
 PositionEntity guy, 0, 3, 0
 Print "right after LoadMesh: loaded " + MeshLoaded(platform) + ", children " + CountChildren(platform)
 
@@ -46,4 +46,9 @@ Function Update()
   EndIf
   ; Moved last: the checks above read where the previous steps left it.
   TranslateEntity ball, 0, -0.1, 0
+End Function
+
+; A name made at run time, not in quotes: the model arrives after main.
+Function Asset$(name$)
+  Return KENNEY + name
 End Function
