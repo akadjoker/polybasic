@@ -17,6 +17,7 @@ import { assert, near, nearAll } from './assert.mjs';
 const unit = [];
 const test = (name, fn) => unit.push({ name, fn });
 const KENNEY = fileURLToPath(new URL('../../examples/assets/kenney/', import.meta.url));
+const DRIVER = fileURLToPath(new URL('../../examples/assets/blitz3d/driver/', import.meta.url));
 
 // ------------------------------------------------------------ fixtures
 
@@ -516,6 +517,58 @@ End Function
   assert(lines[7] === 'walking: 1 at 0.0666667, copy jumped: done 1 at 0.5', lines[7]);
   assert(lines[8] === "copy's arm is its own: 1", lines[8]);
   assert(lines[9] === 'stopped: 0', lines[9]);
+});
+
+test('a model wears its entity brush over each surface, as Blitz3D combines them', async () =>
+{
+  const source = `
+Global car, copy
+car = LoadMesh(Later("car.glb"))
+EntityColor car, 255, 51, 0
+EntityAlpha car, 0.5
+EntityShininess car, 0.25
+Function Update()
+  copy = CopyEntity(car)
+  EntityColor copy, 0, 255, 255
+  EntityFX copy, FX_FULLBRIGHT
+  End
+End Function
+Function Later$(name$)
+  Return name
+End Function
+`;
+  const module = await loadProgram(compile(source, { file: 'test.pb' }).js);
+  const engine = new Engine({ baseUrl: pathToFileURL(join(DRIVER, 'x.pb')).href, loadFile: (u) => readFile(fileURLToPath(u)) });
+  const host = new CaptureHost();
+  const r = await runProgram(module, host, { engine });
+  assert(r.status === 'ended', `${r.status} ${r.error ? r.error.message : ''}\n${host.output}`);
+  const models = engine.world.entities.filter((e) => e.model);
+  assert(models.length === 2, `${models.length} models`);
+  const parts = (root) => root.model.nodes.filter((n) => n && n.surfaces);
+  const [car, copy] = models;
+  assert(parts(car).length > 0, 'the car has no parts with surfaces');
+  for (const part of parts(car))
+  {
+    part.surfaces.forEach((s, i) =>
+    {
+      const m = part.materials[i];
+      nearAll(m.color, [s.color[0], s.color[1] * 0.2, 0], 1e-6, 'colour multiplies');
+      near(m.alpha, (s.alphaMode === 'opaque' ? 1 : s.alpha) * 0.5, 1e-6, 'alpha multiplies');
+      assert(m.alphaMode !== 'opaque', 'half faded yet drawn opaque');
+      near(m.shininess, Math.min(1, s.shininess + 0.25), 1e-6, 'shininess adds');
+      assert(m.texture === s.texture && !m.fullbright, 'the car took the copy\'s looks');
+    });
+  }
+  for (const part of parts(copy))
+  {
+    part.surfaces.forEach((s, i) =>
+    {
+      const m = part.materials[i];
+      nearAll(m.color, [0, s.color[1], s.color[2]], 1e-6, 'the copy\'s own colour');
+      near(m.alpha, (s.alphaMode === 'opaque' ? 1 : s.alpha) * 0.5, 1e-6, 'the copy keeps the alpha it was copied with');
+      assert(m.fullbright, 'EntityFX did not reach the copy\'s parts');
+    });
+  }
 });
 
 test('a missing model or one that is not glTF is reported and never loads', async () =>

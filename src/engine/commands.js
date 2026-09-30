@@ -21,6 +21,7 @@ import { buildTree, TREE_KINDS, TREE_OAK, TREE_WILLOW, TREE_SHRUB, TREE_ASH, TRE
 import { barkPixels, leafPixels } from './scene/tree-textures.js';
 import { Grass, createTuft, bladePixels, MAX_PUSHERS } from './scene/grass.js';
 import { Material } from './scene/material.js';
+import { newBrush, paintModel } from './scene/brush.js';
 import { rayOnto } from './collide/picking.js';
 import { Vec3 } from './math/vec3.js';
 import { Quat } from './math/quat.js';
@@ -220,11 +221,20 @@ export function createEngineCommands(engine)
   const world = engine.world;
 
   const { entity, parentOf, texture, ofKind } = handleHelpers(world);
-  const material = (handle) =>
+  // Changes the look of a mesh, or the brush of a model (see brush.js).
+  const look = (handle, change) =>
   {
     const e = entity(handle);
+    if (e.model)
+    {
+      if (!e.brush) e.brush = newBrush();
+      change(e.brush);
+      paintModel(e);
+      return;
+    }
     if (!e.material) throw runtimeError(`Entity ${handle} is a ${e.kind}, which has no surface to colour`);
-    return e.material;
+    change(e.material);
+    e.material.changed();
   };
   const shape = (mesh, parent) =>
   {
@@ -559,40 +569,34 @@ export function createEngineCommands(engine)
     // ----------------------------------------------------------- looks
     entitycolor(handle, r, g, b)
     {
-      const m = material(handle);
-      m.color = [unit(r), unit(g), unit(b)];
-      m.changed();
+      look(handle, (m) => { m.color = [unit(r), unit(g), unit(b)]; });
     },
     entityalpha(handle, alpha)
     {
-      const m = material(handle);
-      m.alpha = Math.max(0, Math.min(1, alpha));
-      m.changed();
+      look(handle, (m) => { m.alpha = Math.max(0, Math.min(1, alpha)); });
     },
     entityshininess(handle, shininess)
     {
-      const m = material(handle);
-      m.shininess = Math.max(0, Math.min(1, shininess));
-      m.changed();
+      look(handle, (m) => { m.shininess = Math.max(0, Math.min(1, shininess)); });
     },
     entityfx(handle, flags)
     {
-      const m = material(handle);
-      m.fullbright = (flags & 1) !== 0;
-      m.flat = (flags & 4) !== 0;
-      m.twoSided = (flags & 16) !== 0;
-      m.vertexColors = (flags & 2) !== 0;
-      m.vertexAlpha = (flags & 32) !== 0;
-      m.changed();
       const e = entity(handle);
       e.castShadow = (flags & 0x20000) === 0;
       e.receiveShadow = (flags & 0x40000) === 0;
+      look(handle, (m) =>
+      {
+        m.fullbright = (flags & 1) !== 0;
+        m.flat = (flags & 4) !== 0;
+        m.twoSided = (flags & 16) !== 0;
+        m.vertexColors = (flags & 2) !== 0;
+        m.vertexAlpha = (flags & 32) !== 0;
+      });
     },
     entitytexture(handle, tex)
     {
-      const m = material(handle);
-      m.texture = tex === 0 ? null : texture(tex);
-      m.changed();
+      const t = tex === 0 ? null : texture(tex);
+      look(handle, (m) => { m.texture = t; });
     },
     entityorder(handle, order)
     {
@@ -602,9 +606,7 @@ export function createEngineCommands(engine)
     {
       const modes = { 1: 'alpha', 2: 'multiply', 3: 'add' };
       if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
-      const m = material(handle);
-      m.blend = modes[blend];
-      m.changed();
+      look(handle, (m) => { m.blend = modes[blend]; });
     },
 
     // -------------------------------------------------------- textures

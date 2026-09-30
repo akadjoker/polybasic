@@ -15,6 +15,7 @@
 
 import { readGltf } from './gltf.js';
 import { pose, advance, ANIM_STOP } from './animation.js';
+import { paintModel } from '../scene/brush.js';
 
 export class Models
 {
@@ -118,6 +119,7 @@ export class Models
       {
         const m = data.meshes[n.mesh];
         e = world.createMesh(m.mesh, parent);
+        e.surfaces = m.materials;
         e.materials = m.materials.map((mat) => mat.clone());
       }
       else e = world.createEntity('pivot', parent);
@@ -135,6 +137,7 @@ export class Models
     m.data = data;
     m.nodes = nodes;
     m.loaded = true;
+    paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
     for (const w of waiting) w.fn();
