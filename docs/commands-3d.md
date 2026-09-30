@@ -446,6 +446,28 @@ animations or bones.
 Try it: **Driver** in the playground's Blitz3D samples (`examples/driver.pb`),
 Blitz3D's driving sample with its car converted this way.
 
+### MD2 models
+
+MD2 (Quake 2's format) keeps a model's animation as its vertices in every
+frame: playing it is blending two frames, with no bones, so many animated
+models cost little. These are Blitz3D's MD2 commands, with its rules.
+
+| Command | What it does |
+|---------|--------------|
+| `LoadMD2%(file$, parent = 0)` | Loads an MD2 model. A file named in quotes is read before the program starts, so the model is there at once; a bad one is reported and gives 0, as in Blitz3D. A name worked out at run time arrives before the first `Update` (commands given before then wait for it). The skin named in the file is not loaded: give the model its texture with `EntityTexture`. |
+| `AnimateMD2 md2, mode = ANIM_LOOP, speed# = 1, first = 0, last = 9999, transition# = 0` | Plays frames `first` to `last` (kept within the file's frames): `ANIM_LOOP`, `ANIM_PINGPONG`, `ANIM_ONCE`, or `ANIM_STOP` to stop. `speed` is in frames per step (0.25 is 15 frames a second); a negative speed plays backwards. `transition` blends, over that many steps, from the pose the model is in to the new animation's first frame. In a loop, frame `last` stands for frame `first`, so a looping animation's last frame should be the same as its first. |
+| `MD2AnimTime#(md2)` | The frame it is at (between two frames while it blends them). |
+| `MD2AnimLength%(md2)` | How many frames the file has. |
+| `MD2Animating%(md2)` | 1 while it plays (0 once `ANIM_ONCE` reached its end, or after `ANIM_STOP`). |
+
+An MD2 model is one mesh entity: the usual commands move, scale, colour and
+texture it. `CopyEntity` makes a model with its own animation that shares
+the file's frames, standing in frame 0 with nothing playing, as in Blitz3D.
+A model that is not playing costs nothing; one that plays has its vertices
+blended once a step. Picks and polygon collisions see the pose it is in.
+
+Try it: **MD2 flags** in the playground's Visual effects (`examples/md2.pb`).
+
 ## Picking
 
 Picking finds what is on a line: what the mouse points at, what a gun

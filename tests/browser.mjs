@@ -56,6 +56,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.bmp': 'image/bmp',
+  '.md2': 'application/octet-stream',
   '.wav': 'audio/wav'
 };
 
@@ -1964,7 +1965,7 @@ End Function
       const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
       return m && m.model.state.index === 2 && m.model.state.playing;
     }, null, { timeout: 20000 });
-    assert(jumping.mode === 2, `the jump did not play once: ${JSON.stringify(jumping)}`);
+    assert(jumping.mode === 3, `the jump did not play once: ${JSON.stringify(jumping)}`);
     facts.push('jump played once, then idle');
     noConsoleErrors(page);
     await page.close();
@@ -2100,6 +2101,76 @@ End Function
     noConsoleErrors(page);
     await page.close();
     console.log(`      landed at ${landed.y.toFixed(2)} over ${landed.ground.toFixed(2)}; drove ${travelled.toFixed(1)} units; ${landed.parts} parts; ${colours.colours} colours`);
+  });
+
+  await check('md2.pb: a hundred MD2 flags wave, each posed in place in its own buffers; ping-pong, once and stop', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/md2.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const flags = () => page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const shown = engine.world.entities.filter((e) => e.md2 && e.visible);
+      const backend = engine.backend;
+      const first = shown[0];
+      const known = backend.geometries.get(first.mesh.id);
+      return {
+        count: shown.length,
+        playing: shown.filter((e) => e.md2.animating).length,
+        meshes: new Set(shown.map((e) => e.mesh.id)).size,
+        pose: first.mesh.pose,
+        drawnPose: known ? known.pose : -1,
+        buffer: known ? known.geometry.getAttribute('position').array.length : 0,
+        y: first.mesh.positions[3 * 60 + 2],
+        time: first.md2.time,
+        mode: first.md2.mode
+      };
+    });
+    await page.waitForTimeout(600);
+    const a = await flags();
+    const geometryA = await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const e = engine.world.entities.find((x) => x.md2 && x.visible);
+      window.__flagGeometry = engine.backend.geometries.get(e.mesh.id).geometry;
+      return true;
+    });
+    await page.waitForTimeout(400);
+    const b = await flags();
+    const same = await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const e = engine.world.entities.find((x) => x.md2 && x.visible);
+      return engine.backend.geometries.get(e.mesh.id).geometry === window.__flagGeometry;
+    });
+    await page.screenshot({ path: join(SHOTS, 'md2.png') });
+    const colours = await playerStats(page);
+    await page.keyboard.press('Digit2');
+    await page.waitForTimeout(300);
+    const pingpong = await flags();
+    await page.keyboard.press('Digit3');
+    await page.waitForFunction(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.md2 && e.visible && e.md2.animating).length === 0, null, { timeout: 20000 });
+    const once = await flags();
+    // Stopping with the blend on first blends back to the first frame.
+    // (12 steps, 0.2 s).
+    await page.keyboard.press('Digit0');
+    await page.waitForTimeout(700);
+    const stopped = await flags();
+    await page.waitForTimeout(300);
+    const still = await flags();
+    assert(geometryA && a.count === 99 && a.playing === 99, `${a.count} flags, ${a.playing} playing`);
+    assert(a.meshes === 99, `the flags share ${a.meshes} meshes: each needs its own pose`);
+    assert(b.pose > a.pose && b.drawnPose === b.pose, `pose ${a.pose} -> ${b.pose}, drawn ${b.drawnPose}`);
+    assert(same, 'the geometry was built again instead of posed in place');
+    assert(b.y !== a.y, 'the flag did not move');
+    assert(pingpong.mode === 2, `mode after 2: ${pingpong.mode}`);
+    assert(once.time === 20, `once stopped at frame ${once.time}`);
+    assert(stopped.playing === 0 && stopped.mode === 0 && still.pose === stopped.pose, `stopped yet posed again: ${stopped.pose} -> ${still.pose}`);
+    assert(stopped.time === 0, `stop did not go back to the first frame: ${stopped.time}`);
+    assert(colours.colours > 200, `the flags are not textured: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${a.count} flags, ${a.buffer / 3} vertices each; pose ${a.pose} -> ${b.pose} in the same buffers; once ended at frame ${once.time}; ${colours.colours} colours`);
   });
 
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>

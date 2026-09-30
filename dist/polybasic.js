@@ -3368,6 +3368,8 @@ var Entity = class {
     this.materials = [];
     this.surfaces = null;
     this.brush = null;
+    this.md2 = null;
+    this.md2Waiting = null;
     this.camera = null;
     this.light = null;
     this.sprite = null;
@@ -5741,8 +5743,8 @@ function slabAxis(lo, hi, origin, inv) {
 }
 function meshBvh(mesh) {
   if (mesh.grid) return mesh.grid;
-  if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version) {
-    mesh.bvhCache = { version: mesh.version, bvh: new MeshBvh(mesh.positions, mesh.indices) };
+  if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version || mesh.bvhCache.pose !== mesh.pose) {
+    mesh.bvhCache = { version: mesh.version, pose: mesh.pose, bvh: new MeshBvh(mesh.positions, mesh.indices) };
   }
   return mesh.bvhCache.bvh;
 }
@@ -7199,8 +7201,8 @@ function createPhysicsCommands(engine) {
 // src/engine/model/animation.js
 var ANIM_STOP = 0;
 var ANIM_LOOP = 1;
-var ANIM_ONCE = 2;
-var ANIM_PINGPONG = 3;
+var ANIM_PINGPONG = 2;
+var ANIM_ONCE = 3;
 function sample(channel, t, out) {
   const { times, values, interpolation } = channel;
   const size = channel.path === "rotation" ? 4 : 3;
@@ -7397,7 +7399,7 @@ function createModelCommands(engine) {
     },
     animate(handle, index, mode, speed) {
       const e = model(handle, true);
-      if (mode < ANIM_STOP || mode > ANIM_PINGPONG) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_ONCE or ANIM_PINGPONG (0 to 3), not ${mode}`);
+      if (mode < ANIM_STOP || mode > ANIM_ONCE) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_PINGPONG or ANIM_ONCE (0 to 3), not ${mode}`);
       if (index < 0) throw runtimeError(`Animate needs an animation number from 1, or 0 to stop, not ${index}`);
       if (index !== 0 && e.model.loaded) animation(e, index);
       models.play(e, index, mode, speed);
@@ -8788,6 +8790,856 @@ function createTerrainCommands(engine) {
   };
 }
 
+// src/engine/model/md2-normals.js
+var MD2_NORMALS = new Float32Array([
+  -0.525731,
+  0,
+  0.850651,
+  -0.442863,
+  0.238856,
+  0.864188,
+  -0.295242,
+  0,
+  0.955423,
+  -0.309017,
+  0.5,
+  0.809017,
+  -0.16246,
+  0.262866,
+  0.951056,
+  0,
+  0,
+  1,
+  0,
+  0.850651,
+  0.525731,
+  -0.147621,
+  0.716567,
+  0.681718,
+  0.147621,
+  0.716567,
+  0.681718,
+  0,
+  0.525731,
+  0.850651,
+  0.309017,
+  0.5,
+  0.809017,
+  0.525731,
+  0,
+  0.850651,
+  0.295242,
+  0,
+  0.955423,
+  0.442863,
+  0.238856,
+  0.864188,
+  0.16246,
+  0.262866,
+  0.951056,
+  -0.681718,
+  0.147621,
+  0.716567,
+  -0.809017,
+  0.309017,
+  0.5,
+  -0.587785,
+  0.425325,
+  0.688191,
+  -0.850651,
+  0.525731,
+  0,
+  -0.864188,
+  0.442863,
+  0.238856,
+  -0.716567,
+  0.681718,
+  0.147621,
+  -0.688191,
+  0.587785,
+  0.425325,
+  -0.5,
+  0.809017,
+  0.309017,
+  -0.238856,
+  0.864188,
+  0.442863,
+  -0.425325,
+  0.688191,
+  0.587785,
+  -0.716567,
+  0.681718,
+  -0.147621,
+  -0.5,
+  0.809017,
+  -0.309017,
+  -0.525731,
+  0.850651,
+  0,
+  0,
+  0.850651,
+  -0.525731,
+  -0.238856,
+  0.864188,
+  -0.442863,
+  0,
+  0.955423,
+  -0.295242,
+  -0.262866,
+  0.951056,
+  -0.16246,
+  0,
+  1,
+  0,
+  0,
+  0.955423,
+  0.295242,
+  -0.262866,
+  0.951056,
+  0.16246,
+  0.238856,
+  0.864188,
+  0.442863,
+  0.262866,
+  0.951056,
+  0.16246,
+  0.5,
+  0.809017,
+  0.309017,
+  0.238856,
+  0.864188,
+  -0.442863,
+  0.262866,
+  0.951056,
+  -0.16246,
+  0.5,
+  0.809017,
+  -0.309017,
+  0.850651,
+  0.525731,
+  0,
+  0.716567,
+  0.681718,
+  0.147621,
+  0.716567,
+  0.681718,
+  -0.147621,
+  0.525731,
+  0.850651,
+  0,
+  0.425325,
+  0.688191,
+  0.587785,
+  0.864188,
+  0.442863,
+  0.238856,
+  0.688191,
+  0.587785,
+  0.425325,
+  0.809017,
+  0.309017,
+  0.5,
+  0.681718,
+  0.147621,
+  0.716567,
+  0.587785,
+  0.425325,
+  0.688191,
+  0.955423,
+  0.295242,
+  0,
+  1,
+  0,
+  0,
+  0.951056,
+  0.16246,
+  0.262866,
+  0.850651,
+  -0.525731,
+  0,
+  0.955423,
+  -0.295242,
+  0,
+  0.864188,
+  -0.442863,
+  0.238856,
+  0.951056,
+  -0.16246,
+  0.262866,
+  0.809017,
+  -0.309017,
+  0.5,
+  0.681718,
+  -0.147621,
+  0.716567,
+  0.850651,
+  0,
+  0.525731,
+  0.864188,
+  0.442863,
+  -0.238856,
+  0.809017,
+  0.309017,
+  -0.5,
+  0.951056,
+  0.16246,
+  -0.262866,
+  0.525731,
+  0,
+  -0.850651,
+  0.681718,
+  0.147621,
+  -0.716567,
+  0.681718,
+  -0.147621,
+  -0.716567,
+  0.850651,
+  0,
+  -0.525731,
+  0.809017,
+  -0.309017,
+  -0.5,
+  0.864188,
+  -0.442863,
+  -0.238856,
+  0.951056,
+  -0.16246,
+  -0.262866,
+  0.147621,
+  0.716567,
+  -0.681718,
+  0.309017,
+  0.5,
+  -0.809017,
+  0.425325,
+  0.688191,
+  -0.587785,
+  0.442863,
+  0.238856,
+  -0.864188,
+  0.587785,
+  0.425325,
+  -0.688191,
+  0.688191,
+  0.587785,
+  -0.425325,
+  -0.147621,
+  0.716567,
+  -0.681718,
+  -0.309017,
+  0.5,
+  -0.809017,
+  0,
+  0.525731,
+  -0.850651,
+  -0.525731,
+  0,
+  -0.850651,
+  -0.442863,
+  0.238856,
+  -0.864188,
+  -0.295242,
+  0,
+  -0.955423,
+  -0.16246,
+  0.262866,
+  -0.951056,
+  0,
+  0,
+  -1,
+  0.295242,
+  0,
+  -0.955423,
+  0.16246,
+  0.262866,
+  -0.951056,
+  -0.442863,
+  -0.238856,
+  -0.864188,
+  -0.309017,
+  -0.5,
+  -0.809017,
+  -0.16246,
+  -0.262866,
+  -0.951056,
+  0,
+  -0.850651,
+  -0.525731,
+  -0.147621,
+  -0.716567,
+  -0.681718,
+  0.147621,
+  -0.716567,
+  -0.681718,
+  0,
+  -0.525731,
+  -0.850651,
+  0.309017,
+  -0.5,
+  -0.809017,
+  0.442863,
+  -0.238856,
+  -0.864188,
+  0.16246,
+  -0.262866,
+  -0.951056,
+  0.238856,
+  -0.864188,
+  -0.442863,
+  0.5,
+  -0.809017,
+  -0.309017,
+  0.425325,
+  -0.688191,
+  -0.587785,
+  0.716567,
+  -0.681718,
+  -0.147621,
+  0.688191,
+  -0.587785,
+  -0.425325,
+  0.587785,
+  -0.425325,
+  -0.688191,
+  0,
+  -0.955423,
+  -0.295242,
+  0,
+  -1,
+  0,
+  0.262866,
+  -0.951056,
+  -0.16246,
+  0,
+  -0.850651,
+  0.525731,
+  0,
+  -0.955423,
+  0.295242,
+  0.238856,
+  -0.864188,
+  0.442863,
+  0.262866,
+  -0.951056,
+  0.16246,
+  0.5,
+  -0.809017,
+  0.309017,
+  0.716567,
+  -0.681718,
+  0.147621,
+  0.525731,
+  -0.850651,
+  0,
+  -0.238856,
+  -0.864188,
+  -0.442863,
+  -0.5,
+  -0.809017,
+  -0.309017,
+  -0.262866,
+  -0.951056,
+  -0.16246,
+  -0.850651,
+  -0.525731,
+  0,
+  -0.716567,
+  -0.681718,
+  -0.147621,
+  -0.716567,
+  -0.681718,
+  0.147621,
+  -0.525731,
+  -0.850651,
+  0,
+  -0.5,
+  -0.809017,
+  0.309017,
+  -0.238856,
+  -0.864188,
+  0.442863,
+  -0.262866,
+  -0.951056,
+  0.16246,
+  -0.864188,
+  -0.442863,
+  0.238856,
+  -0.809017,
+  -0.309017,
+  0.5,
+  -0.688191,
+  -0.587785,
+  0.425325,
+  -0.681718,
+  -0.147621,
+  0.716567,
+  -0.442863,
+  -0.238856,
+  0.864188,
+  -0.587785,
+  -0.425325,
+  0.688191,
+  -0.309017,
+  -0.5,
+  0.809017,
+  -0.147621,
+  -0.716567,
+  0.681718,
+  -0.425325,
+  -0.688191,
+  0.587785,
+  -0.16246,
+  -0.262866,
+  0.951056,
+  0.442863,
+  -0.238856,
+  0.864188,
+  0.16246,
+  -0.262866,
+  0.951056,
+  0.309017,
+  -0.5,
+  0.809017,
+  0.147621,
+  -0.716567,
+  0.681718,
+  0,
+  -0.525731,
+  0.850651,
+  0.425325,
+  -0.688191,
+  0.587785,
+  0.587785,
+  -0.425325,
+  0.688191,
+  0.688191,
+  -0.587785,
+  0.425325,
+  -0.955423,
+  0.295242,
+  0,
+  -0.951056,
+  0.16246,
+  0.262866,
+  -1,
+  0,
+  0,
+  -0.850651,
+  0,
+  0.525731,
+  -0.955423,
+  -0.295242,
+  0,
+  -0.951056,
+  -0.16246,
+  0.262866,
+  -0.864188,
+  0.442863,
+  -0.238856,
+  -0.951056,
+  0.16246,
+  -0.262866,
+  -0.809017,
+  0.309017,
+  -0.5,
+  -0.864188,
+  -0.442863,
+  -0.238856,
+  -0.951056,
+  -0.16246,
+  -0.262866,
+  -0.809017,
+  -0.309017,
+  -0.5,
+  -0.681718,
+  0.147621,
+  -0.716567,
+  -0.681718,
+  -0.147621,
+  -0.716567,
+  -0.850651,
+  0,
+  -0.525731,
+  -0.688191,
+  0.587785,
+  -0.425325,
+  -0.587785,
+  0.425325,
+  -0.688191,
+  -0.425325,
+  0.688191,
+  -0.587785,
+  -0.425325,
+  -0.688191,
+  -0.587785,
+  -0.587785,
+  -0.425325,
+  -0.688191,
+  -0.688191,
+  -0.587785,
+  -0.425325
+]);
+
+// src/engine/model/md2.js
+var MAGIC = 844121161;
+var HEADER = 68;
+var NORMALS = new Float32Array(MD2_NORMALS.length);
+for (let i = 0; i < MD2_NORMALS.length; i += 3) {
+  NORMALS[i] = MD2_NORMALS[i + 1];
+  NORMALS[i + 1] = MD2_NORMALS[i + 2];
+  NORMALS[i + 2] = MD2_NORMALS[i];
+}
+function readMd2(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  if (data.length < HEADER) throw new Error("not an MD2 file (too short)");
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const int = (i) => view.getInt32(i * 4, true);
+  if (int(0) !== MAGIC) throw new Error("not an MD2 file");
+  if (int(1) !== 8) throw new Error(`MD2 version ${int(1)}; only version 8 is read`);
+  const skinWidth = int(2);
+  const skinHeight = int(3);
+  const frameSize = int(4);
+  const fileVerts = int(6);
+  const fileUvs = int(7);
+  const triCount = int(8);
+  const frameCount = int(10);
+  const uvAt = int(12);
+  const triAt = int(13);
+  const frameAt = int(14);
+  if (frameCount <= 0) throw new Error("the MD2 file has no frames");
+  const fits = (at, size) => at >= 0 && size >= 0 && at + size <= data.length;
+  if (skinWidth <= 0 || skinHeight <= 0) throw new Error(`MD2 skin size ${skinWidth} x ${skinHeight}`);
+  if (!fits(uvAt, fileUvs * 4) || !fits(triAt, triCount * 12) || !fits(frameAt, frameCount * frameSize) || frameSize < 40 + fileVerts * 4) {
+    throw new Error("MD2 file is cut short or its header is damaged");
+  }
+  const pairs = /* @__PURE__ */ new Map();
+  const source = [];
+  const uvs = [];
+  const indices = new Uint32Array(triCount * 3);
+  for (let t = 0; t < triCount; t++) {
+    const corner = [];
+    for (let j = 0; j < 3; j++) {
+      const v = view.getUint16(triAt + t * 12 + j * 2, true);
+      const uv = view.getUint16(triAt + t * 12 + 6 + j * 2, true);
+      if (v >= fileVerts || uv >= fileUvs) throw new Error(`MD2 triangle ${t} uses vertex ${v} of ${fileVerts} or texture coordinate ${uv} of ${fileUvs}`);
+      const key = v * 65536 + uv;
+      let index = pairs.get(key);
+      if (index === void 0) {
+        index = source.length;
+        pairs.set(key, index);
+        source.push(v);
+        uvs.push(view.getInt16(uvAt + uv * 4, true) / skinWidth, view.getInt16(uvAt + uv * 4 + 2, true) / skinHeight);
+      }
+      corner.push(index);
+    }
+    indices[t * 3] = corner[0];
+    indices[t * 3 + 1] = corner[2];
+    indices[t * 3 + 2] = corner[1];
+  }
+  const n = source.length;
+  const box = new Aabb();
+  const point = new Vec3();
+  const frames = [];
+  for (let f = 0; f < frameCount; f++) {
+    const at = frameAt + f * frameSize;
+    const float = (i) => view.getFloat32(at + i * 4, true);
+    const scale2 = [float(1), float(2), float(0)];
+    const move = [float(4), float(5), float(3)];
+    const xyz = new Uint8Array(n * 3);
+    const normal = new Uint8Array(n);
+    for (let k = 0; k < n; k++) {
+      const v = at + 40 + source[k] * 4;
+      xyz[k * 3] = data[v + 1];
+      xyz[k * 3 + 1] = data[v + 2];
+      xyz[k * 3 + 2] = data[v];
+      normal[k] = Math.min(data[v + 3], 161);
+      box.expandByPoint(point.set(xyz[k * 3] * scale2[0] + move[0], xyz[k * 3 + 1] * scale2[1] + move[1], xyz[k * 3 + 2] * scale2[2] + move[2]));
+    }
+    frames.push({ scale: scale2, move, xyz, normal });
+  }
+  return { frames, vertexCount: n, uvs: Float32Array.from(uvs), indices, box };
+}
+function md2Mesh(md2) {
+  const n = md2.vertexCount;
+  const mesh = new MeshData([], [], [], []);
+  mesh.positions = new Float32Array(n * 3);
+  mesh.normals = new Float32Array(n * 3);
+  mesh.uvs = md2.uvs;
+  mesh.indices = md2.indices;
+  mesh.submeshes = [{ start: 0, count: md2.indices.length, material: 0 }];
+  mesh.bounds = new Aabb(md2.box.min.clone(), md2.box.max.clone());
+  mesh.pose = 0;
+  if (md2.frames.length) poseFrames(md2, mesh, 0, 0, 0);
+  return mesh;
+}
+function framePoint(frame, k, out, o) {
+  const { xyz, scale: scale2, move } = frame;
+  out[o] = xyz[k * 3] * scale2[0] + move[0];
+  out[o + 1] = xyz[k * 3 + 1] * scale2[1] + move[1];
+  out[o + 2] = xyz[k * 3 + 2] * scale2[2] + move[2];
+}
+function poseFrames(md2, mesh, a, b, t) {
+  const fa = md2.frames[a];
+  const fb = md2.frames[b];
+  const p = mesh.positions;
+  const nr = mesh.normals;
+  const pa = [0, 0, 0];
+  const pb = [0, 0, 0];
+  for (let k = 0, o = 0; k < md2.vertexCount; k++, o += 3) {
+    framePoint(fa, k, pa, 0);
+    framePoint(fb, k, pb, 0);
+    const na = fa.normal[k] * 3;
+    const nb = fb.normal[k] * 3;
+    for (let i = 0; i < 3; i++) {
+      p[o + i] = (pb[i] - pa[i]) * t + pa[i];
+      nr[o + i] = (NORMALS[nb + i] - NORMALS[na + i]) * t + NORMALS[na + i];
+    }
+  }
+  mesh.pose++;
+}
+function poseFrom(md2, mesh, from, b, t) {
+  const fb = md2.frames[b];
+  const p = mesh.positions;
+  const nr = mesh.normals;
+  const n = md2.vertexCount * 3;
+  const pb = [0, 0, 0];
+  for (let k = 0, o = 0; k < md2.vertexCount; k++, o += 3) {
+    framePoint(fb, k, pb, 0);
+    const nb = fb.normal[k] * 3;
+    for (let i = 0; i < 3; i++) {
+      p[o + i] = (pb[i] - from[o + i]) * t + from[o + i];
+      nr[o + i] = (NORMALS[nb + i] - from[n + o + i]) * t + from[n + o + i];
+    }
+  }
+  mesh.pose++;
+}
+var MD2_TRANSITION = 32768;
+var Md2Player = class {
+  constructor(md2, mesh) {
+    this.md2 = md2;
+    this.mesh = mesh;
+    this.mode = 0;
+    this.time = 0;
+    this.speed = 0;
+    this.first = 0;
+    this.last = 0;
+    this.length = 0;
+    this.renderA = 0;
+    this.renderB = 0;
+    this.renderT = 0;
+    this.transTime = 0;
+    this.transSpeed = 0;
+    this.from = null;
+  }
+  get frameCount() {
+    return this.md2.frames.length;
+  }
+  // Frame b one past the end (Blitz3D reads past its last frame there,
+  // with a blend of 0): the last frame instead.
+  frame(i) {
+    return Math.max(0, Math.min(this.frameCount - 1, i));
+  }
+  start(first, last, mode, speed, transition) {
+    const count = this.frameCount;
+    if (!count) return;
+    if (last < first) [first, last] = [last, first];
+    first = Math.max(0, Math.min(count - 1, first));
+    last = Math.max(0, Math.min(count - 1, last));
+    if (transition > 0) {
+      const n = this.md2.vertexCount * 3;
+      if (!this.from) this.from = new Float32Array(n * 2);
+      if (this.mode & MD2_TRANSITION) this.pose();
+      this.from.set(this.mesh.positions, 0);
+      this.from.set(this.mesh.normals, n);
+      this.transSpeed = 1 / transition;
+      this.transTime = 0;
+      mode |= MD2_TRANSITION;
+    }
+    this.first = first;
+    this.last = last;
+    this.length = last - first;
+    this.speed = speed;
+    this.time = (mode & 32767) === 1 || speed >= 0 ? first : last;
+    this.mode = mode;
+    if (!speed || !this.length) {
+      this.renderA = this.renderB = Math.trunc(this.time);
+      this.renderT = 0;
+      this.mode &= MD2_TRANSITION;
+    }
+    this.pose();
+  }
+  // One step (UpdateWorld's elapsed time of 1).
+  step(elapsed = 1) {
+    if (!this.mode) return;
+    if (this.mode & MD2_TRANSITION) {
+      this.transTime += this.transSpeed;
+      if (this.transTime < 1) {
+        this.pose();
+        return;
+      }
+      this.mode &= ~MD2_TRANSITION;
+      if (!this.mode) {
+        this.pose();
+        return;
+      }
+    }
+    this.time += this.speed * elapsed;
+    if (this.time < this.first) {
+      if (this.mode === 1) this.time += this.length;
+      else if (this.mode === 2) {
+        this.time = this.first + (this.first - this.time);
+        this.speed = -this.speed;
+      } else {
+        this.time = this.first;
+        this.mode = 0;
+      }
+    } else if (this.time >= this.last) {
+      if (this.mode === 1) this.time -= this.length;
+      else if (this.mode === 2) {
+        this.time = this.last - (this.time - this.last);
+        this.speed = -this.speed;
+      } else {
+        this.time = this.last;
+        this.mode = 0;
+      }
+    }
+    this.renderA = Math.floor(this.time);
+    this.renderB = this.renderA + 1;
+    if (this.mode === 1 && this.renderB === this.last) this.renderB = this.first;
+    this.renderT = this.time - this.renderA;
+    this.pose();
+  }
+  pose() {
+    if (this.mode & MD2_TRANSITION) poseFrom(this.md2, this.mesh, this.from, this.frame(Math.trunc(this.time)), this.transTime);
+    else poseFrames(this.md2, this.mesh, this.frame(this.renderA), this.frame(this.renderB), this.renderT);
+  }
+  get animating() {
+    return this.mode !== 0;
+  }
+};
+
+// src/engine/model/md2-commands.js
+var MD2_COMMANDS = [
+  "LoadMD2%(file$, parent = 0)",
+  "AnimateMD2(md2, mode = 1, speed# = 1, first = 0, last = 9999, transition# = 0)",
+  "MD2AnimTime#(md2)",
+  "MD2AnimLength%(md2)",
+  "MD2Animating%(md2)"
+];
+var Md2Models = class {
+  constructor(engine) {
+    this.engine = engine;
+    this.files = /* @__PURE__ */ new Map();
+    this.reading = /* @__PURE__ */ new Map();
+    this.playing = /* @__PURE__ */ new Set();
+  }
+  read(url) {
+    if (!this.reading.has(url)) {
+      const p = this.engine.loadFile(url).then((bytes) => readMd2(bytes));
+      p.then((md2) => this.files.set(url, { md2 }), (error2) => this.files.set(url, { error: error2 }));
+      this.reading.set(url, p);
+    }
+    return this.reading.get(url);
+  }
+  // Files named in quotes, read before main (LoadMD2 then has the model at
+  // once, as in Blitz3D).
+  preload(url) {
+    if (!this.engine.loadFile) return null;
+    return this.read(url).then(() => {
+    }, () => {
+    });
+  }
+  give(e, md2) {
+    e.mesh = md2Mesh(md2);
+    e.md2 = new Md2Player(md2, e.mesh);
+    this.playing.add(e);
+    const waiting = e.md2Waiting;
+    e.md2Waiting = null;
+    if (waiting) for (const fn of waiting) fn();
+  }
+  // Runs fn once e has its model: now, or when the file arrives.
+  whenLoaded(e, fn) {
+    if (e.md2) fn();
+    else if (e.md2Waiting) e.md2Waiting.push(fn);
+  }
+  // The model's entity, or null when the file is known to be bad (Blitz3D
+  // returns 0 then).
+  load(file, parent) {
+    const engine = this.engine;
+    const url = engine.resolve(file);
+    const known = this.files.get(url);
+    if (known && known.error) {
+      engine.warn(`LoadMD2: could not load "${file}": ${known.error.message}`);
+      return null;
+    }
+    const e = engine.world.createEntity("mesh", parent);
+    e.md2Waiting = [];
+    if (known) {
+      this.give(e, known.md2);
+      return e;
+    }
+    if (!engine.loadFile) {
+      engine.warn(`LoadMD2: could not load "${file}": this platform cannot read files`);
+      return e;
+    }
+    engine.track(this.read(url).then((md2) => {
+      if (e.alive) this.give(e, md2);
+    }, (err) => engine.warn(`LoadMD2: could not load "${file}": ${err.message}`)));
+    return e;
+  }
+  // CopyEntity: every MD2 in the copied tree gets its own pose, standing in
+  // frame 0 with nothing playing (a Blitz3D copy starts afresh), and shares
+  // the file's frames.
+  copy(src, dst) {
+    if (src.md2Waiting || src.md2) {
+      dst.md2Waiting = [];
+      this.whenLoaded(src, () => {
+        if (dst.alive) this.give(dst, src.md2.md2);
+      });
+    }
+    for (let i = 0; i < src.children.length && i < dst.children.length; i++) this.copy(src.children[i], dst.children[i]);
+  }
+  step() {
+    for (const e of this.playing) {
+      if (!e.alive) this.playing.delete(e);
+      else e.md2.step();
+    }
+  }
+};
+function createMd2Commands(engine) {
+  const { entity, parentOf } = handleHelpers(engine.world);
+  const models = engine.md2Models;
+  const md2Of = (handle) => {
+    const e = entity(handle);
+    if (!e.md2 && !e.md2Waiting) throw runtimeError(`Entity ${handle} is not an MD2 model`);
+    return e;
+  };
+  return {
+    loadmd2(file, parent) {
+      engine.autoGraphics();
+      const e = models.load(file, parentOf(parent));
+      return e ? e.id : 0;
+    },
+    animatemd2(handle, mode, speed, first, last, transition) {
+      if (mode < 0 || mode > 3) throw runtimeError(`AnimateMD2 mode must be ANIM_STOP, ANIM_LOOP, ANIM_PINGPONG or ANIM_ONCE (0 to 3), not ${mode}`);
+      const e = md2Of(handle);
+      models.whenLoaded(e, () => e.md2.start(first, last, mode, speed, transition));
+    },
+    md2animtime: (handle) => {
+      const e = md2Of(handle);
+      return e.md2 ? e.md2.time : 0;
+    },
+    md2animlength: (handle) => {
+      const e = md2Of(handle);
+      return e.md2 ? e.md2.frameCount : 0;
+    },
+    md2animating: (handle) => {
+      const e = md2Of(handle);
+      return e.md2 && e.md2.animating ? 1 : 0;
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -8914,6 +9766,7 @@ var ENGINE_COMMANDS = [
   ...MODEL_COMMANDS,
   ...MESH_COMMANDS,
   ...TERRAIN_COMMANDS,
+  ...MD2_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
@@ -9021,6 +9874,7 @@ function createEngineCommands(engine) {
     ...createAudioCommands(engine),
     ...createMeshCommands(engine),
     ...createTerrainCommands(engine),
+    ...createMd2Commands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -9394,6 +10248,7 @@ function createEngineCommands(engine) {
       const src = entity(handle);
       const copy = world.copyEntity(src, parentOf(parent));
       if (src.model) engine.models.copy(src, copy);
+      engine.md2Models.copy(src, copy);
       return copy.id;
     },
     entityexists: (handle) => world.handles.get(handle) instanceof Entity ? 1 : 0,
@@ -10420,6 +11275,7 @@ var Engine = class {
     this.collisions = new Collisions(this.world);
     this.physics = new Physics(this.world, options.loadPhysics || null, (text) => this.warn(text));
     this.models = new Models(this);
+    this.md2Models = new Md2Models(this);
     this.steps = 0;
     this.audio = new Audio(this, options.audio || new NullAudio());
     this.trails = [];
@@ -10529,6 +11385,10 @@ var Engine = class {
         jobs.push(this.models.preload(file, this.resolve(file)));
         continue;
       }
+      if (command === "loadmd2") {
+        jobs.push(this.md2Models.preload(this.resolve(file)));
+        continue;
+      }
       if (command !== "loadterrain" || !this.loadFile) continue;
       const url = resolveUrl(this.baseUrl, file);
       if (this.heightmaps.has(url)) continue;
@@ -10565,6 +11425,7 @@ var Engine = class {
   // placed in the world follow where everything is now.
   endStep() {
     this.updateTerrains();
+    this.md2Models.step();
     this.models.step(STEP_MS / 1e3);
     this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
@@ -38390,7 +39251,10 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
   }
   geometry(mesh) {
     const known = this.geometries.get(mesh.id);
-    if (known && known.version === mesh.version) return known.geometry;
+    if (known && known.version === mesh.version) {
+      if (known.pose !== mesh.pose) this.pose(known, mesh);
+      return known.geometry;
+    }
     if (known) known.geometry.dispose();
     const positions = Float32Array.from(mesh.positions);
     const normals = Float32Array.from(mesh.normals);
@@ -38411,9 +39275,31 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
     if (mesh.colors) g.setAttribute("color", new BufferAttribute(Float32Array.from(mesh.colors), 4));
     g.setIndex(new BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
-    g.computeBoundingSphere();
-    this.geometries.set(mesh.id, { geometry: g, version: mesh.version });
+    if (mesh.pose === void 0) g.computeBoundingSphere();
+    else {
+      const b = mesh.bounds;
+      const c = new Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, -(b.min.z + b.max.z) / 2);
+      g.boundingSphere = new Sphere(c, Math.hypot(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2);
+    }
+    this.geometries.set(mesh.id, { geometry: g, version: mesh.version, pose: mesh.pose });
     return g;
+  }
+  // New positions and normals into the same buffers: nothing else of the
+  // mesh changed.
+  pose(known, mesh) {
+    const position = known.geometry.getAttribute("position");
+    const normal = known.geometry.getAttribute("normal");
+    const p = position.array;
+    const n = normal.array;
+    p.set(mesh.positions);
+    n.set(mesh.normals);
+    for (let i = 2; i < p.length; i += 3) {
+      p[i] = -p[i];
+      n[i] = -n[i];
+    }
+    position.needsUpdate = true;
+    normal.needsUpdate = true;
+    known.pose = mesh.pose;
   }
   material(m) {
     const tex = m.texture && m.texture.loaded ? this.texture(m.texture) : null;

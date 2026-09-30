@@ -248,6 +248,18 @@
       ]
     },
     {
+      "id": "md2",
+      "title": "MD2 flags",
+      "category": "effects",
+      "file": "../examples/md2.pb",
+      "description": "A hundred flags, each an MD2 model playing its own animation (LoadMD2, AnimateMD2): loop, ping-pong, once, stop, change the speed, and blend into a new animation.",
+      "controls": "1 loop, 2 ping-pong, 3 once, 0 stop, Up/Down speed, T blend, right drag look",
+      "assets": [
+        "assets/flag.md2",
+        "assets/flag.png"
+      ]
+    },
+    {
       "id": "trees",
       "title": "Trees",
       "category": "effects",
