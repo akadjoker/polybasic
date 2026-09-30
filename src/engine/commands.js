@@ -17,6 +17,8 @@ import {
 import { KEYS } from './input/input.js';
 import { createSpriteQuad, newSprite, SPRITE_FREE, SPRITE_UPRIGHT2 } from './scene/sprite.js';
 import { Trail, MAX_BLADE } from './scene/trail.js';
+import { buildTree, TREE_KINDS, TREE_OAK, TREE_WILLOW, TREE_SHRUB, TREE_ASH, TREE_POPLAR, TREE_SEQUOIA, TREE_BEECH } from './scene/tree.js';
+import { barkPixels, leafPixels } from './scene/tree-textures.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
@@ -53,6 +55,9 @@ export const ENGINE_COMMANDS = [
   'CreateCone%(segments = 16, solid = 1, parent = 0)',
   'CreatePlane%(divisions = 1, parent = 0)',
   'CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)',
+
+  // Trees
+  'CreateTree%(kind = 1, seed = 0, parent = 0)',
 
   // Ribbon trails
   'CreateTrail%(first, second)',
@@ -163,6 +168,13 @@ export const ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   FX_NOSHADOWCAST: 0x20000,
   FX_NOSHADOWRECV: 0x40000,
+  TREE_OAK,
+  TREE_WILLOW,
+  TREE_SHRUB,
+  TREE_ASH,
+  TREE_POPLAR,
+  TREE_SEQUOIA,
+  TREE_BEECH,
   TEX_COLOR,
   TEX_ALPHA,
   TEX_MASKED,
@@ -227,6 +239,22 @@ export function createEngineCommands(engine)
     const e = entity(handle);
     if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
     return e.sprite;
+  };
+  // The drawn bark and leaves trees wear, made once per engine (again if a
+  // program frees one).
+  const treeTextures = new Map();
+  const treeTexture = (key, width, height, pixels, flags) =>
+  {
+    let t = treeTextures.get(key);
+    if (!t || !world.handles.has(t.handle))
+    {
+      t = world.createTexture(width, height);
+      t.pixels.set(pixels());
+      t.nearest = false;
+      t.setFlags(flags);
+      treeTextures.set(key, t);
+    }
+    return t;
   };
   const trail = (handle) =>
   {
@@ -322,6 +350,21 @@ export function createEngineCommands(engine)
       shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) =>
       shape(engine.sharedMesh('plane' + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createtree(kind, seed, parent)
+    {
+      if (!TREE_KINDS[kind]) throw runtimeError(`CreateTree needs one of the TREE_ kinds (${TREE_OAK} to ${TREE_BEECH}), not ${kind}`);
+      engine.autoGraphics();
+      const { bark, twigs, leaves } = buildTree(kind, seed);
+      const e = world.createMesh(bark, parentOf(parent));
+      e.name = 'tree';
+      e.material.texture = treeTexture('bark', 64, 128, () => barkPixels(), TEX_COLOR);
+      e.material.changed();
+      const t = world.createMesh(twigs, e);
+      t.name = 'twigs';
+      t.material.texture = treeTexture(`leaves${leaves}`, 128, 128, () => leafPixels(leaves), TEX_MASKED);
+      t.material.changed();
+      return e.id;
+    },
     createtrail(first, second)
     {
       const blade = [entity(first), entity(second)];

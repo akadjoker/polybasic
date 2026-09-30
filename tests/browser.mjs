@@ -1549,6 +1549,78 @@ End Function
     console.log(`      ribbon covers ${(swinging.lit * 100).toFixed(1)}% of the screen while swinging, ${(faded.lit * 100).toFixed(2)}% after`);
   });
 
+  await check('trees: bark and cut-out leaves drawn, with their shadows on the ground', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const scene = (shadows) => `Graphics3D 800, 600
+cam = CreateCamera()
+CameraClsColor cam, 150, 190, 230
+PositionEntity cam, 0, 4, -14
+RotateEntity cam, 8, 0, 0
+ground = CreatePlane(4)
+ScaleEntity ground, 40, 1, 40
+EntityColor ground, 110, 150, 80
+sun = CreateLight()
+RotateEntity sun, 50, -30, 0
+LightShadows sun, ${shadows}, 40
+AmbientLight 110, 110, 120
+oak = CreateTree(TREE_OAK)
+PositionEntity oak, -6, 0, 2
+willow = CreateTree(TREE_WILLOW)
+PositionEntity willow, 0, 0, 2
+beech = CreateTree(TREE_BEECH)
+PositionEntity beech, 6, 0, 2
+Function Update()
+  If FrameCount() = 1 Then Print "grown"
+End Function
+`;
+    const look = async (shadows) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(shadows));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('grown'), null, { timeout: 20000 });
+      await page.waitForTimeout(400);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { leaves: 0, bark: 0, shade: 0 };
+        for (let y = 0; y < copy.height; y++)
+        {
+          for (let x = 0; x < copy.width; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+            // Leaves above the horizon (against the sky), bark brown,
+            // shaded ground below it much darker than the lit green.
+            if (y < copy.height * 0.44 && g > r + 15 && g > b + 15) n.leaves++;
+            if (r > g && g > b && r - b > 15 && r < 140) n.bark++;
+            if (y > copy.height * 0.46 && g > r && g < 120 && r < 90) n.shade++;
+          }
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+    };
+    const lit = await look('True');
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'trees.png') });
+    const flat = await look('False');
+    const text = JSON.stringify({ lit, flat }, (k, v) => (typeof v === 'number' ? +v.toFixed(4) : v));
+    assert(lit.leaves > 0.02 && lit.bark > 0.003, `no trees: ${text}`);
+    assert(lit.shade > flat.shade + 0.005, `no tree shadows: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      leaves ${(lit.leaves * 100).toFixed(1)}%, bark ${(lit.bark * 100).toFixed(2)}%, shade ${(lit.shade * 100).toFixed(2)}% (without shadows ${(flat.shade * 100).toFixed(2)}%)`);
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

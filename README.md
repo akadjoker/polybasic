@@ -168,7 +168,8 @@ tests/                   golden programs, unit tests, browser tests, benchmark
 
 PolyBasic is released under the MIT licence (see [LICENSE](LICENSE)).
 Parts of the compiler are derived from the Blitz3D compiler, (c) Blitz
-Research Ltd, zlib licence. The browser build includes three.js (MIT), the
+Research Ltd, zlib licence. The browser build includes three.js (MIT) and a
+port of proctree.js (Paul Brunt, BSD 3-clause) for `CreateTree`, the
 physics build Rapier (Apache-2.0) and the playground CodeMirror (MIT). The
 models in `examples/assets/kenney` are by Kenney, CC0. See
 [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).

@@ -3184,7 +3184,7 @@ var Mat4 = class _Mat4 {
     return this;
   }
   // Translation * Rotation * Scale, the usual order for an entity.
-  compose(pos, quat, scale) {
+  compose(pos, quat, scale2) {
     const e = this.e;
     const { x, y, z, w } = quat;
     const x2 = x + x;
@@ -3199,9 +3199,9 @@ var Mat4 = class _Mat4 {
     const wx = w * x2;
     const wy = w * y2;
     const wz = w * z2;
-    const sx = scale.x;
-    const sy = scale.y;
-    const sz = scale.z;
+    const sx = scale2.x;
+    const sy = scale2.y;
+    const sz = scale2.z;
     e[0] = (1 - (yy + zz)) * sx;
     e[1] = (xy + wz) * sx;
     e[2] = (xz - wy) * sx;
@@ -3295,14 +3295,14 @@ var Mat4 = class _Mat4 {
     return true;
   }
   // Splits a T * R * S matrix back into its parts (no shear assumed).
-  decompose(pos, quat, scale) {
+  decompose(pos, quat, scale2) {
     const e = this.e;
     let sx = Math.hypot(e[0], e[1], e[2]);
     const sy = Math.hypot(e[4], e[5], e[6]);
     const sz = Math.hypot(e[8], e[9], e[10]);
     if (this.determinant() < 0) sx = -sx;
     pos.set(e[12], e[13], e[14]);
-    scale.set(sx, sy, sz);
+    scale2.set(sx, sy, sz);
     const ix = sx ? 1 / sx : 0;
     const iy = sy ? 1 / sy : 0;
     const iz = sz ? 1 / sz : 0;
@@ -4350,10 +4350,10 @@ var CanvasOverlay = class {
     this.scale = 1;
   }
   // `scale` = canvas pixels per logical pixel.
-  resize(width, height, scale) {
-    this.scale = scale;
-    this.canvas.width = Math.max(1, Math.round(width * scale));
-    this.canvas.height = Math.max(1, Math.round(height * scale));
+  resize(width, height, scale2) {
+    this.scale = scale2;
+    this.canvas.width = Math.max(1, Math.round(width * scale2));
+    this.canvas.height = Math.max(1, Math.round(height * scale2));
   }
   begin(width, height) {
     const ctx = this.ctx;
@@ -4904,6 +4904,500 @@ var Trail = class {
     m.version++;
   }
 };
+
+// src/engine/scene/tree.js
+/*!
+ * proctree.js
+ * Copyright (c) 2012, Paul Brunt
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *     * Neither the name of tree.js nor the
+ *       names of its contributors may be used to endorse or promote products
+ *       derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL PAUL BRUNT BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+var cross2 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+var length = (v) => Math.sqrt(dot(v, v));
+var scale = (v, s) => [v[0] * s, v[1] * s, v[2] * s];
+var sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+var add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+var normalize2 = (v) => {
+  const l = length(v);
+  return l > 1e-20 ? scale(v, 1 / l) : [0, 0, 0];
+};
+var axisAngle = (vec, axis, angle) => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return add(add(scale(vec, c), scale(cross2(axis, vec), s)), scale(axis, dot(axis, vec) * (1 - c)));
+};
+var scaleInDirection = (vector, direction, s) => {
+  const m = dot(vector, direction);
+  return add(vector, scale(direction, m * s - m));
+};
+var TREE_OAK = 1;
+var TREE_WILLOW = 2;
+var TREE_SHRUB = 3;
+var TREE_ASH = 4;
+var TREE_POPLAR = 5;
+var TREE_SEQUOIA = 6;
+var TREE_BEECH = 7;
+var BASE = {
+  clumpMax: 0.45,
+  clumpMin: 0.4,
+  lengthFalloffFactor: 0.85,
+  lengthFalloffPower: 1,
+  branchFactor: 2.45,
+  radiusFalloffRate: 0.73,
+  climbRate: 0.371,
+  trunkKink: 0.093,
+  maxRadius: 0.25,
+  treeSteps: 2,
+  taperRate: 0.95,
+  twistRate: 3.02,
+  segments: 6,
+  levels: 5,
+  sweepAmount: 0.01,
+  initialBranchLength: 0.85,
+  trunkLength: 2.5,
+  dropAmount: -0.1,
+  growAmount: 0.235,
+  vMultiplier: 0.36,
+  twigScale: 2,
+  seed: 10
+};
+var TREE_KINDS = {
+  [TREE_OAK]: { seed: 696, treeSteps: 9, initialBranchLength: 0.79, maxRadius: 0.22, trunkLength: 3.21, twigScale: 0.55, leaves: 0 },
+  [TREE_WILLOW]: { seed: 264, levels: 4, treeSteps: 9, initialBranchLength: 0.59, lengthFalloffFactor: 0.57, dropAmount: 0.4, maxRadius: 0.05, radiusFalloffRate: 0.7, twistRate: 2.62, trunkLength: 1.79, twigScale: 0.4, leaves: 1 },
+  [TREE_SHRUB]: { seed: 264, levels: 3, treeSteps: 0, initialBranchLength: 0.19, dropAmount: 0.2, maxRadius: 0.04, radiusFalloffRate: 0.58, twistRate: 5, trunkLength: 0.38, twigScale: 0.65, leaves: 0 },
+  [TREE_ASH]: { levels: 7, initialBranchLength: 0.59, lengthFalloffFactor: 0.95, dropAmount: -0.3, growAmount: 0.03, maxRadius: 0.18, radiusFalloffRate: 0.61, climbRate: 0.2, trunkKink: -0.37, twistRate: 1.41, trunkLength: 7.05, twigScale: 0.65, leaves: 1 },
+  [TREE_POPLAR]: { treeSteps: 30, dropAmount: 0, maxRadius: 0.2, climbRate: 0.3, trunkKink: 0.01, twistRate: -2.47, trunkLength: 3.61, twigScale: 1, leaves: 2 },
+  [TREE_SEQUOIA]: { seed: 264, levels: 4, treeSteps: 12, initialBranchLength: 2.19, dropAmount: 0, growAmount: -0.38, maxRadius: 0.6, radiusFalloffRate: 0.57, climbRate: 2.02, trunkKink: 0, trunkLength: 11.52, twigScale: 2, leaves: 0 },
+  [TREE_BEECH]: { seed: 325, levels: 7, treeSteps: 4, initialBranchLength: 0.89, dropAmount: 0.151, growAmount: 0.033, maxRadius: 0.21, climbRate: 0.37, twistRate: 2.21, trunkLength: 4.83, twigScale: 0.7, leaves: 0 }
+};
+function treeSettings(kind, seed = 0) {
+  const { leaves, ...own } = TREE_KINDS[kind];
+  const p = { ...BASE, ...own };
+  if (seed) p.seed = seed;
+  p.segments = Math.max(4, p.segments & ~1);
+  p.levels = Math.max(1, p.levels);
+  return { settings: p, leaves };
+}
+var Branch = class _Branch {
+  constructor(head, parent = null) {
+    this.head = head;
+    this.parent = parent;
+    this.child0 = null;
+    this.child1 = null;
+    this.length = 1;
+    this.type = null;
+  }
+  mirror(vec, norm, p) {
+    const v = cross2(norm, cross2(vec, norm));
+    const s = p.branchFactor * dot(v, vec);
+    return [vec[0] - v[0] * s, vec[1] - v[1] * s, vec[2] - v[2] * s];
+  }
+  split(level, steps, p, random, l1 = 1, l2 = 1) {
+    const rLevel = p.levels - level;
+    let po;
+    if (this.parent) po = this.parent.head;
+    else {
+      po = [0, 0, 0];
+      this.type = "trunk";
+    }
+    const so = this.head;
+    const dir = normalize2(sub(so, po));
+    const normal = cross2(dir, [dir[2], dir[0], dir[1]]);
+    const tangent = cross2(dir, normal);
+    const r = random(rLevel * 10 + l1 * 5 + l2 + p.seed);
+    let adj = add(scale(normal, r), scale(tangent, 1 - r));
+    if (r > 0.5) adj = scale(adj, -1);
+    const clump = (p.clumpMax - p.clumpMin) * r + p.clumpMin;
+    let newdir = normalize2(add(scale(adj, 1 - clump), scale(dir, clump)));
+    let newdir2 = this.mirror(newdir, dir, p);
+    if (r > 0.5) {
+      const t = newdir;
+      newdir = newdir2;
+      newdir2 = t;
+    }
+    if (steps > 0) {
+      const angle = steps / p.treeSteps * 2 * Math.PI * p.twistRate;
+      newdir2 = normalize2([Math.sin(angle), r, Math.cos(angle)]);
+    }
+    const grow = level * level / (p.levels * p.levels) * p.growAmount;
+    const drop = rLevel * p.dropAmount;
+    const sweep = rLevel * p.sweepAmount;
+    newdir = normalize2(add(newdir, [sweep, drop + grow, 0]));
+    newdir2 = normalize2(add(newdir2, [sweep, drop + grow, 0]));
+    this.child0 = new _Branch(add(so, scale(newdir, this.length)), this);
+    this.child1 = new _Branch(add(so, scale(newdir2, this.length)), this);
+    this.child0.length = Math.pow(this.length, p.lengthFalloffPower) * p.lengthFalloffFactor;
+    this.child1.length = Math.pow(this.length, p.lengthFalloffPower) * p.lengthFalloffFactor;
+    if (level > 0) {
+      if (steps > 0) {
+        this.child0.head = add(this.head, [(r - 0.5) * 2 * p.trunkKink, p.climbRate, (r - 0.5) * 2 * p.trunkKink]);
+        this.child0.type = "trunk";
+        this.child0.length = this.length * p.taperRate;
+        this.child0.split(level, steps - 1, p, random, l1 + 1, l2);
+      } else this.child0.split(level - 1, 0, p, random, l1 + 1, l2);
+      this.child1.split(level - 1, 0, p, random, l1, l2 + 1);
+    }
+  }
+};
+var Builder2 = class {
+  constructor(p) {
+    this.p = p;
+    this.verts = [];
+    this.faces = [];
+    this.normals = [];
+    this.uv = [];
+    this.twigVerts = [];
+    this.twigNormals = [];
+    this.twigFaces = [];
+    this.twigUvs = [];
+    this.root = new Branch([0, p.trunkLength, 0]);
+    this.root.length = p.initialBranchLength;
+    const random = (a) => Math.abs(Math.cos(a + a * a));
+    this.root.split(p.levels, p.treeSteps, p, random);
+    this.createForks(this.root, p.maxRadius);
+    this.createTwigs(this.root);
+    this.doFaces(this.root);
+    this.calcNormals();
+  }
+  calcNormals() {
+    const all = this.verts.map(() => []);
+    for (const f of this.faces) {
+      const n = normalize2(cross2(sub(this.verts[f[1]], this.verts[f[2]]), sub(this.verts[f[1]], this.verts[f[0]])));
+      all[f[0]].push(n);
+      all[f[1]].push(n);
+      all[f[2]].push(n);
+    }
+    this.normals = all.map((list) => {
+      let total = [0, 0, 0];
+      for (const n of list) total = add(total, n);
+      const l = length(total);
+      return l > 1e-8 ? scale(total, 1 / l) : [0, 1, 0];
+    });
+  }
+  doFaces(branch) {
+    const p = this.p;
+    const segments = p.segments;
+    const { faces, verts, uv } = this;
+    if (!branch.parent) {
+      for (let i = 0; i < verts.length; i++) uv[i] = [0, 0];
+      const tangent = normalize2(cross2(sub(branch.child0.head, branch.head), sub(branch.child1.head, branch.head)));
+      const normal = normalize2(branch.head);
+      let angle = Math.acos(Math.max(-1, Math.min(1, dot(tangent, [-1, 0, 0]))));
+      if (dot(cross2([-1, 0, 0], tangent), normal) > 0) angle = 2 * Math.PI - angle;
+      const segOffset = Math.round(angle / Math.PI / 2 * segments);
+      for (let i = 0; i < segments; i++) {
+        const v1 = branch.ring0[i];
+        const v2 = branch.root[(i + segOffset + 1) % segments];
+        const v3 = branch.root[(i + segOffset) % segments];
+        const v4 = branch.ring0[(i + 1) % segments];
+        faces.push([v1, v4, v3]);
+        faces.push([v4, v2, v3]);
+        uv[(i + segOffset) % segments] = [Math.abs(i / segments - 0.5) * 2, 0];
+        const len = length(sub(verts[branch.ring0[i]], verts[branch.root[(i + segOffset) % segments]])) * p.vMultiplier;
+        uv[branch.ring0[i]] = [Math.abs(i / segments - 0.5) * 2, len];
+        uv[branch.ring2[i]] = [Math.abs(i / segments - 0.5) * 2, len];
+      }
+    }
+    if (branch.child0.ring0) {
+      let segOffset0;
+      let segOffset1;
+      let match0;
+      let match1;
+      let v1 = normalize2(sub(verts[branch.ring1[0]], branch.head));
+      let v2 = normalize2(sub(verts[branch.ring2[0]], branch.head));
+      v1 = scaleInDirection(v1, normalize2(sub(branch.child0.head, branch.head)), 0);
+      v2 = scaleInDirection(v2, normalize2(sub(branch.child1.head, branch.head)), 0);
+      for (let i = 0; i < segments; i++) {
+        let d = normalize2(sub(verts[branch.child0.ring0[i]], branch.child0.head));
+        let l = dot(d, v1);
+        if (segOffset0 === void 0 || l > match0) {
+          match0 = l;
+          segOffset0 = segments - i;
+        }
+        d = normalize2(sub(verts[branch.child1.ring0[i]], branch.child1.head));
+        l = dot(d, v2);
+        if (segOffset1 === void 0 || l > match1) {
+          match1 = l;
+          segOffset1 = segments - i;
+        }
+      }
+      const uvScale = p.maxRadius / branch.radius;
+      for (let i = 0; i < segments; i++) {
+        let a = branch.child0.ring0[i];
+        let b = branch.ring1[(i + segOffset0 + 1) % segments];
+        let c = branch.ring1[(i + segOffset0) % segments];
+        let d = branch.child0.ring0[(i + 1) % segments];
+        faces.push([a, d, c]);
+        faces.push([d, b, c]);
+        a = branch.child1.ring0[i];
+        b = branch.ring2[(i + segOffset1 + 1) % segments];
+        c = branch.ring2[(i + segOffset1) % segments];
+        d = branch.child1.ring0[(i + 1) % segments];
+        faces.push([a, b, c]);
+        faces.push([a, d, b]);
+        const len1 = length(sub(verts[branch.child0.ring0[i]], verts[branch.ring1[(i + segOffset0) % segments]])) * uvScale;
+        const uv1 = uv[branch.ring1[(i + segOffset0 - 1) % segments]];
+        uv[branch.child0.ring0[i]] = [uv1[0], uv1[1] + len1 * p.vMultiplier];
+        uv[branch.child0.ring2[i]] = [uv1[0], uv1[1] + len1 * p.vMultiplier];
+        const len2 = length(sub(verts[branch.child1.ring0[i]], verts[branch.ring2[(i + segOffset1) % segments]])) * uvScale;
+        const uv2 = uv[branch.ring2[(i + segOffset1 - 1) % segments]];
+        uv[branch.child1.ring0[i]] = [uv2[0], uv2[1] + len2 * p.vMultiplier];
+        uv[branch.child1.ring2[i]] = [uv2[0], uv2[1] + len2 * p.vMultiplier];
+      }
+      this.doFaces(branch.child0);
+      this.doFaces(branch.child1);
+    } else {
+      for (let i = 0; i < segments; i++) {
+        faces.push([branch.child0.end, branch.ring1[(i + 1) % segments], branch.ring1[i]]);
+        faces.push([branch.child1.end, branch.ring2[(i + 1) % segments], branch.ring2[i]]);
+        let len = length(sub(verts[branch.child0.end], verts[branch.ring1[i]]));
+        uv[branch.child0.end] = [Math.abs(i / segments - 1 - 0.5) * 2, len * p.vMultiplier];
+        len = length(sub(verts[branch.child1.end], verts[branch.ring2[i]]));
+        uv[branch.child1.end] = [Math.abs(i / segments - 0.5) * 2, len * p.vMultiplier];
+      }
+    }
+  }
+  createTwigs(branch) {
+    const p = this.p;
+    if (branch.child0) {
+      this.createTwigs(branch.child0);
+      this.createTwigs(branch.child1);
+      return;
+    }
+    const tangent = normalize2(cross2(sub(branch.parent.child0.head, branch.parent.head), sub(branch.parent.child1.head, branch.parent.head)));
+    const binormal = normalize2(sub(branch.head, branch.parent.head));
+    const s = p.twigScale;
+    const corner = (t, b) => add(add(branch.head, scale(tangent, t)), scale(binormal, b));
+    const top = s * 2 - branch.length;
+    const bottom = -branch.length;
+    const v = this.twigVerts;
+    const base = v.length;
+    v.push(corner(s, top), corner(-s, top), corner(-s, bottom), corner(s, bottom));
+    v.push(corner(s, top), corner(-s, top), corner(-s, bottom), corner(s, bottom));
+    const [v1, v2, v3, v4] = [base, base + 1, base + 2, base + 3];
+    const [v8, v7, v6, v5] = [base + 4, base + 5, base + 6, base + 7];
+    this.twigFaces.push([v1, v2, v3], [v4, v1, v3], [v6, v7, v8], [v6, v8, v5]);
+    const n1 = normalize2(cross2(sub(v[v1], v[v3]), sub(v[v2], v[v3])));
+    const n2 = normalize2(cross2(sub(v[v7], v[v6]), sub(v[v8], v[v6])));
+    this.twigNormals.push(n1, n1, n1, n1, n2, n2, n2, n2);
+    this.twigUvs.push([0, 1], [1, 1], [1, 0], [0, 0], [0, 1], [1, 1], [1, 0], [0, 0]);
+  }
+  createForks(branch, radius) {
+    const p = this.p;
+    branch.radius = radius;
+    if (radius > branch.length) radius = branch.length;
+    const verts = this.verts;
+    const segments = p.segments;
+    const segmentAngle = Math.PI * 2 / segments;
+    if (!branch.parent) {
+      branch.root = [];
+      for (let i = 0; i < segments; i++) {
+        const vec = axisAngle([-1, 0, 0], [0, 1, 0], -segmentAngle * i);
+        branch.root.push(verts.length);
+        verts.push(scale(vec, radius / p.radiusFalloffRate));
+      }
+    }
+    if (!branch.child0) {
+      branch.end = verts.length;
+      verts.push(branch.head);
+      return;
+    }
+    const axis = branch.parent ? normalize2(sub(branch.head, branch.parent.head)) : normalize2(branch.head);
+    const axis1 = normalize2(sub(branch.head, branch.child0.head));
+    const axis2 = normalize2(sub(branch.head, branch.child1.head));
+    const tangent = normalize2(cross2(axis1, axis2));
+    branch.tangent = tangent;
+    const axis3 = normalize2(cross2(tangent, normalize2(add(scale(axis1, -1), scale(axis2, -1)))));
+    const dir = [axis2[0], 0, axis2[2]];
+    const centre = add(branch.head, scale(dir, -p.maxRadius / 2));
+    const ring0 = branch.ring0 = [];
+    const ring1 = branch.ring1 = [];
+    const ring2 = branch.ring2 = [];
+    let s = p.radiusFalloffRate;
+    if (branch.child0.type === "trunk" || branch.type === "trunk") s = 1 / p.taperRate;
+    const linch0 = verts.length;
+    ring0.push(linch0);
+    ring2.push(linch0);
+    verts.push(add(centre, scale(tangent, radius * s)));
+    let start = verts.length - 1;
+    const d1 = axisAngle(tangent, axis2, 1.57);
+    const d2 = normalize2(cross2(tangent, axis));
+    const k = 1 / dot(d1, d2);
+    for (let i = 1; i < segments / 2; i++) {
+      let vec = axisAngle(tangent, axis2, segmentAngle * i);
+      ring0.push(start + i);
+      ring2.push(start + i);
+      vec = scaleInDirection(vec, d2, k);
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    const linch1 = verts.length;
+    ring0.push(linch1);
+    ring1.push(linch1);
+    verts.push(add(centre, scale(tangent, -radius * s)));
+    for (let i = segments / 2 + 1; i < segments; i++) {
+      const vec = axisAngle(tangent, axis1, segmentAngle * i);
+      ring0.push(verts.length);
+      ring1.push(verts.length);
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    ring1.push(linch0);
+    ring2.push(linch1);
+    start = verts.length - 1;
+    for (let i = 1; i < segments / 2; i++) {
+      const vec = axisAngle(tangent, axis3, segmentAngle * i);
+      ring1.push(start + i);
+      ring2.push(start + (segments / 2 - i));
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    const radius0 = branch.child0.type === "trunk" ? radius * p.taperRate : radius * p.radiusFalloffRate;
+    const radius1 = radius * p.radiusFalloffRate;
+    this.createForks(branch.child0, radius0);
+    this.createForks(branch.child1, radius1);
+  }
+};
+function toMesh(verts, normals, uvs, faces) {
+  const positions = [];
+  const n = [];
+  const t = [];
+  for (let i = 0; i < verts.length; i++) {
+    positions.push(-verts[i][0], verts[i][1], verts[i][2]);
+    n.push(-normals[i][0], normals[i][1], normals[i][2]);
+    const uv = uvs[i] || [0, 0];
+    t.push(uv[0], 1 - uv[1]);
+  }
+  const indices = [];
+  for (const f of faces) indices.push(f[0], f[2], f[1]);
+  return new MeshData(positions, n, t, indices);
+}
+function buildTree(kind, seed = 0) {
+  const { settings, leaves } = treeSettings(kind, seed);
+  const b = new Builder2(settings);
+  return {
+    bark: toMesh(b.verts, b.normals, b.uv, b.faces),
+    twigs: toMesh(b.twigVerts, b.twigNormals, b.twigUvs, b.twigFaces),
+    leaves
+  };
+}
+
+// src/engine/scene/tree-textures.js
+function hash(x, y, seed) {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 2147483647);
+  h = Math.imul(h ^ h >>> 13, 1274126177);
+  return ((h ^ h >>> 16) >>> 0) / 4294967296;
+}
+function noise(x, y, period, seed) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const fx = x - xi;
+  const fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const w = (i) => (i % period + period) % period;
+  const a = hash(w(xi), w(yi), seed);
+  const b = hash(w(xi + 1), w(yi), seed);
+  const c = hash(w(xi), w(yi + 1), seed);
+  const d = hash(w(xi + 1), w(yi + 1), seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function barkPixels(width = 64, height = 128) {
+  const px = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      let n = 0;
+      let amp = 0.5;
+      for (let o = 0; o < 4; o++) {
+        const f = 1 << o;
+        n += amp * noise(u * 8 * f, v * 2 * f, 8 * f, 11 + o);
+        amp /= 2;
+      }
+      const crack = noise(u * 12, v * 3, 12, 5);
+      let shade = 0.55 + 0.6 * n;
+      if (crack < 0.28) shade *= 0.45 + crack;
+      const i = (y * width + x) * 4;
+      px[i] = 92 * shade;
+      px[i + 1] = 68 * shade;
+      px[i + 2] = 48 * shade;
+      px[i + 3] = 255;
+    }
+  }
+  return px;
+}
+var LEAF_STYLES = [
+  { count: 9, length: 0.26, width: 0.11, spread: 0.55, colour: [70, 128, 48] },
+  { count: 14, length: 0.3, width: 0.045, spread: 0.3, colour: [96, 140, 60] },
+  { count: 18, length: 0.1, width: 0.08, spread: 0.8, colour: [58, 118, 52] }
+];
+function leafPixels(style = 0, size = 128) {
+  const s = LEAF_STYLES[style] || LEAF_STYLES[0];
+  const px = new Uint8ClampedArray(size * size * 4);
+  const put = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const i = (y * size + x) * 4;
+    px[i] = r;
+    px[i + 1] = g;
+    px[i + 2] = b;
+    px[i + 3] = 255;
+  };
+  for (let k = 0; k < s.count; k++) {
+    const along = 0.12 + 0.8 * (k + 0.5) / s.count;
+    const side = k % 2 === 0 ? 1 : -1;
+    const lean = side * s.spread * (0.6 + 0.4 * hash(k, 1, style)) * (1 - along * 0.5);
+    const cx = 0.5 + Math.sin(lean) * s.length * 0.55;
+    const cy = 1 - along - Math.cos(lean) * s.length * 0.35;
+    const len = s.length * (0.75 + 0.5 * hash(k, 2, style));
+    const wid = s.width * (0.8 + 0.4 * hash(k, 3, style));
+    const tint = 0.8 + 0.35 * hash(k, 4, style);
+    const angle = lean;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    const r = Math.ceil(Math.max(len, wid) * size);
+    const x0 = Math.round(cx * size);
+    const y0 = Math.round(cy * size);
+    for (let y = y0 - r; y <= y0 + r; y++) {
+      for (let x = x0 - r; x <= x0 + r; x++) {
+        const dx = x / size - cx;
+        const dy = y / size - cy;
+        const a = (dx * sa - dy * ca) / (len / 2);
+        const b = (dx * ca + dy * sa) / (wid / 2);
+        const edge = Math.pow(1 - Math.min(1, Math.abs(a)), 0.8) * (1 - 0.25 * a);
+        if (Math.abs(b) > edge || Math.abs(a) > 1) continue;
+        const light = tint * (Math.abs(b) < 0.08 ? 1.25 : 1 - 0.3 * Math.abs(b) / Math.max(edge, 1e-3));
+        put(x, y, s.colour[0] * light, s.colour[1] * light, s.colour[2] * light);
+      }
+    }
+  }
+  const stem = [78, 60, 40];
+  for (let y = Math.round(size * 0.1); y < size; y++) {
+    const x = Math.round(size * (0.5 + 0.02 * Math.sin(y / size * 6)));
+    put(x, y, ...stem);
+    put(x + 1, y, ...stem);
+  }
+  return px;
+}
 
 // src/engine/collide/bvh.js
 var LEAF_SIZE = 4;
@@ -6325,13 +6819,13 @@ function bodyPoints(e) {
   const positions = [];
   const triangles = [];
   let meshes = 0;
-  const add = (x, y, z, m) => {
+  const add2 = (x, y, z, m) => {
     const p = new Vec3(x, y, z).applyMat4(m).sub(origin).applyQuat(toBody);
     positions.push(p.x, p.y, p.z);
   };
   if (e.box) {
     const { min: min2, max: max2 } = localBox(e);
-    for (let i = 0; i < 8; i++) add(i & 1 ? max2[0] : min2[0], i & 2 ? max2[1] : min2[1], i & 4 ? max2[2] : min2[2], e.worldMatrix);
+    for (let i = 0; i < 8; i++) add2(i & 1 ? max2[0] : min2[0], i & 2 ? max2[1] : min2[1], i & 4 ? max2[2] : min2[2], e.worldMatrix);
   } else {
     const visit = (n) => {
       if (n.mesh && n.mesh.positions.length) {
@@ -6339,7 +6833,7 @@ function bodyPoints(e) {
         const base = positions.length / 3;
         const m = n.worldMatrix;
         const p = n.mesh.positions;
-        for (let i = 0; i < p.length; i += 3) add(p[i], p[i + 1], p[i + 2], m);
+        for (let i = 0; i < p.length; i += 3) add2(p[i], p[i + 1], p[i + 2], m);
         for (const i of n.mesh.indices) triangles.push(base + i);
       }
       for (const c of n.children) visit(c);
@@ -6622,26 +7116,26 @@ function pose(model, animation, t) {
   }
 }
 function advance(state, animation, dt) {
-  const length = animation.duration;
-  if (length <= 0) {
+  const length2 = animation.duration;
+  if (length2 <= 0) {
     state.time = 0;
     return state.mode !== ANIM_ONCE;
   }
   if (state.mode === ANIM_LOOP) {
-    state.time = ((state.time + dt * state.speed) % length + length) % length;
+    state.time = ((state.time + dt * state.speed) % length2 + length2) % length2;
     return true;
   }
   if (state.mode === ANIM_ONCE) {
     state.time += dt * state.speed;
-    if (state.time >= length || state.time <= 0) {
-      state.time = Math.max(0, Math.min(length, state.time));
+    if (state.time >= length2 || state.time <= 0) {
+      state.time = Math.max(0, Math.min(length2, state.time));
       return false;
     }
     return true;
   }
   state.time += dt * state.speed * state.direction;
-  while (state.time > length || state.time < 0) {
-    if (state.time > length) state.time = 2 * length - state.time;
+  while (state.time > length2 || state.time < 0) {
+    if (state.time > length2) state.time = 2 * length2 - state.time;
     else state.time = -state.time;
     state.direction = -state.direction;
   }
@@ -6786,15 +7280,15 @@ function synthesize(recipe) {
     lowpassEnd = lowpass,
     seed = 1
   } = recipe;
-  const length = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
-  const out = new Float32Array(length);
+  const length2 = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
+  const out = new Float32Array(length2);
   const attack = Math.max(1, Math.round(SAMPLE_RATE * attackMs / 1e3));
   const random = makeRandom(seed);
   let phase = 0;
   let noiseValue = random() * 2 - 1;
   let filtered = 0;
-  for (let i = 0; i < length; i++) {
-    const t = i / length;
+  for (let i = 0; i < length2; i++) {
+    const t = i / length2;
     let f = freq + (freqEnd - freq) * t;
     if (arpAt > 0 && t >= arpAt) f *= arpMul;
     if (vibDepth > 0) f *= 1 + vibDepth * Math.sin(2 * Math.PI * vibHz * i / SAMPLE_RATE);
@@ -7730,6 +8224,8 @@ var ENGINE_COMMANDS = [
   "CreateCone%(segments = 16, solid = 1, parent = 0)",
   "CreatePlane%(divisions = 1, parent = 0)",
   "CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)",
+  // Trees
+  "CreateTree%(kind = 1, seed = 0, parent = 0)",
   // Ribbon trails
   "CreateTrail%(first, second)",
   "TrailPoint(trail, entity)",
@@ -7830,6 +8326,13 @@ var ENGINE_CONSTANTS = {
   FX_TWOSIDED: 16,
   FX_NOSHADOWCAST: 131072,
   FX_NOSHADOWRECV: 262144,
+  TREE_OAK,
+  TREE_WILLOW,
+  TREE_SHRUB,
+  TREE_ASH,
+  TREE_POPLAR,
+  TREE_SEQUOIA,
+  TREE_BEECH,
   TEX_COLOR,
   TEX_ALPHA,
   TEX_MASKED,
@@ -7877,6 +8380,18 @@ function createEngineCommands(engine) {
     const e = entity(handle);
     if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
     return e.sprite;
+  };
+  const treeTextures = /* @__PURE__ */ new Map();
+  const treeTexture = (key, width, height, pixels, flags) => {
+    let t = treeTextures.get(key);
+    if (!t || !world.handles.has(t.handle)) {
+      t = world.createTexture(width, height);
+      t.pixels.set(pixels());
+      t.nearest = false;
+      t.setFlags(flags);
+      treeTextures.set(key, t);
+    }
+    return t;
   };
   const trail = (handle) => {
     const e = entity(handle);
@@ -7950,6 +8465,20 @@ function createEngineCommands(engine) {
     createcylinder: (segments, solid, parent) => shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => primitive(createCylinder(clampSegments(segments), solid !== 0), "cylinder")), parent),
     createcone: (segments, solid, parent) => shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) => shape(engine.sharedMesh("plane" + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createtree(kind, seed, parent) {
+      if (!TREE_KINDS[kind]) throw runtimeError(`CreateTree needs one of the TREE_ kinds (${TREE_OAK} to ${TREE_BEECH}), not ${kind}`);
+      engine.autoGraphics();
+      const { bark, twigs, leaves } = buildTree(kind, seed);
+      const e = world.createMesh(bark, parentOf(parent));
+      e.name = "tree";
+      e.material.texture = treeTexture("bark", 64, 128, () => barkPixels(), TEX_COLOR);
+      e.material.changed();
+      const t = world.createMesh(twigs, e);
+      t.name = "twigs";
+      t.material.texture = treeTexture(`leaves${leaves}`, 128, 128, () => leafPixels(leaves), TEX_MASKED);
+      t.material.changed();
+      return e.id;
+    },
     createtrail(first, second) {
       const blade = [entity(first), entity(second)];
       if (blade[0] === blade[1]) throw runtimeError("CreateTrail needs two different entities for the ends of its blade");
@@ -8256,10 +8785,10 @@ function container(bytes) {
   if (bytes.length >= 12 && view.getUint32(0, true) === GLB_MAGIC) {
     const version = view.getUint32(4, true);
     if (version !== 2) throw new Error(`this is a version ${version} .glb, only version 2 is read`);
-    const length = Math.min(view.getUint32(8, true), bytes.length);
+    const length2 = Math.min(view.getUint32(8, true), bytes.length);
     let json = null;
     let bin = null;
-    for (let at = 12; at + 8 <= length; ) {
+    for (let at = 12; at + 8 <= length2; ) {
       const size = view.getUint32(at, true);
       const type = view.getUint32(at + 4, true);
       const body = bytes.subarray(at + 8, at + 8 + size);
@@ -8536,25 +9065,25 @@ var Reader = class {
   node(n, index) {
     const position = new Vec3();
     const rotation = new Quat();
-    const scale = new Vec3(1, 1, 1);
+    const scale2 = new Vec3(1, 1, 1);
     if (n.matrix) {
       const m = new Mat4().fromArray(n.matrix);
       for (const i of [1, 2, 3, 4, 8, 12]) m.e[i] = -m.e[i];
-      m.decompose(position, rotation, scale);
+      m.decompose(position, rotation, scale2);
     } else {
       const t = n.translation || [0, 0, 0];
       const r = n.rotation || [0, 0, 0, 1];
       const s = n.scale || [1, 1, 1];
       position.set(-t[0], t[1], t[2]);
       rotation.set(r[0], -r[1], -r[2], r[3]).normalize();
-      scale.set(s[0], s[1], s[2]);
+      scale2.set(s[0], s[1], s[2]);
     }
     if (n.skin !== void 0) this.warnOnce("skin", "the model is skinned, which PolyBasic does not play yet: it shows in its rest pose");
     return {
       name: n.name || "",
       position,
       rotation,
-      scale,
+      scale: scale2,
       mesh: n.mesh !== void 0 ? n.mesh : -1,
       children: n.children || [],
       index
@@ -9598,7 +10127,7 @@ function denormalize(value, array) {
       throw new Error("THREE.MathUtils: Invalid component type.");
   }
 }
-function normalize2(value, array) {
+function normalize3(value, array) {
   switch (array.constructor) {
     case Float32Array:
       return value;
@@ -9954,8 +10483,8 @@ var Vector2 = class _Vector2 {
    * @return {Vector2} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -10119,8 +10648,8 @@ var Vector2 = class _Vector2 {
    * @param {number} length - The new length of this vector.
    * @return {Vector2} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -10262,17 +10791,17 @@ var Quaternion = class {
     let x0 = src0[srcOffset0 + 0], y0 = src0[srcOffset0 + 1], z0 = src0[srcOffset0 + 2], w0 = src0[srcOffset0 + 3];
     let x1 = src1[srcOffset1 + 0], y1 = src1[srcOffset1 + 1], z1 = src1[srcOffset1 + 2], w1 = src1[srcOffset1 + 3];
     if (w0 !== w1 || x0 !== x1 || y0 !== y1 || z0 !== z1) {
-      let dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
-      if (dot < 0) {
+      let dot2 = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
+      if (dot2 < 0) {
         x1 = -x1;
         y1 = -y1;
         z1 = -z1;
         w1 = -w1;
-        dot = -dot;
+        dot2 = -dot2;
       }
       let s = 1 - t;
-      if (dot < 0.9995) {
-        const theta = Math.acos(dot);
+      if (dot2 < 0.9995) {
+        const theta = Math.acos(dot2);
         const sin = Math.sin(theta);
         s = Math.sin(s * theta) / sin;
         t = Math.sin(t * theta) / sin;
@@ -10712,17 +11241,17 @@ var Quaternion = class {
    */
   slerp(qb, t) {
     let x = qb._x, y = qb._y, z = qb._z, w = qb._w;
-    let dot = this.dot(qb);
-    if (dot < 0) {
+    let dot2 = this.dot(qb);
+    if (dot2 < 0) {
       x = -x;
       y = -y;
       z = -z;
       w = -w;
-      dot = -dot;
+      dot2 = -dot2;
     }
     let s = 1 - t;
-    if (dot < 0.9995) {
-      const theta = Math.acos(dot);
+    if (dot2 < 0.9995) {
+      const theta = Math.acos(dot2);
       const sin = Math.sin(theta);
       s = Math.sin(s * theta) / sin;
       t = Math.sin(t * theta) / sin;
@@ -11305,8 +11834,8 @@ var Vector3 = class _Vector3 {
    * @return {Vector3} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -11415,8 +11944,8 @@ var Vector3 = class _Vector3 {
    * @param {number} length - The new length of this vector.
    * @return {Vector3} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -13380,8 +13909,8 @@ var Vector4 = class _Vector4 {
    * @return {Vector4} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -13495,8 +14024,8 @@ var Vector4 = class _Vector4 {
    * @param {number} length - The new length of this vector.
    * @return {Vector4} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -14825,14 +15354,14 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  compose(position, quaternion, scale) {
+  compose(position, quaternion, scale2) {
     const te = this.elements;
     const x = quaternion._x, y = quaternion._y, z = quaternion._z, w = quaternion._w;
     const x2 = x + x, y2 = y + y, z2 = z + z;
     const xx = x * x2, xy = x * y2, xz = x * z2;
     const yy = y * y2, yz = y * z2, zz = z * z2;
     const wx = w * x2, wy = w * y2, wz = w * z2;
-    const sx = scale.x, sy = scale.y, sz = scale.z;
+    const sx = scale2.x, sy = scale2.y, sz = scale2.z;
     te[0] = (1 - (yy + zz)) * sx;
     te[1] = (xy + wz) * sx;
     te[2] = (xz - wy) * sx;
@@ -14864,14 +15393,14 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  decompose(position, quaternion, scale) {
+  decompose(position, quaternion, scale2) {
     const te = this.elements;
     position.x = te[12];
     position.y = te[13];
     position.z = te[14];
     const det = this.determinantAffine();
     if (det === 0) {
-      scale.set(1, 1, 1);
+      scale2.set(1, 1, 1);
       quaternion.identity();
       return this;
     }
@@ -14893,9 +15422,9 @@ var Matrix4 = class _Matrix4 {
     _m1$2.elements[9] *= invSZ;
     _m1$2.elements[10] *= invSZ;
     quaternion.setFromRotationMatrix(_m1$2);
-    scale.x = sx;
-    scale.y = sy;
-    scale.z = sz;
+    scale2.x = sx;
+    scale2.y = sy;
+    scale2.z = sz;
     return this;
   }
   /**
@@ -15451,7 +15980,7 @@ var Object3D = class _Object3D extends EventDispatcher {
     const position = new Vector3();
     const rotation = new Euler();
     const quaternion = new Quaternion();
-    const scale = new Vector3(1, 1, 1);
+    const scale2 = new Vector3(1, 1, 1);
     function onRotationChange() {
       quaternion.setFromEuler(rotation, false);
     }
@@ -15506,7 +16035,7 @@ var Object3D = class _Object3D extends EventDispatcher {
       scale: {
         configurable: true,
         enumerable: true,
-        value: scale
+        value: scale2
       },
       /**
        * Represents the object's model-view matrix.
@@ -18576,7 +19105,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setComponent(index, component, value) {
-    if (this.normalized) value = normalize2(value, this.array);
+    if (this.normalized) value = normalize3(value, this.array);
     this.array[index * this.itemSize + component] = value;
     return this;
   }
@@ -18599,7 +19128,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setX(index, x) {
-    if (this.normalized) x = normalize2(x, this.array);
+    if (this.normalized) x = normalize3(x, this.array);
     this.array[index * this.itemSize] = x;
     return this;
   }
@@ -18622,7 +19151,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setY(index, y) {
-    if (this.normalized) y = normalize2(y, this.array);
+    if (this.normalized) y = normalize3(y, this.array);
     this.array[index * this.itemSize + 1] = y;
     return this;
   }
@@ -18645,7 +19174,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setZ(index, z) {
-    if (this.normalized) z = normalize2(z, this.array);
+    if (this.normalized) z = normalize3(z, this.array);
     this.array[index * this.itemSize + 2] = z;
     return this;
   }
@@ -18668,7 +19197,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setW(index, w) {
-    if (this.normalized) w = normalize2(w, this.array);
+    if (this.normalized) w = normalize3(w, this.array);
     this.array[index * this.itemSize + 3] = w;
     return this;
   }
@@ -18683,8 +19212,8 @@ var BufferAttribute = class extends EventDispatcher {
   setXY(index, x, y) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize2(x, this.array);
-      y = normalize2(y, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -18702,9 +19231,9 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZ(index, x, y, z) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize2(x, this.array);
-      y = normalize2(y, this.array);
-      z = normalize2(z, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
+      z = normalize3(z, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -18724,10 +19253,10 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZW(index, x, y, z, w) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize2(x, this.array);
-      y = normalize2(y, this.array);
-      z = normalize2(z, this.array);
-      w = normalize2(w, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
+      z = normalize3(z, this.array);
+      w = normalize3(w, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -19016,9 +19545,9 @@ var Sphere = class {
     _v1$3.subVectors(point, this.center);
     const lengthSq = _v1$3.lengthSq();
     if (lengthSq > this.radius * this.radius) {
-      const length = Math.sqrt(lengthSq);
-      const delta = (length - this.radius) * 0.5;
-      this.center.addScaledVector(_v1$3, delta / length);
+      const length2 = Math.sqrt(lengthSq);
+      const delta = (length2 - this.radius) * 0.5;
+      this.center.addScaledVector(_v1$3, delta / length2);
       this.radius += delta;
     }
     return this;
@@ -27492,11 +28021,11 @@ function WebGLEnvironments(renderer) {
   }
   function isCubeTextureComplete(image) {
     let count = 0;
-    const length = 6;
-    for (let i = 0; i < length; i++) {
+    const length2 = 6;
+    for (let i = 0; i < length2; i++) {
       if (image[i] !== void 0) count++;
     }
-    return count === length;
+    return count === length2;
   }
   function onCubemapDispose(event) {
     const texture = event.target;
@@ -30373,8 +30902,8 @@ function WebGLLights(extensions) {
     state.ambient[0] = r;
     state.ambient[1] = g;
     state.ambient[2] = b;
-    const hash = state.hash;
-    if (hash.sunLength !== sunLength || hash.directionalLength !== directionalLength || hash.pointLength !== pointLength || hash.spotLength !== spotLength || hash.rectAreaLength !== rectAreaLength || hash.hemiLength !== hemiLength || hash.numSunShadows !== numSunShadows || hash.numDirectionalShadows !== numDirectionalShadows || hash.numPointShadows !== numPointShadows || hash.numSpotShadows !== numSpotShadows || hash.numSpotMaps !== numSpotMaps || hash.numLightProbes !== numLightProbes) {
+    const hash2 = state.hash;
+    if (hash2.sunLength !== sunLength || hash2.directionalLength !== directionalLength || hash2.pointLength !== pointLength || hash2.spotLength !== spotLength || hash2.rectAreaLength !== rectAreaLength || hash2.hemiLength !== hemiLength || hash2.numSunShadows !== numSunShadows || hash2.numDirectionalShadows !== numDirectionalShadows || hash2.numPointShadows !== numPointShadows || hash2.numSpotShadows !== numSpotShadows || hash2.numSpotMaps !== numSpotMaps || hash2.numLightProbes !== numLightProbes) {
       state.sun.length = sunLength;
       state.directional.length = directionalLength;
       state.spot.length = spotLength;
@@ -30397,18 +30926,18 @@ function WebGLLights(extensions) {
       state.spotLightMap.length = numSpotMaps;
       state.numSpotLightShadowsWithMaps = numSpotShadowsWithMaps;
       state.numLightProbes = numLightProbes;
-      hash.sunLength = sunLength;
-      hash.directionalLength = directionalLength;
-      hash.pointLength = pointLength;
-      hash.spotLength = spotLength;
-      hash.rectAreaLength = rectAreaLength;
-      hash.hemiLength = hemiLength;
-      hash.numSunShadows = numSunShadows;
-      hash.numDirectionalShadows = numDirectionalShadows;
-      hash.numPointShadows = numPointShadows;
-      hash.numSpotShadows = numSpotShadows;
-      hash.numSpotMaps = numSpotMaps;
-      hash.numLightProbes = numLightProbes;
+      hash2.sunLength = sunLength;
+      hash2.directionalLength = directionalLength;
+      hash2.pointLength = pointLength;
+      hash2.spotLength = spotLength;
+      hash2.rectAreaLength = rectAreaLength;
+      hash2.hemiLength = hemiLength;
+      hash2.numSunShadows = numSunShadows;
+      hash2.numDirectionalShadows = numDirectionalShadows;
+      hash2.numPointShadows = numPointShadows;
+      hash2.numSpotShadows = numSpotShadows;
+      hash2.numSpotMaps = numSpotMaps;
+      hash2.numLightProbes = numLightProbes;
       state.version = nextVersion++;
     }
   }
@@ -31685,15 +32214,15 @@ function WebGLTextures(_gl, extensions, state, properties, capabilities, utils, 
     return useOffscreenCanvas ? new OffscreenCanvas(width, height) : createElementNS("canvas");
   }
   function resizeImage(image, needsNewCanvas, maxSize) {
-    let scale = 1;
+    let scale2 = 1;
     const dimensions = getDimensions(image);
     if (dimensions.width > maxSize || dimensions.height > maxSize) {
-      scale = maxSize / Math.max(dimensions.width, dimensions.height);
+      scale2 = maxSize / Math.max(dimensions.width, dimensions.height);
     }
-    if (scale < 1) {
+    if (scale2 < 1) {
       if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement || typeof HTMLCanvasElement !== "undefined" && image instanceof HTMLCanvasElement || typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap || typeof VideoFrame !== "undefined" && image instanceof VideoFrame) {
-        const width = Math.floor(scale * dimensions.width);
-        const height = Math.floor(scale * dimensions.height);
+        const width = Math.floor(scale2 * dimensions.width);
+        const height = Math.floor(scale2 * dimensions.height);
         if (_canvas2 === void 0) _canvas2 = createCanvas(width, height);
         const canvas = needsNewCanvas ? createCanvas(width, height) : _canvas2;
         canvas.width = width;
@@ -37253,7 +37782,7 @@ var WebAudioBackend = class extends AudioBackend {
   }
   playNote(s, track, event, when, stepTime) {
     const ctx = sharedContext;
-    const length = event.length * stepTime;
+    const length2 = event.length * stepTime;
     const remember = (node) => {
       s.nodes.add(node);
       node.onended = () => s.nodes.delete(node);
@@ -37290,18 +37819,18 @@ var WebAudioBackend = class extends AudioBackend {
     g.setValueAtTime(0, when);
     let end;
     if (track.inst === INST_PLUCK) {
-      end = when + Math.min(length, 0.35);
+      end = when + Math.min(length2, 0.35);
       g.linearRampToValueAtTime(peak, when + 5e-3);
       g.exponentialRampToValueAtTime(1e-4, end);
     } else if (track.inst === INST_PAD) {
-      end = when + length;
-      g.linearRampToValueAtTime(peak * 0.7, when + Math.min(0.3, length * 0.5));
-      g.setValueAtTime(peak * 0.7, when + length * 0.8);
+      end = when + length2;
+      g.linearRampToValueAtTime(peak * 0.7, when + Math.min(0.3, length2 * 0.5));
+      g.setValueAtTime(peak * 0.7, when + length2 * 0.8);
       g.linearRampToValueAtTime(0, end);
     } else {
-      end = when + length;
+      end = when + length2;
       g.linearRampToValueAtTime(peak, when + 0.01);
-      g.setValueAtTime(peak, when + Math.max(0.01, length - 0.03));
+      g.setValueAtTime(peak, when + Math.max(0.01, length2 - 0.03));
       g.linearRampToValueAtTime(0, end);
     }
     let out = gain;
@@ -37383,9 +37912,9 @@ function createScreen(container2) {
   const fit = () => {
     const area = container2.getBoundingClientRect();
     if (area.width <= 0 || area.height <= 0) return;
-    const scale = Math.min(area.width / width, area.height / height);
-    const cssW = Math.max(1, Math.floor(width * scale));
-    const cssH = Math.max(1, Math.floor(height * scale));
+    const scale2 = Math.min(area.width / width, area.height / height);
+    const cssW = Math.max(1, Math.floor(width * scale2));
+    const cssH = Math.max(1, Math.floor(height * scale2));
     box.style.width = `${cssW}px`;
     box.style.height = `${cssH}px`;
     const ratio = Math.min(MAX_PIXEL_RATIO, cssW * (window.devicePixelRatio || 1) / width);

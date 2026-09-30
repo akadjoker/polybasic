@@ -11,6 +11,7 @@ what the tests use).
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
+- [Trees](#trees)
 - [Ribbon trails](#ribbon-trails)
 - [Building meshes](#building-meshes)
 - [Looks](#looks)
@@ -121,6 +122,28 @@ and cast no shadow, as in Blitz3D; `EntityFX` changes both.
 For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
 which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
+
+## Trees
+
+![Trees made by CreateTree, with their shadows](screenshots/trees.png)
+
+`CreateTree` grows a tree from numbers: a trunk that forks into branches,
+with cards of leaves at their tips. The bark and the leaves are drawn by
+code too, so no image file is needed. The trunk is the entity it returns;
+the leaves are a child entity named `"twigs"`, with a masked texture, so
+they cut their shape out of the light and cast leaf-shaped shadows.
+
+| Command | What it does |
+|---------|--------------|
+| `CreateTree%(kind = TREE_OAK, seed = 0, parent = 0)` | A tree of one kind: `TREE_OAK`, `TREE_WILLOW`, `TREE_SHRUB`, `TREE_ASH`, `TREE_POPLAR`, `TREE_SEQUOIA` or `TREE_BEECH`, standing on its entity's position. Another `seed` grows a different tree of the same kind; the same seed always the same one. |
+
+Retexture with `EntityTexture tree, bark` and
+`EntityTexture FindChild(tree, "twigs"), leaves` (a leaf texture is best
+`TEX_MASKED`: its black is left out). Growing a tree takes some tens of
+milliseconds; for a forest, grow one of each kind and `CopyEntity` it:
+copies share the meshes, so a hundred trees cost little more to keep than
+one. Sizes, in units: a shrub is about 1 high, an oak 8, a willow 6, an ash
+8, a poplar 13, a beech 10 and a sequoia 38; `ScaleEntity` to taste.
 
 ## Ribbon trails
 
@@ -584,6 +607,7 @@ the top-left; text stays sharp at any page size.
 | `FX_FULLBRIGHT` `FX_VERTEXCOLOR` `FX_FLAT` `FX_TWOSIDED` `FX_VERTEXALPHA` | 1 2 4 16 32 |
 | `FX_NOSHADOWCAST` `FX_NOSHADOWRECV` | 131072 262144 |
 | `TEX_COLOR` `TEX_ALPHA` `TEX_MASKED` `TEX_MIPMAP` `TEX_CLAMPU` `TEX_CLAMPV` | 1 2 4 8 16 32 |
+| `TREE_OAK` `TREE_WILLOW` `TREE_SHRUB` `TREE_ASH` `TREE_POPLAR` `TREE_SEQUOIA` `TREE_BEECH` | 1 to 7 |
 | `PICK_NONE` `PICK_SPHERE` `PICK_POLYGON` `PICK_BOX` | 0 1 2 3 |
 | `COLLIDE_SPHERE` `COLLIDE_POLYGON` `COLLIDE_BOX` | 1 2 3 |
 | `RESPONSE_STOP` `RESPONSE_SLIDE` `RESPONSE_SLIDE_NO_DOWNHILL` | 1 2 3 |
