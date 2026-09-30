@@ -5,7 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { PhysicsBackend } from '../backend.js';
 
-// Contact points closer than this count as touching (world units).
+// Shapes closer than this count as touching (world units).
 const TOUCHING = 0.005;
 
 // Rapier's WebAssembly is compiled once per page (or Node process).
@@ -188,22 +188,14 @@ export class RapierBackend extends PhysicsBackend
   {
     const { collider } = this.bodies.get(id);
     const out = [];
+    // The pairs Rapier is tracking are the candidates. Whether they touch
+    // is measured on the shapes as they are now: the pair's own contact
+    // data is no guide (its distances are from the last contact update, and
+    // a body asleep on a triangle mesh reports no solver contacts).
     this.world.contactPairsWith(collider, (other) =>
     {
-      let touching = false;
-      // Rapier also keeps points that are about to touch (up to its
-      // prediction distance, 0.02); touching means a point that is at
-      // most a hair apart. (The solver's own contact count is no guide: it
-      // is 0 for a body resting asleep on a triangle mesh.)
-      this.world.contactPair(collider, other, (manifold) =>
-      {
-        for (let i = 0; i < manifold.numContacts() && !touching; i++)
-        {
-          if (manifold.contactDist(i) <= TOUCHING) touching = true;
-        }
-      });
       const otherId = this.byCollider.get(other.handle);
-      if (touching && otherId !== undefined) out.push(otherId);
+      if (otherId !== undefined && collider.contactCollider(other, TOUCHING)) out.push(otherId);
     });
     return out.sort((a, b) => a - b);
   }
