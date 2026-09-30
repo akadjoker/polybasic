@@ -1,0 +1,48 @@
+{
+  "categories": [
+    { "id": "3d", "title": "3D" },
+    { "id": "language", "title": "Language" }
+  ],
+  "programs": [
+    {
+      "id": "spin",
+      "title": "Spinning cube",
+      "category": "3d",
+      "file": "../examples/spin.pb",
+      "description": "The hello world of PolyBasic 3D: a camera, a light and a textured cube turning in Update().",
+      "controls": ""
+    },
+    {
+      "id": "block-rain",
+      "title": "Block Rain",
+      "category": "3d",
+      "file": "../examples/block-rain.pb",
+      "description": "A small game: dodge the falling blocks. Types, For Each, input, and a 2D score on top.",
+      "controls": "Arrows or WASD, or drag with the mouse or a finger; Space or a tap to start"
+    },
+    {
+      "id": "orbits",
+      "title": "Orbits",
+      "category": "3d",
+      "file": "../examples/orbits.pb",
+      "description": "Parents and children: a moon turns around a planet that turns around a sun.",
+      "controls": "Left/Right turn the camera, mouse wheel zooms"
+    },
+    {
+      "id": "tour",
+      "title": "Language tour",
+      "category": "language",
+      "file": "../examples/tour.pb",
+      "description": "Variables, loops, functions, arrays, Types and Select, printed to the console.",
+      "controls": ""
+    },
+    {
+      "id": "bounce",
+      "title": "Bouncing balls (console)",
+      "category": "language",
+      "file": "../examples/bounce.pb",
+      "description": "The Update/Draw frame loop without graphics: balls move in Update, Draw prints a report.",
+      "controls": ""
+    }
+  ]
+}

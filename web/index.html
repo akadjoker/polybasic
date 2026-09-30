@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PolyBasic Playground</title>
+  <meta name="description" content="Write and run PolyBasic programs in the browser: a friendly BASIC for 3D games.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <h1>PolyBasic Playground</h1>
+        <span>A friendly BASIC for 3D games, in the browser</span>
+      </div>
+      <div class="actions">
+        <button id="runBtn" class="primary" title="Run (Ctrl+Enter)">▶ Run</button>
+        <button id="stopBtn" title="Stop">■ Stop</button>
+        <button id="resetBtn" title="Discard your edits and restore this program">Reset</button>
+        <button id="shareBtn" title="Copy a link to this code">Share</button>
+        <span class="actions-gap" aria-hidden="true"></span>
+        <a class="link-btn" href="https://github.com/akadjoker/polybasic/blob/main/docs/language.md" target="_blank" rel="noopener" title="The language reference">Language</a>
+        <a class="link-btn" href="https://github.com/akadjoker/polybasic/blob/main/docs/commands-3d.md" target="_blank" rel="noopener" title="The 3D, 2D and input commands">Commands</a>
+        <a class="link-btn" href="https://github.com/akadjoker/polybasic" target="_blank" rel="noopener" title="PolyBasic on GitHub">★ GitHub</a>
+      </div>
+    </header>
+
+    <nav class="sidebar" aria-label="Programs">
+      <button id="newBtn" class="new">+ New program</button>
+      <div id="programList" class="program-list"></div>
+    </nav>
+
+    <main class="editor-pane">
+      <div class="program-info">
+        <h2 id="programTitle">Loading…</h2>
+        <p id="programDescription"></p>
+        <p id="programControls" class="controls"></p>
+      </div>
+      <div id="editor" class="editor"></div>
+    </main>
+
+    <section class="run-pane" aria-label="Output">
+      <div id="screen" class="screen"></div>
+      <div class="statusbar">
+        <span id="status">Stopped</span>
+        <span id="stats"></span>
+        <button id="fullscreenBtn" class="small" title="Show the program on the whole screen (Esc leaves)">⛶ Full screen</button>
+      </div>
+      <div class="tabs" role="tablist">
+        <button id="consoleTab" class="tab active" role="tab" aria-selected="true">Console</button>
+      </div>
+      <div id="console" class="console" role="log" aria-live="polite"></div>
+    </section>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

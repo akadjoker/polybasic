@@ -15,8 +15,17 @@ export function attachDomInput(input, element, toLogical)
   };
   const locked = () => document.pointerLockElement === element;
 
+  // Keys typed into an editor or a text box on the same page are not
+  // game input.
+  const typing = (e) =>
+  {
+    const t = e.target;
+    return t && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
+  };
+
   on(window, 'keydown', (e) =>
   {
+    if (typing(e)) return;
     const code = DOM_KEY_CODES[e.code];
     if (code === undefined) return;
     input.keyDown(code);
@@ -25,6 +34,7 @@ export function attachDomInput(input, element, toLogical)
   });
   on(window, 'keyup', (e) =>
   {
+    // Releases always count, so a key held when focus moved is let go.
     const code = DOM_KEY_CODES[e.code];
     if (code !== undefined) input.keyUp(code);
   });

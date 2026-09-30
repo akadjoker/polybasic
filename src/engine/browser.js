@@ -79,6 +79,16 @@ export function createScreen(container)
     input,
     fit,
     size: () => [width, height],
+    // Blank the screen (nothing is running).
+    clear(r = 0, g = 0, b = 0)
+    {
+      backend.reset();
+      backend.render({
+        width, height, clearColor: [r / 255, g / 255, b / 255], ambient: [0, 0, 0],
+        cameras: [], lights: [], items: [], freedEntities: [], freedTextures: []
+      });
+      overlay.begin(width, height);
+    },
     // A fresh engine for one run of a program, drawing on this screen.
     newEngine(options = {})
     {

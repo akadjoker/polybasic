@@ -8,7 +8,7 @@ import { compile as compileCore } from './compiler/index.js';
 import { runProgram as runCore, loadProgram } from './runtime/index.js';
 import { Engine, ENGINE_COMMANDS, ENGINE_CONSTANTS } from './engine/index.js';
 
-export { CompileError, CORE_COMMANDS, KEYWORDS, parseSignature } from './compiler/index.js';
+export { CompileError, CORE_COMMANDS, SPECIAL_COMMANDS, KEYWORDS, parseSignature } from './compiler/index.js';
 export {
   loadProgram, describeError, formatError, createRuntime, STEP_MS,
   Host, NodeHost, CaptureHost, BrowserHost, PolyRuntimeError, EndSignal

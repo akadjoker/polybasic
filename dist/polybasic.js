@@ -953,6 +953,7 @@ var CORE_COMMANDS = [
   "DeltaTime#()",
   "FrameCount%()"
 ];
+var SPECIAL_COMMANDS = ["Int", "Float", "Str", "Abs", "Sgn", "Min", "Max"];
 var INLINE = {
   sin: "Math.sin($0 * 0.017453292519943295)",
   cos: "Math.cos($0 * 0.017453292519943295)",
@@ -32181,7 +32182,12 @@ function attachDomInput(input, element, toLogical) {
     listeners.push(() => target.removeEventListener(type, fn, options));
   };
   const locked = () => document.pointerLockElement === element;
+  const typing = (e) => {
+    const t = e.target;
+    return t && (t.isContentEditable || t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT");
+  };
   on(window, "keydown", (e) => {
+    if (typing(e)) return;
     const code = DOM_KEY_CODES[e.code];
     if (code === void 0) return;
     input.keyDown(code);
@@ -32285,6 +32291,22 @@ function createScreen(container) {
     input,
     fit,
     size: () => [width, height],
+    // Blank the screen (nothing is running).
+    clear(r = 0, g = 0, b = 0) {
+      backend.reset();
+      backend.render({
+        width,
+        height,
+        clearColor: [r / 255, g / 255, b / 255],
+        ambient: [0, 0, 0],
+        cameras: [],
+        lights: [],
+        items: [],
+        freedEntities: [],
+        freedTextures: []
+      });
+      overlay.begin(width, height);
+    },
     // A fresh engine for one run of a program, drawing on this screen.
     newEngine(options = {}) {
       input.releaseAll();
@@ -32338,6 +32360,7 @@ export {
   Quat,
   Ray,
   RenderBackend,
+  SPECIAL_COMMANDS,
   STEP_MS,
   Texture,
   ThreeBackend,
