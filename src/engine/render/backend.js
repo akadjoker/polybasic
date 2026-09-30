@@ -19,8 +19,10 @@
 //     lights:  [{ id, world, type, color, range, shadows }],  type 1 directional, 2 point;
 //              shadows 0: none, otherwise the width of the square around the
 //              camera a directional light's shadows cover
-//     items:   [{ id, world, mesh, materials, castShadow, receiveShadow }],
-//              mesh: MeshData, materials: [Material]
+//     items:   [{ id, world, mesh, materials, castShadow, receiveShadow, sprite }],
+//              mesh: MeshData, materials: [Material]; sprite: null, or a
+//              sprite's settings: draw it with scene/sprite.js's
+//              spriteMatrix(world, camera world) for each camera
 //              (submesh s of the mesh uses materials[s.material])
 //     freedEntities: [id],  freedTextures: [Texture] }
 //

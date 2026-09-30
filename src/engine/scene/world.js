@@ -100,6 +100,7 @@ export class World
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.sprite = src.sprite ? { ...src.sprite } : null;
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
@@ -130,7 +131,7 @@ export class World
       const world = e.worldMatrix.e;
       if (e.kind === 'camera') cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow });
+      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);

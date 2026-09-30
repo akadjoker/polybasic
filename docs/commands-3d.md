@@ -10,6 +10,7 @@ what the tests use).
 - [Cameras](#cameras)
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
+- [Sprites](#sprites)
 - [Looks](#looks)
 - [Textures](#textures)
 - [Moving and turning](#moving-and-turning)
@@ -100,6 +101,25 @@ the same kind share their geometry, so a thousand cubes cost little.
 | `CreatePlane%(divisions = 1, parent = 0)` | A flat square in X and Z, facing up. |
 | `CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)` | A ring lying flat. |
 
+## Sprites
+
+A sprite is a square, -1..1 across, that turns to face the camera: smoke,
+sparks, flares, far-away trees. Sprites are lit by nothing (`FX_FULLBRIGHT`)
+and cast no shadow, as in Blitz3D; `EntityFX` changes both.
+
+| Command | What it does |
+|---------|--------------|
+| `CreateSprite%(parent = 0)` | A plain square (colour it with `EntityColor`, texture it with `EntityTexture`). |
+| `LoadSprite%(file$, flags = TEX_COLOR, parent = 0)` | A sprite with an image. With `TEX_COLOR` it glows (it adds to what is behind, so black shows nothing): fire, sparks. With `TEX_ALPHA` it blends, with `TEX_MASKED` it is cut out. |
+| `SpriteViewMode sprite, mode` | How it turns: 1 faces the camera (the default); 2 keeps the entity's own turn and is seen only from the front; 3 faces along the camera's view but keeps the entity's up; 4 stands upright and turns only with the camera's yaw (trees, posts). |
+| `RotateSprite sprite, angle#` | Turns it in its own plane, anticlockwise, in degrees. |
+| `ScaleSprite sprite, x#, y#` | Its width and height (1 is 2 units across). |
+| `HandleSprite sprite, x#, y#` | The point it hangs from, -1..1 across and up the square: `HandleSprite s, 0, -1` puts its bottom edge at the entity's position. |
+
+For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
+which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
+the entity is.
+
 ## Looks
 
 | Command | What it does |
@@ -110,6 +130,7 @@ the same kind share their geometry, so a thousand cubes cost little.
 | `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
 | `EntityOrder entity, order` | Lower orders draw first (cameras too). |
+| `EntityBlend entity, blend` | How it mixes with what is behind: 1 by its alpha (the default), 2 multiplies (darkens: shade, stains), 3 adds (glows: fire, light). |
 
 Each entity has its own look: `CopyEntity` copies it, and changing the copy
 leaves the original alone.

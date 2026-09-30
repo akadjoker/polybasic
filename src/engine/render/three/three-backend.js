@@ -10,6 +10,8 @@
 
 import * as THREE from 'three';
 import { RenderBackend } from '../backend.js';
+import { spriteMatrix } from '../../scene/sprite.js';
+import { Mat4 } from '../../math/mat4.js';
 
 // Indices of a column-major 4x4 matrix that change sign under S * M * S:
 // exactly one of (row, column) is the Z row/column.
@@ -96,6 +98,8 @@ export class ThreeBackend extends RenderBackend
     this.cameras = new Map();     // entity id -> THREE.PerspectiveCamera
     this.width = 1;
     this.height = 1;
+    this.sprites = [];            // this frame's { obj, world, sprite }
+    this.spriteMatrix = new Mat4();
   }
 
   init(canvas)
@@ -143,6 +147,7 @@ export class ThreeBackend extends RenderBackend
     this.ambient.intensity = LIGHT_SCALE;
 
     const seen = new Set();
+    this.sprites.length = 0;
     for (const item of frame.items)
     {
       seen.add(item.id);
@@ -173,6 +178,7 @@ export class ThreeBackend extends RenderBackend
       r.setClearColor(srgb(new THREE.Color(), cam.clearColor), 1);
       r.clear(true, true, true);
       const camera = this.syncCamera(cam, w / h);
+      this.faceSprites(cam.world);
       this.fitShadows(camera);
       r.render(this.scene, camera);
     }
@@ -201,8 +207,22 @@ export class ThreeBackend extends RenderBackend
     obj.renderOrder = item.order;
     obj.castShadow = item.castShadow !== false;
     obj.receiveShadow = item.receiveShadow !== false;
-    mirrorInto(obj.matrix, item.world);
-    obj.matrixWorldNeedsUpdate = true;
+    if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });
+    else
+    {
+      mirrorInto(obj.matrix, item.world);
+      obj.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  // Sprites turn to each camera that draws them.
+  faceSprites(cameraWorld)
+  {
+    for (const { obj, world, sprite } of this.sprites)
+    {
+      mirrorInto(obj.matrix, spriteMatrix(this.spriteMatrix, world, cameraWorld, sprite).e);
+      obj.matrixWorldNeedsUpdate = true;
+    }
   }
 
   geometry(mesh)
@@ -250,15 +270,25 @@ export class ThreeBackend extends RenderBackend
     const flags = tex ? m.texture : null;
     const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1 || (flags !== null && flags.alpha);
     const cut = m.alphaMode === 'mask' ? m.alphaCutoff : (flags !== null && flags.masked ? 0.5 : 0);
+    // EntityBlend: adding (glows, fire) and multiplying (shade, stains) do
+    // not hide what is behind, so they do not write depth either.
+    const mixing = m.blend === 'add' || m.blend === 'multiply';
     const options = {
       color: srgb(new THREE.Color(), m.color),
       map: tex,
-      transparent: blend,
+      transparent: blend || mixing,
       opacity: m.alphaMode === 'opaque' ? 1 : m.alpha,
       alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? THREE.DoubleSide : THREE.FrontSide
     };
+    if (m.blend === 'add') options.blending = THREE.AdditiveBlending;
+    if (m.blend === 'multiply')
+    {
+      options.blending = THREE.MultiplyBlending;
+      options.premultipliedAlpha = true;
+    }
+    if (mixing) options.depthWrite = false;
     let material;
     if (m.fullbright) material = new THREE.MeshBasicMaterial(options);
     else

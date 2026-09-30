@@ -15,6 +15,7 @@ import {
   createCube, createSphere, createCylinder, createCone, createPlane, createTorus
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
+import { createSpriteQuad, newSprite, SPRITE_FREE, SPRITE_UPRIGHT2 } from './scene/sprite.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
@@ -51,6 +52,14 @@ export const ENGINE_COMMANDS = [
   'CreatePlane%(divisions = 1, parent = 0)',
   'CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)',
 
+  // Sprites
+  'CreateSprite%(parent = 0)',
+  'LoadSprite%(file$, flags = 1, parent = 0)',
+  'RotateSprite(sprite, angle#)',
+  'ScaleSprite(sprite, x#, y#)',
+  'HandleSprite(sprite, x#, y#)',
+  'SpriteViewMode(sprite, mode)',
+
   // Looks
   'EntityColor(entity, r, g, b)',
   'EntityAlpha(entity, alpha#)',
@@ -58,6 +67,7 @@ export const ENGINE_COMMANDS = [
   'EntityFX(entity, flags)',
   'EntityTexture(entity, texture)',
   'EntityOrder(entity, order)',
+  'EntityBlend(entity, blend)',
 
   // Textures
   'LoadTexture%(file$, flags = 1)',
@@ -177,6 +187,32 @@ export function createEngineCommands(engine)
     engine.autoGraphics();
     return world.createMesh(mesh, parentOf(parent)).id;
   };
+  // A sprite: the shared square, lit by nothing and casting no shadow, as
+  // in Blitz3D. A loaded one glows (adds to what is behind) unless its
+  // texture is alpha or masked.
+  const makeSprite = (parent, tex) =>
+  {
+    engine.autoGraphics();
+    const e = world.createMesh(engine.sharedMesh('sprite', createSpriteQuad), parentOf(parent));
+    e.sprite = newSprite();
+    e.castShadow = false;
+    e.receiveShadow = false;
+    const m = e.material;
+    m.fullbright = true;
+    if (tex)
+    {
+      m.texture = tex;
+      if (!tex.alpha && !tex.masked) m.blend = 'add';
+    }
+    m.changed();
+    return e.id;
+  };
+  const sprite = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
+    return e.sprite;
+  };
   const style = engine.style;
   const step = () => engine.input.step;
 
@@ -264,6 +300,29 @@ export function createEngineCommands(engine)
       shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) =>
       shape(engine.sharedMesh('plane' + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createsprite: (parent) => makeSprite(parent, null),
+    loadsprite: (file, flags, parent) => makeSprite(parent, engine.loadTexture(file).setFlags(textureFlags(flags, 'LoadSprite'))),
+    rotatesprite(handle, angle)
+    {
+      sprite(handle).angle = angle;
+    },
+    scalesprite(handle, x, y)
+    {
+      const s = sprite(handle);
+      s.scaleX = x;
+      s.scaleY = y;
+    },
+    handlesprite(handle, x, y)
+    {
+      const s = sprite(handle);
+      s.handleX = x;
+      s.handleY = y;
+    },
+    spriteviewmode(handle, mode)
+    {
+      if (mode < SPRITE_FREE || mode > SPRITE_UPRIGHT2) throw runtimeError(`SpriteViewMode needs a mode from 1 to 4, not ${mode}`);
+      sprite(handle).mode = mode;
+    },
     createtorus: (segments, thickness, parent) =>
       shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
 
@@ -306,6 +365,14 @@ export function createEngineCommands(engine)
     entityorder(handle, order)
     {
       entity(handle).order = order;
+    },
+    entityblend(handle, blend)
+    {
+      const modes = { 1: 'alpha', 2: 'multiply', 3: 'add' };
+      if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
+      const m = material(handle);
+      m.blend = modes[blend];
+      m.changed();
     },
 
     // -------------------------------------------------------- textures

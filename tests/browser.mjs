@@ -1261,6 +1261,105 @@ For y = 0 To 3 : For x = 0 To 3 : TexturePixel tex, x, y, 255, 255, 255, 128 : N
     await page.close();
   });
 
+  await check('sprites: they face the camera by view mode, and a loaded one glows', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const png = `data:image/png;base64,${checkerPng(8).toString('base64')}`;
+    // A sprite 6 units ahead of a camera turned by `turn`, over grey.
+    const scene = (turn, lines, grey = 128) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, ${grey}, ${grey}, ${grey}
+RotateEntity cam, ${turn}
+s = CreateSprite()
+PositionEntity s, 0, 0, 6
+${lines}
+Function Update()
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    // The white pixels: how many, and how much of their bounding box they
+    // fill (a square facing the screen fills all of it). Also black ones.
+    const look = async (text) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        let n = 0;
+        let black = 0;
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -1;
+        let y1 = -1;
+        for (let y = 0; y < copy.height; y++)
+        {
+          for (let x = 0; x < copy.width; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            if (d[i] < 20 && d[i + 1] < 20 && d[i + 2] < 20) black++;
+            if (d[i] < 245 || d[i + 1] < 245 || d[i + 2] < 245) continue;
+            n++;
+            x0 = Math.min(x0, x);
+            y0 = Math.min(y0, y);
+            x1 = Math.max(x1, x);
+            y1 = Math.max(y1, y);
+          }
+        }
+        const box = n ? (x1 - x0 + 1) * (y1 - y0 + 1) : 1;
+        // The middle of the screen, inside a sprite 6 units ahead: its
+        // darkest pixel and its mean brightness.
+        let min = 255;
+        let sum = 0;
+        let count = 0;
+        for (let y = Math.round(copy.height * 0.42); y < copy.height * 0.58; y++)
+        {
+          for (let x = Math.round(copy.width * 0.44); x < copy.width * 0.56; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+            min = Math.min(min, v);
+            sum += v;
+            count++;
+          }
+        }
+        return { white: n / (d.length / 4), fill: n / box, black: black / (d.length / 4), min, mean: sum / count };
+      });
+    };
+    // Turned camera: the sprite is put where the camera looks.
+    const ahead = (turn) => `cam2 = CreatePivot()
+RotateEntity cam2, ${turn}
+MoveEntity cam2, 0, 0, 6
+PositionEntity s, EntityX(cam2), EntityY(cam2), EntityZ(cam2)`;
+    const tilted = await look(scene('30, 20, 25', ahead('30, 20, 25')));
+    const upright = await look(scene('40, 0, 0', ahead('40, 0, 0') + '\nSpriteViewMode s, 4'));
+    const facing = await look(scene('40, 0, 0', ahead('40, 0, 0')));
+    const behind1 = await look(scene('0, 180, 0', 'PositionEntity s, 0, 0, -6'));
+    const behind2 = await look(scene('0, 180, 0', 'PositionEntity s, 0, 0, -6\nSpriteViewMode s, 2'));
+    const glow = await look(scene('0, 0, 0', `FreeEntity s\ns = LoadSprite("${png}")\nPositionEntity s, 0, 0, 6`, 60));
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'sprite-glow.png') });
+    const plain = await look(scene('0, 0, 0', `FreeEntity s\ns = LoadSprite("${png}")\nPositionEntity s, 0, 0, 6\nEntityBlend s, 1`, 60));
+    const text = JSON.stringify({ tilted, upright, facing, behind1, behind2, glow, plain }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    assert(tilted.white > 0.02 && tilted.fill > 0.97, `mode 1 is not a square facing the screen: ${text}`);
+    assert(facing.fill > 0.97 && upright.white > 0.02 && upright.fill < 0.95, `mode 4 does not stand upright: ${text}`);
+    assert(behind1.white > 0.02 && behind2.white < 0.001, `seen from behind, mode 1 shows and mode 2 does not: ${text}`);
+    // Adding: black adds nothing, so nothing is darker than the grey behind;
+    // blending normally, the black squares are drawn.
+    assert(glow.min >= 55 && plain.min < 50 && glow.mean > plain.mean + 30, `a loaded sprite does not glow: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

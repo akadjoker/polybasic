@@ -15,6 +15,9 @@ export class Material
     this.fullbright = false;  // ignore lights
     this.flat = false;        // faceted instead of smooth shading
     this.twoSided = false;
+    // How it mixes with what is behind (EntityBlend): 'alpha' (the
+    // default: EntityAlpha and the texture's alpha), 'multiply' or 'add'.
+    this.blend = 'alpha';
     this.texture = null;
     // From model files: how alpha is used ('opaque', 'mask' below
     // alphaCutoff is not drawn, 'blend'), or null to go by `alpha` as the
@@ -39,6 +42,7 @@ export class Material
     m.fullbright = this.fullbright;
     m.flat = this.flat;
     m.twoSided = this.twoSided;
+    m.blend = this.blend;
     m.texture = this.texture;
     m.alphaMode = this.alphaMode;
     m.alphaCutoff = this.alphaCutoff;

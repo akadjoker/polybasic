@@ -3364,6 +3364,7 @@ var Entity = class {
     this.materials = [];
     this.camera = null;
     this.light = null;
+    this.sprite = null;
     this.pickMode = 0;
     this.obscurer = true;
     this.collisionType = 0;
@@ -3526,6 +3527,7 @@ var Material = class _Material {
     this.fullbright = false;
     this.flat = false;
     this.twoSided = false;
+    this.blend = "alpha";
     this.texture = null;
     this.alphaMode = null;
     this.alphaCutoff = 0.5;
@@ -3543,6 +3545,7 @@ var Material = class _Material {
     m.fullbright = this.fullbright;
     m.flat = this.flat;
     m.twoSided = this.twoSided;
+    m.blend = this.blend;
     m.texture = this.texture;
     m.alphaMode = this.alphaMode;
     m.alphaCutoff = this.alphaCutoff;
@@ -3703,6 +3706,7 @@ var World = class {
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.sprite = src.sprite ? { ...src.sprite } : null;
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
@@ -3728,7 +3732,7 @@ var World = class {
       const world = e.worldMatrix.e;
       if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow });
+      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -4293,6 +4297,81 @@ function createTorus(segments = 24, thickness = 0.25) {
     return [Math.cos(a) * ring + nx * thickness, ny * thickness, Math.sin(a) * ring + nz * thickness, nx, ny, nz];
   });
   return b.build();
+}
+
+// src/engine/scene/sprite.js
+var SPRITE_FREE = 1;
+var SPRITE_FIXED = 2;
+var SPRITE_UPRIGHT = 3;
+var SPRITE_UPRIGHT2 = 4;
+function newSprite() {
+  return { mode: SPRITE_FREE, angle: 0, scaleX: 1, scaleY: 1, handleX: 0, handleY: 0 };
+}
+function createSpriteQuad() {
+  return new MeshData(
+    [-1, 1, 0, 1, 1, 0, 1, -1, 0, -1, -1, 0],
+    [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1],
+    [0, 0, 1, 0, 1, 1, 0, 1],
+    [0, 1, 2, 0, 2, 3]
+  );
+}
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function spriteMatrix(out, entity, camera, sprite) {
+  const col = (m, c2) => [m[c2 * 4], m[c2 * 4 + 1], m[c2 * 4 + 2]];
+  let bi;
+  let bj;
+  let bk;
+  switch (sprite.mode) {
+    case SPRITE_FIXED:
+      bi = col(entity, 0);
+      bj = col(entity, 1);
+      bk = col(entity, 2);
+      break;
+    case SPRITE_UPRIGHT: {
+      bk = normalize(col(camera, 2));
+      bi = normalize(cross(col(entity, 1), bk));
+      bj = cross(bk, bi);
+      break;
+    }
+    case SPRITE_UPRIGHT2: {
+      const f = col(camera, 2);
+      const h = Math.hypot(f[0], f[2]);
+      const z = h > 1e-9 ? [f[0] / h, 0, f[2] / h] : [0, 0, 1];
+      const x2 = [z[2], 0, -z[0]];
+      const turn = (v) => [x2[0] * v[0] + z[0] * v[2], v[1], x2[2] * v[0] + z[2] * v[2]];
+      bi = turn(col(entity, 0));
+      bj = turn(col(entity, 1));
+      bk = turn(col(entity, 2));
+      break;
+    }
+    default:
+      bi = normalize(col(camera, 0));
+      bj = normalize(col(camera, 1));
+      bk = normalize(col(camera, 2));
+  }
+  const a = sprite.angle * Math.PI / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const x = [0, 1, 2].map((n) => (c * bi[n] + s * bj[n]) * sprite.scaleX);
+  const y = [0, 1, 2].map((n) => (-s * bi[n] + c * bj[n]) * sprite.scaleY);
+  const e = out.e;
+  for (let n = 0; n < 3; n++) {
+    e[n] = x[n];
+    e[4 + n] = y[n];
+    e[8 + n] = bk[n];
+    e[12 + n] = entity[12 + n] - sprite.handleX * x[n] - sprite.handleY * y[n];
+  }
+  e[3] = 0;
+  e[7] = 0;
+  e[11] = 0;
+  e[15] = 1;
+  return out;
 }
 
 // src/engine/collide/bvh.js
@@ -6695,6 +6774,13 @@ var ENGINE_COMMANDS = [
   "CreateCone%(segments = 16, solid = 1, parent = 0)",
   "CreatePlane%(divisions = 1, parent = 0)",
   "CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)",
+  // Sprites
+  "CreateSprite%(parent = 0)",
+  "LoadSprite%(file$, flags = 1, parent = 0)",
+  "RotateSprite(sprite, angle#)",
+  "ScaleSprite(sprite, x#, y#)",
+  "HandleSprite(sprite, x#, y#)",
+  "SpriteViewMode(sprite, mode)",
   // Looks
   "EntityColor(entity, r, g, b)",
   "EntityAlpha(entity, alpha#)",
@@ -6702,6 +6788,7 @@ var ENGINE_COMMANDS = [
   "EntityFX(entity, flags)",
   "EntityTexture(entity, texture)",
   "EntityOrder(entity, order)",
+  "EntityBlend(entity, blend)",
   // Textures
   "LoadTexture%(file$, flags = 1)",
   "CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = 1)",
@@ -6803,6 +6890,26 @@ function createEngineCommands(engine) {
     engine.autoGraphics();
     return world.createMesh(mesh, parentOf(parent)).id;
   };
+  const makeSprite = (parent, tex) => {
+    engine.autoGraphics();
+    const e = world.createMesh(engine.sharedMesh("sprite", createSpriteQuad), parentOf(parent));
+    e.sprite = newSprite();
+    e.castShadow = false;
+    e.receiveShadow = false;
+    const m = e.material;
+    m.fullbright = true;
+    if (tex) {
+      m.texture = tex;
+      if (!tex.alpha && !tex.masked) m.blend = "add";
+    }
+    m.changed();
+    return e.id;
+  };
+  const sprite = (handle) => {
+    const e = entity(handle);
+    if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
+    return e.sprite;
+  };
   const style = engine.style;
   const step = () => engine.input.step;
   return {
@@ -6869,6 +6976,25 @@ function createEngineCommands(engine) {
     createcylinder: (segments, solid, parent) => shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => primitive(createCylinder(clampSegments(segments), solid !== 0), "cylinder")), parent),
     createcone: (segments, solid, parent) => shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) => shape(engine.sharedMesh("plane" + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createsprite: (parent) => makeSprite(parent, null),
+    loadsprite: (file, flags, parent) => makeSprite(parent, engine.loadTexture(file).setFlags(textureFlags(flags, "LoadSprite"))),
+    rotatesprite(handle, angle) {
+      sprite(handle).angle = angle;
+    },
+    scalesprite(handle, x, y) {
+      const s = sprite(handle);
+      s.scaleX = x;
+      s.scaleY = y;
+    },
+    handlesprite(handle, x, y) {
+      const s = sprite(handle);
+      s.handleX = x;
+      s.handleY = y;
+    },
+    spriteviewmode(handle, mode) {
+      if (mode < SPRITE_FREE || mode > SPRITE_UPRIGHT2) throw runtimeError(`SpriteViewMode needs a mode from 1 to 4, not ${mode}`);
+      sprite(handle).mode = mode;
+    },
     createtorus: (segments, thickness, parent) => shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
     // ----------------------------------------------------------- looks
     entitycolor(handle, r, g, b) {
@@ -6903,6 +7029,13 @@ function createEngineCommands(engine) {
     },
     entityorder(handle, order) {
       entity(handle).order = order;
+    },
+    entityblend(handle, blend) {
+      const modes = { 1: "alpha", 2: "multiply", 3: "add" };
+      if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
+      const m = material(handle);
+      m.blend = modes[blend];
+      m.changed();
     },
     // -------------------------------------------------------- textures
     loadtexture(file, flags) {
@@ -8430,7 +8563,7 @@ function denormalize(value, array) {
       throw new Error("THREE.MathUtils: Invalid component type.");
   }
 }
-function normalize(value, array) {
+function normalize2(value, array) {
   switch (array.constructor) {
     case Float32Array:
       return value;
@@ -17408,7 +17541,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setComponent(index, component, value) {
-    if (this.normalized) value = normalize(value, this.array);
+    if (this.normalized) value = normalize2(value, this.array);
     this.array[index * this.itemSize + component] = value;
     return this;
   }
@@ -17431,7 +17564,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setX(index, x) {
-    if (this.normalized) x = normalize(x, this.array);
+    if (this.normalized) x = normalize2(x, this.array);
     this.array[index * this.itemSize] = x;
     return this;
   }
@@ -17454,7 +17587,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setY(index, y) {
-    if (this.normalized) y = normalize(y, this.array);
+    if (this.normalized) y = normalize2(y, this.array);
     this.array[index * this.itemSize + 1] = y;
     return this;
   }
@@ -17477,7 +17610,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setZ(index, z) {
-    if (this.normalized) z = normalize(z, this.array);
+    if (this.normalized) z = normalize2(z, this.array);
     this.array[index * this.itemSize + 2] = z;
     return this;
   }
@@ -17500,7 +17633,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setW(index, w) {
-    if (this.normalized) w = normalize(w, this.array);
+    if (this.normalized) w = normalize2(w, this.array);
     this.array[index * this.itemSize + 3] = w;
     return this;
   }
@@ -17515,8 +17648,8 @@ var BufferAttribute = class extends EventDispatcher {
   setXY(index, x, y) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
+      x = normalize2(x, this.array);
+      y = normalize2(y, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -17534,9 +17667,9 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZ(index, x, y, z) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
-      z = normalize(z, this.array);
+      x = normalize2(x, this.array);
+      y = normalize2(y, this.array);
+      z = normalize2(z, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -17556,10 +17689,10 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZW(index, x, y, z, w) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
-      z = normalize(z, this.array);
-      w = normalize(w, this.array);
+      x = normalize2(x, this.array);
+      y = normalize2(y, this.array);
+      z = normalize2(z, this.array);
+      w = normalize2(w, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -35316,6 +35449,8 @@ var ThreeBackend = class extends RenderBackend {
     this.cameras = /* @__PURE__ */ new Map();
     this.width = 1;
     this.height = 1;
+    this.sprites = [];
+    this.spriteMatrix = new Mat4();
   }
   init(canvas) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -35351,6 +35486,7 @@ var ThreeBackend = class extends RenderBackend {
     srgb(this.ambient.color, frame.ambient);
     this.ambient.intensity = LIGHT_SCALE;
     const seen = /* @__PURE__ */ new Set();
+    this.sprites.length = 0;
     for (const item of frame.items) {
       seen.add(item.id);
       this.syncItem(item);
@@ -35375,6 +35511,7 @@ var ThreeBackend = class extends RenderBackend {
       r.setClearColor(srgb(new Color(), cam.clearColor), 1);
       r.clear(true, true, true);
       const camera = this.syncCamera(cam, w / h);
+      this.faceSprites(cam.world);
       this.fitShadows(camera);
       r.render(this.scene, camera);
     }
@@ -35397,8 +35534,18 @@ var ThreeBackend = class extends RenderBackend {
     obj.renderOrder = item.order;
     obj.castShadow = item.castShadow !== false;
     obj.receiveShadow = item.receiveShadow !== false;
-    mirrorInto(obj.matrix, item.world);
-    obj.matrixWorldNeedsUpdate = true;
+    if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });
+    else {
+      mirrorInto(obj.matrix, item.world);
+      obj.matrixWorldNeedsUpdate = true;
+    }
+  }
+  // Sprites turn to each camera that draws them.
+  faceSprites(cameraWorld) {
+    for (const { obj, world, sprite } of this.sprites) {
+      mirrorInto(obj.matrix, spriteMatrix(this.spriteMatrix, world, cameraWorld, sprite).e);
+      obj.matrixWorldNeedsUpdate = true;
+    }
   }
   geometry(mesh) {
     const known = this.geometries.get(mesh.id);
@@ -35436,15 +35583,22 @@ var ThreeBackend = class extends RenderBackend {
     const flags = tex ? m.texture : null;
     const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1 || flags !== null && flags.alpha;
     const cut = m.alphaMode === "mask" ? m.alphaCutoff : flags !== null && flags.masked ? 0.5 : 0;
+    const mixing = m.blend === "add" || m.blend === "multiply";
     const options = {
       color: srgb(new Color(), m.color),
       map: tex,
-      transparent: blend,
+      transparent: blend || mixing,
       opacity: m.alphaMode === "opaque" ? 1 : m.alpha,
       alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? DoubleSide : FrontSide
     };
+    if (m.blend === "add") options.blending = AdditiveBlending;
+    if (m.blend === "multiply") {
+      options.blending = MultiplyBlending;
+      options.premultipliedAlpha = true;
+    }
+    if (mixing) options.depthWrite = false;
     let material;
     if (m.fullbright) material = new MeshBasicMaterial(options);
     else {

@@ -36,6 +36,7 @@ export class Entity
     this.materials = [];
     this.camera = null;
     this.light = null;
+    this.sprite = null;     // a sprite's settings (scene/sprite.js); its mesh is the square
     // Picking and collisions (src/engine/collide): how the entity is seen
     // by rays and by moving spheres.
     this.pickMode = 0;        // 0 none, 1 sphere, 2 polygon, 3 box
