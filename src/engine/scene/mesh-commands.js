@@ -94,6 +94,16 @@ function transform(mesh, m, t)
   mesh.touch();
 }
 
+// A matrix's 3x3 part and translation (Mat4 is column-major).
+function affine(mat)
+{
+  const e = mat.e;
+  return { m: [[e[0], e[4], e[8]], [e[1], e[5], e[9]], [e[2], e[6], e[10]]], t: [e[12], e[13], e[14]] };
+}
+
+const mul3 = (a, b) => a.map((row) => [0, 1, 2].map((c) => row[0] * b[0][c] + row[1] * b[1][c] + row[2] * b[2][c]));
+const mulv = (a, v) => a.map((row) => row[0] * v[0] + row[1] * v[1] + row[2] * v[2]);
+
 export function createMeshCommands(engine)
 {
   const world = engine.world;
@@ -129,6 +139,77 @@ export function createMeshCommands(engine)
     };
     visit(e);
     return box;
+  };
+  // Changes the geometry of a mesh, or of every part of a loaded model in
+  // the model's own space (once it has arrived): fn(mesh, into) where
+  // into(m, t) gives the change x -> m x + t as the part's own.
+  const reshape = (handle, fn) =>
+  {
+    const e = entity(handle);
+    if (!e.model)
+    {
+      fn(mesh(handle), (m, t) => ({ m, t }));
+      return;
+    }
+    engine.models.whenLoaded(e, () =>
+    {
+      const toModel = e.worldMatrix.clone();
+      toModel.invert();
+      const visit = (n) =>
+      {
+        if (n !== e && n.mesh && n.kind === 'mesh')
+        {
+          if (!(n.mesh instanceof EditableMesh))
+          {
+            n.mesh = EditableMesh.from(n.mesh);
+            for (const surface of n.mesh.surfaces) world.addHandle(surface);
+          }
+          const P = affine(n.worldMatrix.clone().premultiply(toModel));
+          const back = n.worldMatrix.clone().premultiply(toModel);
+          back.invert();
+          const Pi = affine(back);
+          // Pi (m (P x + p) + t) + pi
+          fn(n.mesh, (m, t) => ({
+            m: mul3(Pi.m, mul3(m, P.m)),
+            t: mulv(Pi.m, mulv(m, P.t).map((v, k) => v + t[k])).map((v, k) => v + Pi.t[k])
+          }));
+        }
+        for (const c of n.children) visit(c);
+      };
+      visit(e);
+    });
+  };
+  const change = (handle, m, t) => reshape(handle, (mesh, into) =>
+  {
+    const own = into(m, t);
+    transform(mesh, own.m, own.t);
+  });
+  // FitMesh: scale and move so the box b fills the given one.
+  const fit = (handle, b, x, y, z, width, height, depth, uniform) =>
+  {
+    if (b.isEmpty()) return;
+    const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+    let s = [width, height, depth].map((want, n) => (size[n] > 0 ? want / size[n] : 1));
+    if (uniform)
+    {
+      // Blitz3D's rule: the smallest of the three, for all of them.
+      if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
+      else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
+      else s = [s[2], s[2], s[2]];
+    }
+    const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
+    const target = [x + width / 2, y + height / 2, z + depth / 2];
+    change(handle, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+  };
+  const flip = (m) =>
+  {
+    for (const surface of m.surfaces)
+    {
+      for (let k = 0; k < surface.normals.length; k++) surface.normals[k] = -surface.normals[k];
+      const t = surface.triangles;
+      for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
+    }
+    m.touch();
   };
   // The mesh of an entity, made its own and changeable.
   const mesh = (handle) =>
@@ -249,47 +330,28 @@ export function createMeshCommands(engine)
     },
     scalemesh(handle, x, y, z)
     {
-      transform(mesh(handle), [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
+      change(handle, [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
     },
     rotatemesh(handle, pitch, yaw, roll)
     {
       const q = new Quat().fromEuler(pitch, yaw, roll);
       const col = (v) => new Vec3(...v).applyQuat(q);
       const [i, j, k] = [col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])];
-      transform(mesh(handle), [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
+      change(handle, [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
     },
     positionmesh(handle, x, y, z)
     {
-      transform(mesh(handle), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
+      change(handle, [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
     },
     fitmesh(handle, x, y, z, width, height, depth, uniform)
     {
-      const m = mesh(handle);
-      const b = m.bounds;
-      if (b.isEmpty()) return;
-      const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
-      let s = [width, height, depth].map((want, n) => (size[n] > 0 ? want / size[n] : 1));
-      if (uniform)
-      {
-        // Blitz3D's rule: the smallest of the three, for all of them.
-        if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
-        else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
-        else s = [s[2], s[2], s[2]];
-      }
-      const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
-      const target = [x + width / 2, y + height / 2, z + depth / 2];
-      transform(m, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+      const e = entity(handle);
+      if (e.model) engine.models.whenLoaded(e, () => fit(handle, measured(handle), x, y, z, width, height, depth, uniform));
+      else fit(handle, mesh(handle).bounds, x, y, z, width, height, depth, uniform);
     },
     flipmesh(handle)
     {
-      const m = mesh(handle);
-      for (const s of m.surfaces)
-      {
-        for (let k = 0; k < s.normals.length; k++) s.normals[k] = -s.normals[k];
-        const t = s.triangles;
-        for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
-      }
-      m.touch();
+      reshape(handle, (m) => flip(m));
     },
     addmesh(source, dest)
     {
