@@ -4,6 +4,16 @@
 
 let nextTextureId = 1;
 
+// Texture flags, with Blitz3D's values.
+export const TEX_COLOR = 1;
+export const TEX_ALPHA = 2;       // the alpha channel blends with what is behind
+export const TEX_MASKED = 4;      // black pixels (and alpha below a half) are not drawn
+export const TEX_MIPMAP = 8;      // always on here
+export const TEX_CLAMPU = 16;
+export const TEX_CLAMPV = 32;
+export const TEX_SPHEREMAP = 64;
+export const TEX_CUBEMAP = 128;
+
 export class Texture
 {
   constructor(width = 0, height = 0)
@@ -24,6 +34,27 @@ export class Texture
     this.wrapU = 'repeat';
     this.wrapV = 'repeat';
     this.nearest = this.pixels !== null;
+    this.flags = TEX_COLOR;
+  }
+
+  // Sets the Blitz3D texture flags (TEX_* above).
+  setFlags(flags)
+  {
+    this.flags = flags;
+    this.wrapU = flags & TEX_CLAMPU ? 'clamp' : 'repeat';
+    this.wrapV = flags & TEX_CLAMPV ? 'clamp' : 'repeat';
+    this.version++;
+    return this;
+  }
+
+  get alpha()
+  {
+    return (this.flags & TEX_ALPHA) !== 0;
+  }
+
+  get masked()
+  {
+    return (this.flags & TEX_MASKED) !== 0;
   }
 
   fill(r, g, b, a = 255)

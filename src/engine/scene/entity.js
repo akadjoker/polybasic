@@ -27,11 +27,19 @@ export class Entity
     this.scale = new Vec3(1, 1, 1);
     this.visible = true;
     this.order = 0;         // draw order: lower first; cameras render in this order
+    // Shadows (for lights that cast them): does it cast one, and do the
+    // others fall on it? EntityFX FX_NOSHADOWCAST / FX_NOSHADOWRECV.
+    this.castShadow = true;
+    this.receiveShadow = true;
     this.alive = true;
     this.mesh = null;
     this.materials = [];
     this.camera = null;
     this.light = null;
+    this.sprite = null;     // a sprite's settings (scene/sprite.js); its mesh is the square
+    this.decal = false;     // made by CreateDecal: other decals do not stick to it
+    this.trail = null;      // a ribbon trail (scene/trail.js): its mesh is rebuilt every step
+    this.grass = null;      // a field of grass (scene/grass.js), for entities of kind 'grass'
     // Picking and collisions (src/engine/collide): how the entity is seen
     // by rays and by moving spheres.
     this.pickMode = 0;        // 0 none, 1 sphere, 2 polygon, 3 box

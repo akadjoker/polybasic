@@ -4,7 +4,7 @@
 //   before main:        prepare() loads what the program needs (physics)
 //   when it stops:      stop() releases the physics world and silences the sound
 //   after main:         whenReady() waits for the files main started loading
-//   every Update step:  input.sample()  ->  Update()  ->  endStep() (animations, physics, collisions, 3D sound)
+//   every Update step:  input.sample()  ->  Update()  ->  endStep() (animations, physics, collisions, 3D sound, trails)
 //   every frame:        world matrices + backend.render()  ->  Draw() on the overlay
 //
 // It is platform-neutral. src/engine/browser.js builds one with the three.js
@@ -55,6 +55,7 @@ export class Engine
     this.models = new Models(this);
     this.steps = 0;
     this.audio = new Audio(this, options.audio || new NullAudio());
+    this.trails = [];
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -210,6 +211,8 @@ export class Engine
     this.physics.step(STEP_MS / 1000);
     this.collisions.update();
     this.audio.step();
+    this.trails = this.trails.filter((t) => t.entity.alive);
+    for (const t of this.trails) t.update(STEP_MS / 1000);
   }
 
   // The program stopped (for whatever reason): let go of what only a
@@ -223,6 +226,8 @@ export class Engine
   renderFrame()
   {
     const frame = this.world.buildFrame(this.width, this.height);
+    // Seconds of simulated time, for what moves on its own (grass in the wind).
+    frame.time = this.steps * STEP_MS / 1000;
     this.backend.render(frame);
     this.frames++;
     const now = this.now();

@@ -36,8 +36,11 @@ import { nodeEngineOptions } from '../src/node.js';
 import { projectPoint } from '../src/engine/collide/camera.js';
 import { hear } from '../src/engine/audio/spatial.js';
 import { Mat4, Vec3, Quat } from '../src/engine/math/index.js';
+import { World } from '../src/engine/scene/world.js';
 import { makeWav } from './unit/audio.mjs';
 import { projectPage } from '../web/export.js';
+import { crc32 } from '../web/zip.js';
+import { deflateSync } from 'node:zlib';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 // Screenshots of every run go to tests/output (not committed); the ones in
@@ -82,8 +85,12 @@ function startServer()
 const results = [];
 const facts = {};
 
+// ONLY=text runs just the checks whose name has that text in it.
+const ONLY = process.env.ONLY || '';
+
 async function check(name, fn)
 {
+  if (ONLY && !name.includes(ONLY)) return;
   const started = Date.now();
   try
   {
@@ -110,7 +117,9 @@ async function openPage(browser, url, viewport = { width: 1000, height: 750 })
   page.consoleErrors = [];
   page.on('console', (m) =>
   {
-    if (m.type() === 'error') page.consoleErrors.push(m.text());
+    // three.js reports what it had to change (a removed setting, a bad
+    // texture) as warnings: those are errors of ours too.
+    if (m.type() === 'error' || (m.type() === 'warning' && m.text().startsWith('THREE.'))) page.consoleErrors.push(m.text());
   });
   page.on('pageerror', (e) => page.consoleErrors.push(e.message));
   await page.goto(url);
@@ -123,6 +132,34 @@ async function openPage(browser, url, viewport = { width: 1000, height: 750 })
 // their ratio is the balance even while the sound fades), and `pitch`, the
 // strongest frequency in Hz (the median of the readings). `where` is
 // 'playground' or 'page' (an exported page).
+// A PNG file of a size x size black and white checker.
+function checkerPng(size)
+{
+  const chunk = (type, data) =>
+  {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, 'latin1');
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)), 8 + data.length);
+    return out;
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header.set([8, 2, 0, 0, 0], 8);       // 8 bits, RGB
+  const rows = Buffer.alloc(size * (1 + size * 3));
+  for (let y = 0; y < size; y++)
+  {
+    for (let x = 0; x < size; x++)
+    {
+      const v = (x + y) % 2 === 0 ? 0 : 255;
+      rows.fill(v, y * (1 + size * 3) + 1 + x * 3, y * (1 + size * 3) + 4 + x * 3);
+    }
+  }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', deflateSync(rows)), chunk('IEND', Buffer.alloc(0))]);
+}
+
 // Each reading covers the last 8192 samples (about 170 ms): wait this long
 // after a change before measuring what came after it.
 const SETTLE_MS = 250;
@@ -1076,14 +1113,15 @@ End Function
       assert(!/error/i.test(status), `${entry.id}: status "${status}"`);
       const consoleText = await playground.textContent('#console');
       assert(!/error/i.test(consoleText), `${entry.id}: console says ${consoleText}`);
-      if (entry.category === '3d')
+      // The language examples print to the console; all the others draw.
+      if (entry.category === 'language')
       {
-        const s = await pgStats();
-        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
+        await playground.waitForFunction(() => document.getElementById('console').textContent.trim().length > 0, null, { timeout: 10000 });
       }
       else
       {
-        await playground.waitForFunction(() => document.getElementById('console').textContent.trim().length > 0, null, { timeout: 10000 });
+        const s = await pgStats();
+        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
       }
       if (entry.id === 'spin' || entry.id === 'orbits') await playground.screenshot({ path: join(SHOTS, `playground-${entry.id}.png`) });
     }
@@ -1147,6 +1185,803 @@ End Function
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('texture flags: masked leaves out black pixels, alpha blends with what is behind', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A camera looking straight down at a textured square, over red.
+    const scene = (texture) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 255, 0, 0
+PositionEntity cam, 0, 6, 0
+RotateEntity cam, 90, 0, 0
+square = CreatePlane()
+ScaleEntity square, 3, 1, 3
+EntityFX square, FX_FULLBRIGHT
+${texture}
+EntityTexture square, tex
+Function Update()
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    const checker = (flags) => `tex = CreateTexture(8, 8, 255, 255, 255, ${flags})
+For y = 0 To 7 : For x = 0 To 7
+  If (x + y) Mod 2 = 0 Then TexturePixel tex, x, y, 0, 0, 0
+Next : Next`;
+    const half = (flags) => `tex = CreateTexture(4, 4, 255, 255, 255, ${flags})
+For y = 0 To 3 : For x = 0 To 3 : TexturePixel tex, x, y, 255, 255, 255, 128 : Next : Next`;
+    // How many pixels are black, white, red (the background) and pink (white
+    // half over red).
+    const count = async (texture) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(texture));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { black: 0, dark: 0, white: 0, red: 0, pink: 0 };
+        for (let i = 0; i < d.length; i += 4)
+        {
+          const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+          if (r < 60 && g < 60 && b < 60) n.dark++;
+          if (r < 20 && g < 20 && b < 20) n.black++;
+          else if (r > 235 && g > 235 && b > 235) n.white++;
+          else if (r > 235 && g < 20 && b < 20) n.red++;
+          else if (r > 235 && g > 100 && g < 215 && Math.abs(g - b) < 12) n.pink++;
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+    };
+    const plain = await count(checker('TEX_COLOR'));
+    const masked = await count(checker('TEX_MASKED'));
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'texture-masked.png') });
+    // The same checker as a loaded PNG file.
+    const png = `data:image/png;base64,${checkerPng(8).toString('base64')}`;
+    const loadedPlain = await count(`tex = LoadTexture("${png}")`);
+    const loadedMasked = await count(`tex = LoadTexture("${png}", TEX_MASKED)`);
+    const alpha = await count(half('TEX_ALPHA'));
+    const opaque = await count(half('TEX_COLOR'));
+    const text = JSON.stringify({ plain, masked, loadedPlain, loadedMasked, alpha, opaque }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    // A loaded image is smoothed (its black squares shade to grey), and all
+    // of it is drawn; masked, its black squares are holes, with no dark rim
+    // around them.
+    assert(Math.abs(loadedPlain.red - plain.red) < 0.01, `a loaded texture is not drawn whole: ${text}`);
+    assert(loadedMasked.red > loadedPlain.red + 0.1 && loadedMasked.dark < 0.005, `a loaded masked texture: ${text}`);
+    assert(plain.black > 0.1 && plain.white > 0.1, `the checker is not drawn: ${text}`);
+    assert(masked.black < 0.005 && masked.white > 0.1 && masked.red > plain.red + 0.1, `masked black pixels still drawn: ${text}`);
+    assert(alpha.pink > 0.2 && alpha.white < 0.01, `alpha does not blend: ${text}`);
+    assert(opaque.white > 0.2 && opaque.pink < 0.01, `without TEX_ALPHA the texture is not solid: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('EntityAlpha 0: not drawn, hides nothing behind it, still picked', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // Looking down on a see-through green floor, with an invisible square
+    // above it, drawn first (EntityOrder): were the square drawn at all, its
+    // depth would hide the floor.
+    const scene = (alpha) => `Graphics3D 640, 480
+Global cam, square
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 255
+PositionEntity cam, 0, 6, 0
+RotateEntity cam, 90, 0, 0
+floor = CreatePlane()
+ScaleEntity floor, 3, 1, 3
+EntityColor floor, 0, 255, 0
+EntityFX floor, FX_FULLBRIGHT
+EntityAlpha floor, 0.9
+square = CreatePlane()
+PositionEntity square, 0, 2, 0
+ScaleEntity square, 3, 1, 3
+EntityColor square, 255, 0, 0
+EntityFX square, FX_FULLBRIGHT
+EntityAlpha square, ${alpha}
+EntityOrder square, -1
+EntityPickMode square, PICK_POLYGON
+Function Update()
+  If FrameCount() = 1 Then Print "picked " + (CameraPick(cam, 320, 240) = square)
+End Function
+`;
+    const look = async (alpha) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(alpha));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('picked'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      const picked = (await page.textContent('#console')).includes('picked 1');
+      const colours = await page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { green: 0, red: 0, blue: 0 };
+        for (let i = 0; i < d.length; i += 4)
+        {
+          const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+          if (g > 180 && r < 60 && b < 60) n.green++;
+          else if (r > 100 && g < 60) n.red++;
+          else if (b > 200 && r < 40 && g < 40) n.blue++;
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+      return { picked, ...colours };
+    };
+    const faded = await look(0);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'alpha-zero.png') });
+    const half = await look(0.5);
+    const text = JSON.stringify({ faded, half }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    assert(faded.picked && half.picked, `the square is not picked: ${text}`);
+    assert(faded.green > 0.3 && faded.red === 0, `alpha 0 still covers the floor: ${text}`);
+    assert(half.red > 0.3, `alpha 0.5 is not drawn: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      alpha 0: green ${(faded.green * 100).toFixed(1)}%, red ${(faded.red * 100).toFixed(1)}%; alpha 0.5: red ${(half.red * 100).toFixed(1)}%`);
+  });
+
+  await check('sprites: they face the camera by view mode, and a loaded one glows', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const png = `data:image/png;base64,${checkerPng(8).toString('base64')}`;
+    // A sprite 6 units ahead of a camera turned by `turn`, over grey.
+    const scene = (turn, lines, grey = 128) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, ${grey}, ${grey}, ${grey}
+RotateEntity cam, ${turn}
+s = CreateSprite()
+PositionEntity s, 0, 0, 6
+${lines}
+Function Update()
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    // The white pixels: how many, and how much of their bounding box they
+    // fill (a square facing the screen fills all of it). Also black ones.
+    const look = async (text) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        let n = 0;
+        let black = 0;
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -1;
+        let y1 = -1;
+        for (let y = 0; y < copy.height; y++)
+        {
+          for (let x = 0; x < copy.width; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            if (d[i] < 20 && d[i + 1] < 20 && d[i + 2] < 20) black++;
+            if (d[i] < 245 || d[i + 1] < 245 || d[i + 2] < 245) continue;
+            n++;
+            x0 = Math.min(x0, x);
+            y0 = Math.min(y0, y);
+            x1 = Math.max(x1, x);
+            y1 = Math.max(y1, y);
+          }
+        }
+        const box = n ? (x1 - x0 + 1) * (y1 - y0 + 1) : 1;
+        // The middle of the screen, inside a sprite 6 units ahead: its
+        // darkest pixel and its mean brightness.
+        let min = 255;
+        let sum = 0;
+        let count = 0;
+        for (let y = Math.round(copy.height * 0.42); y < copy.height * 0.58; y++)
+        {
+          for (let x = Math.round(copy.width * 0.44); x < copy.width * 0.56; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            const v = (d[i] + d[i + 1] + d[i + 2]) / 3;
+            min = Math.min(min, v);
+            sum += v;
+            count++;
+          }
+        }
+        return { white: n / (d.length / 4), fill: n / box, black: black / (d.length / 4), min, mean: sum / count };
+      });
+    };
+    // Turned camera: the sprite is put where the camera looks.
+    const ahead = (turn) => `cam2 = CreatePivot()
+RotateEntity cam2, ${turn}
+MoveEntity cam2, 0, 0, 6
+PositionEntity s, EntityX(cam2), EntityY(cam2), EntityZ(cam2)`;
+    const tilted = await look(scene('30, 20, 25', ahead('30, 20, 25')));
+    const upright = await look(scene('40, 0, 0', ahead('40, 0, 0') + '\nSpriteViewMode s, 4'));
+    const facing = await look(scene('40, 0, 0', ahead('40, 0, 0')));
+    const behind1 = await look(scene('0, 180, 0', 'PositionEntity s, 0, 0, -6'));
+    const behind2 = await look(scene('0, 180, 0', 'PositionEntity s, 0, 0, -6\nSpriteViewMode s, 2'));
+    const glow = await look(scene('0, 0, 0', `FreeEntity s\ns = LoadSprite("${png}")\nPositionEntity s, 0, 0, 6`, 60));
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'sprite-glow.png') });
+    const plain = await look(scene('0, 0, 0', `FreeEntity s\ns = LoadSprite("${png}")\nPositionEntity s, 0, 0, 6\nEntityBlend s, 1`, 60));
+    const text = JSON.stringify({ tilted, upright, facing, behind1, behind2, glow, plain }, (k, v) => (typeof v === 'number' ? +v.toFixed(3) : v));
+    assert(tilted.white > 0.02 && tilted.fill > 0.97, `mode 1 is not a square facing the screen: ${text}`);
+    assert(facing.fill > 0.97 && upright.white > 0.02 && upright.fill < 0.95, `mode 4 does not stand upright: ${text}`);
+    assert(behind1.white > 0.02 && behind2.white < 0.001, `seen from behind, mode 1 shows and mode 2 does not: ${text}`);
+    // Adding: black adds nothing, so nothing is darker than the grey behind;
+    // blending normally, the black squares are drawn.
+    assert(glow.min >= 55 && plain.min < 50 && glow.mean > plain.mean + 30, `a loaded sprite does not glow: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('built meshes: vertex colours with FX_VERTEXCOLOR, and changes show on the next frame', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A square 5 units ahead filling most of the view; its corners red,
+    // green, blue and white. At frame 20 its top-left corner moves away.
+    const scene = (fx) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+Global m, s
+m = CreateMesh()
+s = CreateSurface(m)
+AddVertex s, -2, 2, 5 : AddVertex s, 2, 2, 5 : AddVertex s, 2, -2, 5 : AddVertex s, -2, -2, 5
+AddTriangle s, 0, 1, 2 : AddTriangle s, 0, 2, 3
+VertexColor s, 0, 255, 0, 0
+VertexColor s, 1, 0, 255, 0
+VertexColor s, 2, 0, 0, 255
+VertexColor s, 3, 255, 255, 255
+EntityFX m, ${fx}
+Function Update()
+  If FrameCount() = 1 Then Print "first"
+  If FrameCount() = 20
+    VertexCoords s, 0, -2, 2, 50
+    Print "moved"
+  EndIf
+End Function
+`;
+    // The colour a little inside each corner of the square on screen.
+    const corners = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const at = (fx, fy) => Array.from(ctx.getImageData(Math.round(canvas.width * fx), Math.round(canvas.height * fy), 1, 1).data.slice(0, 3));
+      // 4 units wide at 5 ahead, with 60 degrees of view up and down and a
+      // 4:3 screen: the square spans x 0.24..0.76 and y 0.154..0.846.
+      return { tl: at(0.255, 0.17), tr: at(0.745, 0.17), br: at(0.745, 0.83), bl: at(0.255, 0.83) };
+    });
+    const run = async (text, mark) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction((t) => document.getElementById('console').textContent.includes(t), mark, { timeout: 10000 });
+      await page.waitForTimeout(250);
+    };
+    await run(scene('FX_FULLBRIGHT Or FX_VERTEXCOLOR'), 'first');
+    const coloured = await corners();
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'mesh-colours.png') });
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('moved'), null, { timeout: 10000 });
+    await page.waitForTimeout(250);
+    const moved = await corners();
+    await run(scene('FX_FULLBRIGHT'), 'first');
+    const plain = await corners();
+    const text = JSON.stringify({ coloured, moved, plain });
+    const is = (c, r, g, b) => Math.abs(c[0] - r) < 60 && Math.abs(c[1] - g) < 60 && Math.abs(c[2] - b) < 60;
+    assert(is(coloured.tl, 255, 0, 0) && is(coloured.tr, 0, 255, 0) && is(coloured.br, 0, 0, 255) && is(coloured.bl, 255, 255, 255), `vertex colours: ${text}`);
+    assert(Object.values(plain).every((c) => is(c, 255, 255, 255)), `without FX_VERTEXCOLOR the square is white: ${text}`);
+    // The moved corner is 50 ahead now: the top-left is no longer covered.
+    assert(is(moved.tl, 0, 0, 0) && is(moved.br, 0, 0, 255), `the change did not show: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('decals: drawn on the surface, near and far, with no flicker', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A red decal on a grey floor, seen from `distance` away at a low
+    // angle; the camera circles, so the depth changes every frame.
+    const scene = (distance, pitch) => `Graphics3D 640, 480
+Global cam, pivot
+floor = CreatePlane(4)
+ScaleEntity floor, 200, 1, 200
+EntityColor floor, 120, 120, 120
+EntityFX floor, FX_FULLBRIGHT
+size# = ${distance} / 2.5
+d = CreateDecal(0, 0, 0, 0, 0, 1, 0, size)
+EntityColor d, 255, 0, 0
+EntityFX d, FX_FULLBRIGHT
+pivot = CreatePivot()
+cam = CreateCamera(pivot)
+CameraRange cam, 0.1, 1000
+RotateEntity cam, ${pitch}, 0, 0
+MoveEntity cam, 0, 0, -${distance}
+Function Update()
+  TurnEntity pivot, 0, 1, 0
+  If FrameCount() = 1 Then Print "drawn"
+End Function
+`;
+    // The middle of the screen, over several frames: every reading must be
+    // the decal's red (flicker shows as grey floor breaking through).
+    const middle = async (distance, pitch) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(distance, pitch));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('drawn'), null, { timeout: 10000 });
+      const readings = [];
+      for (let i = 0; i < 12; i++)
+      {
+        await page.waitForTimeout(60);
+        readings.push(await page.evaluate(() =>
+        {
+          const canvas = window.polybasicPlayground.getScreen().canvas;
+          const copy = document.createElement('canvas');
+          copy.width = canvas.width;
+          copy.height = canvas.height;
+          const ctx = copy.getContext('2d');
+          ctx.drawImage(canvas, 0, 0);
+          const d = ctx.getImageData(Math.round(canvas.width * 0.49), Math.round(canvas.height * 0.49), Math.round(canvas.width * 0.02), Math.round(canvas.height * 0.02)).data;
+          let red = 0;
+          for (let i = 0; i < d.length; i += 4) if (d[i] > 200 && d[i + 1] < 60 && d[i + 2] < 60) red++;
+          return red / (d.length / 4);
+        }));
+      }
+      return Math.min(...readings);
+    };
+    const near = await middle(8, 30);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'decal.png') });
+    const far = await middle(300, 12);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'decal-far.png') });
+    assert(near > 0.99 && far > 0.99, `decal not solid over the floor: near ${near}, far ${far}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('trails: a swung blade leaves a glowing ribbon that fades away', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    await project(page, (x) => window.polybasicPlayground.setText(x), `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+PositionEntity cam, 0, 0, -6
+Global hilt, tip, t
+hilt = CreatePivot()
+tip = CreatePivot(hilt)
+PositionEntity tip, 0, 2.5, 0
+base = CreatePivot(hilt)
+PositionEntity base, 0, 1, 0
+t = CreateTrail(base, tip)
+TrailLife t, 0.4
+TrailColor t, 60, 200, 255
+Function Update()
+  TurnEntity hilt, 0, 0, 8
+  If FrameCount() = 60 Then Print "swinging"
+  If FrameCount() = 90
+    TrailEmit t, False
+    Print "stopped"
+  EndIf
+End Function
+`);
+    const cyan = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+      let n = 0;
+      let bright = 0;
+      for (let i = 0; i < d.length; i += 4)
+      {
+        if (d[i + 2] > 40 && d[i + 2] > d[i]) n++;
+        if (d[i + 2] > 200 && d[i + 1] > 150) bright++;
+      }
+      return { lit: n / (d.length / 4), bright: bright / (d.length / 4) };
+    });
+    await project(page, () => window.polybasicPlayground.run());
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('swinging'), null, { timeout: 10000 });
+    const swinging = await cyan();
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'trail.png') });
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('stopped'), null, { timeout: 10000 });
+    await page.waitForTimeout(800);
+    const faded = await cyan();
+    assert(swinging.lit > 0.02 && swinging.bright > 0.002, `no ribbon: ${JSON.stringify(swinging)}`);
+    assert(faded.lit < 0.0005, `the ribbon did not fade: ${JSON.stringify(faded)}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ribbon covers ${(swinging.lit * 100).toFixed(1)}% of the screen while swinging, ${(faded.lit * 100).toFixed(2)}% after`);
+  });
+
+  await check('trees: bark and cut-out leaves drawn, with their shadows on the ground', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const scene = (shadows) => `Graphics3D 800, 600
+cam = CreateCamera()
+CameraClsColor cam, 150, 190, 230
+PositionEntity cam, 0, 4, -14
+RotateEntity cam, 8, 0, 0
+ground = CreatePlane(4)
+ScaleEntity ground, 40, 1, 40
+EntityColor ground, 110, 150, 80
+sun = CreateLight()
+RotateEntity sun, 50, -30, 0
+LightShadows sun, ${shadows}, 40
+AmbientLight 110, 110, 120
+oak = CreateTree(TREE_OAK)
+PositionEntity oak, -6, 0, 2
+willow = CreateTree(TREE_WILLOW)
+PositionEntity willow, 0, 0, 2
+beech = CreateTree(TREE_BEECH)
+PositionEntity beech, 6, 0, 2
+Function Update()
+  If FrameCount() = 1 Then Print "grown"
+End Function
+`;
+    const look = async (shadows) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(shadows));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('grown'), null, { timeout: 20000 });
+      await page.waitForTimeout(400);
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        const n = { leaves: 0, bark: 0, shade: 0 };
+        for (let y = 0; y < copy.height; y++)
+        {
+          for (let x = 0; x < copy.width; x++)
+          {
+            const i = (y * copy.width + x) * 4;
+            const [r, g, b] = [d[i], d[i + 1], d[i + 2]];
+            // Leaves above the horizon (against the sky), bark brown,
+            // shaded ground below it much darker than the lit green.
+            if (y < copy.height * 0.44 && g > r + 15 && g > b + 15) n.leaves++;
+            if (r > g && g > b && r - b > 15 && r < 140) n.bark++;
+            if (y > copy.height * 0.46 && g > r && g < 120 && r < 90) n.shade++;
+          }
+        }
+        const total = d.length / 4;
+        for (const k of Object.keys(n)) n[k] = n[k] / total;
+        return n;
+      });
+    };
+    const lit = await look('True');
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'trees.png') });
+    const flat = await look('False');
+    const text = JSON.stringify({ lit, flat }, (k, v) => (typeof v === 'number' ? +v.toFixed(4) : v));
+    assert(lit.leaves > 0.02 && lit.bark > 0.003, `no trees: ${text}`);
+    assert(lit.shade > flat.shade + 0.005, `no tree shadows: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      leaves ${(lit.leaves * 100).toFixed(1)}%, bark ${(lit.bark * 100).toFixed(2)}%, shade ${(lit.shade * 100).toFixed(2)}% (without shadows ${(flat.shade * 100).toFixed(2)}%)`);
+  });
+
+  await check('grass: the wind moves it, and it leans away from what pushes through it', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    const scene = (wind, push) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 150, 190, 230
+PositionEntity cam, 0, 2.5, -5
+RotateEntity cam, 25, 0, 0
+ground = CreatePlane()
+ScaleEntity ground, 20, 1, 20
+EntityColor ground, 90, 120, 60
+EntityFX ground, FX_FULLBRIGHT
+meadow = CreateGrass()
+GrassSize meadow, 0.8
+EntityFX meadow, FX_FULLBRIGHT
+PaintGrass meadow, 0, 1, 4, 600
+GrassWind meadow, ${wind}
+stone = CreatePivot()
+PositionEntity stone, 0, 0, 1
+GrassPush meadow, stone, ${push}
+Function Update()
+  If FrameCount() = 20 Then Print "first"
+  If FrameCount() = 50 Then Print "second"
+End Function
+`;
+    const pixels = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      return Array.from(ctx.getImageData(0, 0, copy.width, copy.height).data);
+    });
+    const differ = (a, b) =>
+    {
+      let n = 0;
+      for (let i = 0; i < a.length; i += 4) if (Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]) > 30) n++;
+      return n / (a.length / 4);
+    };
+    // Two moments of one run.
+    const twice = async (wind, push) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), scene(wind, push));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('first'), null, { timeout: 60000 });
+      const a = await pixels();
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('second'), null, { timeout: 60000 });
+      const b = await pixels();
+      return [a, b];
+    };
+    const [windA, windB] = await twice(1, 0);
+    const [stillA, stillB] = await twice(0, 0);
+    const [pushed] = await twice(0, 2.5);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'grass-pushed.png') });
+    const moved = differ(windA, windB);
+    const calm = differ(stillA, stillB);
+    const push = differ(stillB, pushed);
+    const text = `wind moved ${(moved * 100).toFixed(2)}%, still ${(calm * 100).toFixed(3)}%, pushing changed ${(push * 100).toFixed(2)}%`;
+    assert(moved > 0.01 && calm < 0.0005, `the wind: ${text}`);
+    assert(push > 0.01, `the push: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${text}`);
+  });
+
+  await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // Where the box's shadow falls: from its centre along the sun's
+    // forward axis down to the ground.
+    const sunEntity = new World().createEntity('light');
+    sunEntity.setRotation(60, -35, 0, false);
+    const d = sunEntity.worldMatrix.e;
+    const t = -3 / d[9];
+    const spot = [d[8] * t, 0, 5 + d[10] * t];
+    const scene = (lighting, extra) => `Graphics3D 640, 480
+Global cam, box, ground
+cam = CreateCamera()
+PositionEntity cam, 0, 7, -5
+target = CreatePivot()
+PositionEntity target, 0, 0, 5
+PointEntity cam, target
+ground = CreatePlane(8)
+ScaleEntity ground, 12, 1, 12
+EntityColor ground, 210, 210, 210
+box = CreateCube()
+PositionEntity box, 0, 3, 5
+EntityColor box, 230, 80, 60
+AmbientLight 50, 50, 50
+${lighting}
+${extra}
+Function Update()
+  If FrameCount() = 1
+    CameraProject cam, ${spot.join(', ')}
+    Print "shade " + ProjectedX() + " " + ProjectedY()
+    CameraProject cam, 0, 0, 5
+    Print "under " + ProjectedX() + " " + ProjectedY()
+    CameraProject cam, 4, 0, 1
+    Print "lit " + ProjectedX() + " " + ProjectedY()
+  EndIf
+End Function
+`;
+    const sun = 'sun = CreateLight()\nRotateEntity sun, 60, -35, 0';
+    const lamp = 'lamp = CreateLight(LIGHT_POINT)\nPositionEntity lamp, 0, 8, 5\nLightRange lamp, 40';
+    // Brightness of the ground at two points: in the shadow and in the open.
+    const measure = async (text, where) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('lit'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      const log = await consoleText(page);
+      const point = (name) => /(-?[\d.]+) (-?[\d.]+)/.exec(log.slice(log.indexOf(name) + name.length)).slice(1).map(Number);
+      const levels = await page.evaluate(([a, b]) =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const at = ([x, y]) =>
+        {
+          const px = ctx.getImageData(Math.round(x * canvas.width / 640), Math.round(y * canvas.height / 480), 1, 1).data;
+          return (px[0] + px[1] + px[2]) / 3;
+        };
+        return [at(a), at(b)];
+      }, [point(where), point('lit')]);
+      return levels[0] / levels[1];
+    };
+    const ratios = {
+      sun: await measure(scene(sun, 'LightShadows sun'), 'shade'),
+      off: await measure(scene(sun, ''), 'shade'),
+      noCast: await measure(scene(sun, 'LightShadows sun\nEntityFX box, FX_NOSHADOWCAST'), 'shade'),
+      noReceive: await measure(scene(sun, 'LightShadows sun\nEntityFX ground, FX_NOSHADOWRECV'), 'shade'),
+      lamp: await measure(scene(lamp, 'LightShadows lamp'), 'under'),
+      lampOff: await measure(scene(lamp, ''), 'under')
+    };
+    await measure(scene(sun, 'LightShadows sun'), 'shade');
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'shadows.png') });
+
+    // A masked card's shadow has its holes: less of the ground is shaded
+    // than under the same card solid.
+    const card = (flags) => `Graphics3D 640, 480
+cam = CreateCamera()
+PositionEntity cam, 0, 7, -4
+target = CreatePivot()
+PositionEntity target, 0, 0, 3
+PointEntity cam, target
+ground = CreatePlane(8)
+ScaleEntity ground, 10, 1, 10
+EntityColor ground, 220, 220, 220
+tex = CreateTexture(8, 8, 60, 160, 60, ${flags})
+For y = 0 To 7 : For x = 0 To 7
+  If (x + y) Mod 2 = 0 Then TexturePixel tex, x, y, 0, 0, 0
+Next : Next
+card = CreatePlane()
+ScaleEntity card, 2, 1, 2
+PositionEntity card, 0, 2.5, 3
+EntityTexture card, tex
+EntityFX card, FX_TWOSIDED
+sun = CreateLight()
+RotateEntity sun, 70, -20, 0
+LightShadows sun, True, 20
+AmbientLight 70, 70, 70
+Function Update()
+  If FrameCount() = 1 Then Print "lit"
+End Function
+`;
+    const shaded = async (flags) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), card(flags));
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('lit'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      // Grey ground in shadow: the same on all three channels, and dark.
+      return page.evaluate(() =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const d = ctx.getImageData(0, 0, copy.width, copy.height).data;
+        let n = 0;
+        for (let i = 0; i < d.length; i += 4)
+        {
+          if (d[i] > 30 && d[i] < 120 && Math.abs(d[i] - d[i + 1]) < 6 && Math.abs(d[i] - d[i + 2]) < 6) n++;
+        }
+        return n / (d.length / 4);
+      });
+    };
+    const solidShadow = await shaded('TEX_COLOR');
+    const maskedShadow = await shaded('TEX_MASKED');
+    ratios.cutOut = maskedShadow / solidShadow;
+    const text = Object.entries(ratios).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(', ');
+    assert(ratios.sun < 0.6 && ratios.lamp < 0.6, `no shadow where it should fall: ${text}`);
+    assert(ratios.cutOut > 0.3 && ratios.cutOut < 0.8, `a masked card's shadow is not cut out (masked / solid shaded ground): ${text}`);
+    for (const name of ['off', 'noCast', 'noReceive'])
+    {
+      assert(ratios[name] > 0.9, `a shadow that should not be there (${name}): ${text}`);
+    }
+    // The point light is right above the spot, the open ground further off:
+    // without shadows the spot is at least as bright.
+    assert(ratios.lampOff > 0.9, `lamp without shadows: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+    facts.shadows = `shadow / open ground: ${text}`;
+    console.log(`      ${facts.shadows}`);
+  });
+
+  await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/meadow.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const walker = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+      const p = e.worldPosition();
+      return { x: p.x, y: p.y, z: p.z };
+    });
+    const start = await walker();
+    const scene = await page.evaluate(() =>
+    {
+      const world = window.polybasicPlayer.state.engine.world;
+      const grass = world.entities.find((e) => e.grass);
+      return {
+        tufts: grass.grass.count,
+        pushers: grass.grass.pushers.length,
+        trees: world.entities.filter((e) => e.name === 'twigs').length,
+        shadows: world.entities.filter((e) => e.kind === 'light' && e.light.shadows > 0).length
+      };
+    });
+    assert(scene.tufts === 5000 && scene.pushers === 1, `grass: ${JSON.stringify(scene)}`);
+    assert(scene.trees === 11 && scene.shadows === 1, `trees and sun: ${JSON.stringify(scene)}`);
+
+    // Walk forward, on the ground, over the hills. Wait on the game, not
+    // the clock: software WebGL draws this scene slowly.
+    await page.keyboard.down('ArrowUp');
+    try
+    {
+      await page.waitForFunction((s) =>
+      {
+        const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.kind === 'pivot' && x.radiusY === 0.55);
+        return e.worldPosition().z > s.z + 1;
+      }, start, { timeout: 60000 });
+    }
+    finally
+    {
+      await page.keyboard.up('ArrowUp');
+    }
+    const after = await walker();
+    // Standing on the hills: the ellipsoid's centre 0.55 over the ground.
+    const ground = (x, z) => 1.2 * Math.sin(x * 14 * Math.PI / 180) * Math.cos(z * 11.5 * Math.PI / 180) + 0.6 * Math.sin((x + z) * 7.5 * Math.PI / 180);
+    assert(Math.abs(after.y - 0.55 - ground(after.x, after.z)) < 0.1, `the walker is not on the ground: ${JSON.stringify(after)}, ground ${ground(after.x, after.z).toFixed(3)}`);
+
+    // A click on the ground below the walker plants a flower there.
+    const box = await page.locator('canvas').first().boundingBox();
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.8);
+    await page.waitForFunction(() => window.polybasicPlayer.state.engine.world.entities.some((e) => e.decal), null, { timeout: 20000 });
+    const flower = await page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.decal);
+      return { triangles: e.mesh.indices.length / 3, y: e.worldPosition().y };
+    });
+    assert(flower.triangles > 0, `the flower has no triangles: ${JSON.stringify(flower)}`);
+
+    const trails = await page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.trail).map((e) => e.trail.samples.length));
+    assert(trails.length === 8 && trails.every((n) => n > 1), `firefly trails: ${JSON.stringify(trails)}`);
+    await page.waitForTimeout(500);
+    await page.screenshot({ path: join(SHOTS, 'meadow.png') });
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      walked ${start.z.toFixed(2)} -> ${after.z.toFixed(2)} at y ${after.y.toFixed(2)}, flower of ${flower.triangles} triangles, trail samples ${trails.join(' ')}`);
   });
 
   await check('sound: Web Audio plays made sounds and songs; a 3D sound comes from the side it is drawn on', async () =>

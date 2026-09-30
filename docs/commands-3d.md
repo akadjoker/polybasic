@@ -10,6 +10,11 @@ what the tests use).
 - [Cameras](#cameras)
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
+- [Sprites](#sprites)
+- [Trees](#trees)
+- [Grass](#grass)
+- [Ribbon trails](#ribbon-trails)
+- [Building meshes](#building-meshes)
 - [Looks](#looks)
 - [Textures](#textures)
 - [Moving and turning](#moving-and-turning)
@@ -82,7 +87,10 @@ that take an `isGlobal` flag work in world coordinates when it is `True`.
 | `CreateLight%(kind = LIGHT_DIRECTIONAL, parent = 0)` | A directional light shines along its entity's forward axis, like the sun: turn it with `RotateEntity`. A point light (`LIGHT_POINT`) shines in every direction from where it is. |
 | `LightColor light, r, g, b` | Colour and brightness (default white). |
 | `LightRange light, range#` | How far a point light reaches (default 10). |
+| `LightShadows light, on = True, area# = 40` | The light casts shadows (off by default). A directional light's shadows cover a square `area` units wide around what the camera looks at, moving with it: smaller is sharper, larger reaches further. A point light's reach as far as its `LightRange`. Every shape casts and receives shadows unless its `EntityFX` says otherwise. |
 | `AmbientLight r, g, b` | Light that comes from everywhere, so unlit sides are not black (default 64, 64, 64). |
+
+Try it: **Shadows** in the playground's Visual effects (`examples/shadows.pb`).
 
 ## Shapes and pivots
 
@@ -99,16 +107,183 @@ the same kind share their geometry, so a thousand cubes cost little.
 | `CreatePlane%(divisions = 1, parent = 0)` | A flat square in X and Z, facing up. |
 | `CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)` | A ring lying flat. |
 
+## Sprites
+
+A sprite is a square, -1..1 across, that turns to face the camera: smoke,
+sparks, flares, far-away trees. Sprites are lit by nothing (`FX_FULLBRIGHT`)
+and cast no shadow, as in Blitz3D; `EntityFX` changes both.
+
+| Command | What it does |
+|---------|--------------|
+| `CreateSprite%(parent = 0)` | A plain square (colour it with `EntityColor`, texture it with `EntityTexture`). |
+| `LoadSprite%(file$, flags = TEX_COLOR, parent = 0)` | A sprite with an image. With `TEX_COLOR` it glows (it adds to what is behind, so black shows nothing): fire, sparks. With `TEX_ALPHA` it blends, with `TEX_MASKED` it is cut out. |
+| `SpriteViewMode sprite, mode` | How it turns: 1 faces the camera (the default); 2 keeps the entity's own turn and is seen only from the front; 3 faces along the camera's view but keeps the entity's up; 4 stands upright and turns only with the camera's yaw (trees, posts). |
+| `RotateSprite sprite, angle#` | Turns it in its own plane, anticlockwise, in degrees. |
+| `ScaleSprite sprite, x#, y#` | Its width and height (1 is 2 units across). |
+| `HandleSprite sprite, x#, y#` | The point it hangs from, -1..1 across and up the square: `HandleSprite s, 0, -1` puts its bottom edge at the entity's position. |
+
+For picking, give a sprite `PICK_SPHERE` or `PICK_BOX`: rays do not know
+which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
+the entity is.
+
+Try it: **Sprites** in the playground's Visual effects (`examples/sprites.pb`).
+
+## Trees
+
+![Trees made by CreateTree, with their shadows](screenshots/trees.png)
+
+`CreateTree` grows a tree from numbers: a trunk that forks into branches,
+with cards of leaves at their tips. The bark and the leaves are drawn by
+code too, so no image file is needed. The trunk is the entity it returns;
+the leaves are a child entity named `"twigs"`, with a masked texture, so
+they cut their shape out of the light and cast leaf-shaped shadows.
+
+| Command | What it does |
+|---------|--------------|
+| `CreateTree%(kind = TREE_OAK, seed = 0, parent = 0)` | A tree of one kind: `TREE_OAK`, `TREE_WILLOW`, `TREE_SHRUB`, `TREE_ASH`, `TREE_POPLAR`, `TREE_SEQUOIA` or `TREE_BEECH`, standing on its entity's position. Another `seed` grows a different tree of the same kind; the same seed always the same one. |
+
+Retexture with `EntityTexture tree, bark` and
+`EntityTexture FindChild(tree, "twigs"), leaves` (a leaf texture is best
+`TEX_MASKED`: its black is left out). Growing a tree takes some tens of
+milliseconds; for a forest, grow one of each kind and `CopyEntity` it:
+copies share the meshes, so a hundred trees cost little more to keep than
+one. Sizes, in units: a shrub is about 1 high, an oak 8, a willow 6, an ash
+8, a poplar 13, a beech 10 and a sequoia 38; `ScaleEntity` to taste.
+
+Try it: **Trees** in the playground's Visual effects (`examples/trees.pb`).
+
+## Grass
+
+![Meadow (examples/meadow.pb): grass painted onto built hills, trees, shadows and fireflies with trails](screenshots/meadow.png)
+
+A field of grass is many tufts, each three crossed cards of blades, drawn
+all at once. The wind sways them, and things that walk through lean them
+aside, without the program doing anything each step: the tufts are placed
+once and the renderer bends them as it draws.
+
+```
+meadow = CreateGrass()
+PaintGrass meadow, 0, 0, 20, 5000, ground     ; 5000 tufts on `ground`, 20 around
+GrassPush meadow, player, 1                   ; the player parts the grass
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateGrass%(parent = 0)` | An empty field. Its tufts are placed in the field entity's own space, so moving the entity moves the field. |
+| `PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)` | Spreads `count` tufts evenly over a disc around x, z. With `onto` (an entity: a floor, a terrain, a model) each tuft stands where that entity's surface is below it, and none grows where there is none or where the ground is steeper than 60 degrees; without it they stand at the field's height 0. Returns how many were planted. |
+| `PlantGrass grass, x#, y#, z#, size# = 1` | One tuft there. |
+| `GrassSize grass, height#, width# = 0.6` | The size of a tuft (default 0.6 high); each tuft varies a little around it. |
+| `GrassWind grass, strength#` | How much the wind sways it: 0 none, 1 a breeze (default), more a gale. |
+| `GrassPush grass, entity, radius# = 1` | The grass within `radius` of the entity leans away from it (up to 8 entities; `GrassPush grass, 0` stops them all). |
+| `ClearGrass grass` `CountGrass%(grass)` | Removes every tuft; how many there are. |
+
+The blades are drawn by code (`EntityTexture` changes them: use a
+`TEX_MASKED` texture with the blades at the top); `EntityColor` tints them.
+Grass casts no shadow by default (`EntityFX` with no `FX_NOSHADOWCAST`
+turns it on, at a cost, and that shadow does not sway), and shadows fall on
+it. How many tufts a
+computer draws smoothly depends on its graphics card: start with a few
+thousand. (Measured in the test browser, which draws without a graphics
+card, 2000 tufts ran at 12 frames a second; a graphics card was not
+available to measure.)
+
+Try it: **Grass** in the playground's Visual effects (`examples/grass.pb`), and
+the **Meadow** example.
+
+## Ribbon trails
+
+A trail is the ribbon a moving blade leaves behind it: a sword's swing, a
+comet's tail, a jet's wake. The blade is two (or more) entities, often
+pivots on the thing that moves; after every step the ribbon grows where
+they went, smoothly between the points it samples, and fades with age.
+
+```
+hilt = CreatePivot(sword)
+point = CreatePivot(sword)
+PositionEntity point, 0, 2, 0
+trail = CreateTrail(hilt, point)
+TrailColor trail, 80, 200, 255
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateTrail%(first, second)` | A trail between two entities (the blade's two ends). It glows (adds to what is behind), lit by nothing and seen from both sides; `EntityTexture` puts a texture along it (U across the blade, V along the way it went), `EntityBlend` changes how it mixes. |
+| `TrailPoint trail, entity` | Adds a point to the blade (up to 8 in all), for a curved blade: the ribbon becomes a sheet through all of them. |
+| `TrailLife trail, seconds#` | How long the ribbon lasts behind the blade (default 0.35). |
+| `TrailStep trail, distance#` | How far the fastest point of the blade moves between samples (default 0.08 units): smaller follows fast turns more closely. |
+| `TrailSmooth trail, pieces` | Straight pieces between two samples along the curve (default 12). |
+| `TrailColor trail, r, g, b, alpha# = 1` | The colour at the head. |
+| `TrailFadeColor trail, r, g, b, alpha# = 0` | The colour it fades to (default: the head's colour, fully faded). |
+| `TrailEmit trail, on` | Stops (or starts again) growing; what is there fades away. |
+| `ClearTrail trail` | Removes the ribbon at once. |
+
+Try it: **Ribbon trails** in the playground's Visual effects (`examples/trails.pb`).
+
+## Building meshes
+
+A mesh is made of **surfaces**, and a surface of **vertices** (corners,
+numbered from 0 as they are added) and **triangles** (three vertices each).
+Build shapes of your own, or change any mesh, the built-in shapes and
+model parts too: a shape shares its geometry with all the others of its
+kind, so the first change gives it a copy of its own. `CopyEntity` of a
+built (or already changed) mesh shares it with the copy, so changing one
+changes both; `CopyMesh` always makes a separate one. Built meshes are drawn, picked, collide and take physics
+bodies like any other.
+
+A triangle is seen from the side where its corners run clockwise.
+
+```
+m = CreateMesh()
+s = CreateSurface(m)
+v0 = AddVertex(s, -1, 1, 0, 0, 0)     ; x, y, z, then the texture's u, v
+v1 = AddVertex(s, 1, 1, 0, 1, 0)
+v2 = AddVertex(s, 1, -1, 0, 1, 1)
+v3 = AddVertex(s, -1, -1, 0, 0, 1)
+AddTriangle s, v0, v1, v2
+AddTriangle s, v0, v2, v3
+UpdateNormals m                       ; work out how light falls on it
+```
+
+| Command | What it does |
+|---------|--------------|
+| `CreateMesh%(parent = 0)` | An empty mesh entity. |
+| `CreateSurface%(mesh)` | A new, empty surface of the mesh. |
+| `CountSurfaces%(mesh)` `GetSurface%(mesh, index)` | Its surfaces, numbered from 1. |
+| `AddVertex%(surface, x#, y#, z#, u# = 0, v# = 0, w# = 1)` | Adds a corner; returns its number. (`w` is accepted for Blitz3D programs and not used.) |
+| `AddTriangle%(surface, v0, v1, v2)` | Adds a triangle of three corners; returns its number. |
+| `VertexCoords surface, index, x#, y#, z#` | Moves a corner. |
+| `VertexNormal surface, index, nx#, ny#, nz#` | Sets the way a corner faces, for lighting. |
+| `VertexColor surface, index, r#, g#, b#, a# = 1` | A corner's colour (0 to 255) and alpha (0 to 1), shown with `EntityFX` `FX_VERTEXCOLOR` (and the alpha with `FX_VERTEXALPHA`). |
+| `VertexTexCoords surface, index, u#, v#, w# = 1, set = 0` | A corner's place on the texture. Only set 0 exists. |
+| `CountVertices%(surface)` `CountTriangles%(surface)` | How many. |
+| `VertexX#` `VertexY#` `VertexZ#` `VertexNX#` `VertexNY#` `VertexNZ#` `VertexU#` `VertexV#` `(surface, index)` | Read a corner back. |
+| `VertexRed#` `VertexGreen#` `VertexBlue#` `VertexAlpha#` `(surface, index)` | Its colour. |
+| `TriangleVertex%(surface, triangle, corner)` | The vertex at corner 0, 1 or 2 of a triangle. |
+| `ClearSurface surface, vertices = True, triangles = True` | Empties it. |
+| `UpdateNormals mesh` | Smooth lighting: each corner faces the average way of the triangles around it (corners at the same place share it). |
+| `ScaleMesh mesh, x#, y#, z#` `RotateMesh mesh, pitch#, yaw#, roll#` `PositionMesh mesh, x#, y#, z#` | Changes the mesh itself (not the entity): every vertex moves. |
+| `FitMesh mesh, x#, y#, z#, width#, height#, depth#, uniform = False` | Scales and moves the mesh to fill that box; `uniform` keeps its proportions. |
+| `FlipMesh mesh` | Turns every triangle to face the other way. |
+| `AddMesh source, dest` | Adds copies of `source`'s surfaces to `dest`. |
+| `CopyMesh%(mesh, parent = 0)` | A new entity with a copy of the mesh (and its look). |
+| `MeshWidth#(mesh)` `MeshHeight#(mesh)` `MeshDepth#(mesh)` | The size of the box around it. |
+
+Changes are cheap: the mesh is rebuilt once, when it is next drawn or
+used, however many vertices were added.
+
+Try it: **Building meshes** in the playground's Visual effects (`examples/meshes.pb`).
+
 ## Looks
 
 | Command | What it does |
 |---------|--------------|
 | `EntityColor entity, r, g, b` | The surface colour (default white). |
-| `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible. |
+| `EntityAlpha entity, alpha#` | 1 is solid, 0 invisible: not drawn at all (as in Blitz3D), so it hides nothing and casts no shadow, but it is still picked and still collides. |
 | `EntityShininess entity, shininess#` | 0 matte to 1 very shiny. |
-| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too). |
+| `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_VERTEXCOLOR` (uses the mesh's vertex colours), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_VERTEXALPHA` (the vertex colours' alpha blends), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
 | `EntityOrder entity, order` | Lower orders draw first (cameras too). |
+| `EntityBlend entity, blend` | How it mixes with what is behind: 1 by its alpha (the default), 2 multiplies (darkens: shade, stains), 3 adds (glows: fire, light). |
 
 Each entity has its own look: `CopyEntity` copies it, and changing the copy
 leaves the original alone.
@@ -117,13 +292,28 @@ leaves the original alone.
 
 | Command | What it does |
 |---------|--------------|
-| `LoadTexture%(file$)` | Starts loading a PNG or JPG and returns its handle at once. Nothing waits, but files started in the main body are in before the first `Update`. One loaded later shows the plain colour until its image arrives, usually a frame or two. The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
+| `LoadTexture%(file$, flags = TEX_COLOR)` | Starts loading a PNG or JPG and returns its handle at once. Nothing waits, but files started in the main body are in before the first `Update`. One loaded later shows the plain colour until its image arrives, usually a frame or two. The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
 | `TextureLoaded%(texture)` | 1 once the image is in. |
-| `CreateTexture%(width, height, r = 255, g = 255, b = 255)` | A texture filled with one colour, to paint on. |
+| `CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = TEX_COLOR)` | A texture filled with one colour, to paint on. |
 | `CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)` | A square checkerboard of `cells` x `cells` squares. |
-| `TexturePixel texture, x, y, r, g, b` | Paints one pixel of a created texture; (0, 0) is the top-left. |
+| `TexturePixel texture, x, y, r, g, b, a = 255` | Paints one pixel of a created texture; (0, 0) is the top-left. `a` is how solid it is (0 to 255), for textures with `TEX_ALPHA` or `TEX_MASKED`. |
 | `ScaleTexture texture, u#, v#` | Repeats the texture `u` times across and `v` times down. |
 | `FreeTexture texture` | Releases it. |
+
+**Texture flags** are Blitz3D's, added up:
+
+| Flag | Value | What it does |
+|------|-------|--------------|
+| `TEX_COLOR` | 1 | An ordinary texture (the default). |
+| `TEX_ALPHA` | 2 | The image's alpha (or `TexturePixel`'s `a`) blends the texture with what is behind it: glass, smoke. |
+| `TEX_MASKED` | 4 | Black pixels, and pixels less than half solid, are not drawn at all: leaves, fences, cut-out shapes. Their shadows are cut out too. |
+| `TEX_MIPMAP` | 8 | Accepted; textures are always mipmapped here. |
+| `TEX_CLAMPU` `TEX_CLAMPV` | 16 32 | The texture does not repeat across (U) or down (V): its edge pixels carry on. |
+
+Flags 256 and 512 (video memory, high colour) are accepted and mean
+nothing here; sphere and cube maps (64, 128) are not supported.
+
+Try it: **Texture flags** in the playground's Visual effects (`examples/textures.pb`).
 
 ## Moving and turning
 
@@ -223,6 +413,9 @@ mode are found, and hidden entities never are.
 | `PickedNX#()` `PickedNY#()` `PickedNZ#()` | The surface's direction there, facing back along the line. |
 | `PickedTime#()` `PickedDistance#()` | How far along the line (0 to 1), and the distance from its start. |
 | `CameraProject%(camera, x#, y#, z#)` | Puts a world point on the screen: 1 if it is in front of the camera, and then `ProjectedX#()` and `ProjectedY#()` are its pixel, `ProjectedZ#()` its distance in front. For labels over 3D things in `Draw`. |
+| `CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)` | Presses a square of `texture` (0 for none: colour it with `EntityColor`) `size` wide onto the surfaces at x, y, z, which face the way nx, ny, nz: a scorch mark, a bullet hole, a footprint. Use it after a pick: `CreateDecal(tex, PickedX(), PickedY(), PickedZ(), PickedNX(), PickedNY(), PickedNZ(), 0.5)`. `angle` turns it, anticlockwise. It is cut to the shapes it lies on (surfaces facing another way are left out), sits just over them without flickering, and is lit as they are. With `entity` it goes on that entity only and moves with it; otherwise on every shown mesh there, where it stays. It is an ordinary mesh entity: `EntityAlpha`, `EntityBlend`, `FreeEntity` work on it. |
+
+Try it: **Decals** in the playground's Visual effects (`examples/decals.pb`).
 
 ## Collisions
 
@@ -464,7 +657,10 @@ the top-left; text stays sharp at any page size.
 | `KEY_F1` ... `KEY_F12` | 112 ... 123 |
 | `MOUSE_LEFT` `MOUSE_RIGHT` `MOUSE_MIDDLE` | 1 2 3 |
 | `LIGHT_DIRECTIONAL` `LIGHT_POINT` | 1 2 |
-| `FX_FULLBRIGHT` `FX_FLAT` `FX_TWOSIDED` | 1 4 16 |
+| `FX_FULLBRIGHT` `FX_VERTEXCOLOR` `FX_FLAT` `FX_TWOSIDED` `FX_VERTEXALPHA` | 1 2 4 16 32 |
+| `FX_NOSHADOWCAST` `FX_NOSHADOWRECV` | 131072 262144 |
+| `TEX_COLOR` `TEX_ALPHA` `TEX_MASKED` `TEX_MIPMAP` `TEX_CLAMPU` `TEX_CLAMPV` | 1 2 4 8 16 32 |
+| `TREE_OAK` `TREE_WILLOW` `TREE_SHRUB` `TREE_ASH` `TREE_POPLAR` `TREE_SEQUOIA` `TREE_BEECH` | 1 to 7 |
 | `PICK_NONE` `PICK_SPHERE` `PICK_POLYGON` `PICK_BOX` | 0 1 2 3 |
 | `COLLIDE_SPHERE` `COLLIDE_POLYGON` `COLLIDE_BOX` | 1 2 3 |
 | `RESPONSE_STOP` `RESPONSE_SLIDE` `RESPONSE_SLIDE_NO_DOWNHILL` | 1 2 3 |

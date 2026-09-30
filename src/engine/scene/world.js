@@ -5,6 +5,7 @@
 import { Entity } from './entity.js';
 import { Material } from './material.js';
 import { Texture } from './texture.js';
+import { EditableMesh } from './editable.js';
 
 export class World
 {
@@ -30,7 +31,9 @@ export class World
     {
       e.camera = { fov: 60, near: 0.1, far: 1000, clearColor: [0, 0, 0], viewport: null };
     }
-    if (kind === 'light') e.light = { type: 1, color: [1, 1, 1], range: 10 };
+    // shadows: 0 casts none; otherwise, for a directional light, the size of
+    // the square around the camera its shadows cover.
+    if (kind === 'light') e.light = { type: 1, color: [1, 1, 1], range: 10, shadows: 0 };
     if (parent) e.setParent(parent, false);
     return e;
   }
@@ -73,6 +76,11 @@ export class World
     e.alive = false;
     this.handles.delete(e.id);
     this.freedEntities.push(e.id);
+    // A built mesh no other entity uses: its surfaces go too.
+    if (e.mesh instanceof EditableMesh && !this.entities.some((o) => o.mesh === e.mesh))
+    {
+      for (const s of e.mesh.surfaces) this.handles.delete(s.handle);
+    }
   }
 
   freeTexture(t)
@@ -92,10 +100,15 @@ export class World
     e.scale.copy(src.scale);
     e.visible = src.visible;
     e.order = src.order;
+    e.castShadow = src.castShadow;
+    e.receiveShadow = src.receiveShadow;
     e.mesh = src.mesh;
     e.materials = src.materials.map((m) => m.clone());
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.sprite = src.sprite ? { ...src.sprite } : null;
+    e.decal = src.decal;
+    e.grass = src.grass;    // a copy of a field shares its tufts, as meshes are shared
     e.pickMode = src.pickMode;
     e.obscurer = src.obscurer;
     e.collisionType = src.collisionType;
@@ -113,6 +126,24 @@ export class World
     return [...this.handles.values()].filter((h) => h instanceof Entity);
   }
 
+  // A field of grass for the frame: its tufts, and where what pushes it is
+  // now (world x, y, z and radius, four numbers each).
+  grassItem(e, world)
+  {
+    const g = e.grass;
+    const pushers = [];
+    g.pushers = g.pushers.filter((p) => p.entity.alive);
+    for (const p of g.pushers)
+    {
+      const w = p.entity.worldMatrix.e;
+      pushers.push(w[12], w[13], w[14], p.radius);
+    }
+    return {
+      id: e.id, order: e.order, world, mesh: g.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: null,
+      grass: { tufts: g.tufts, count: g.count, version: g.version, height: g.height, width: g.width, wind: g.wind, pushers }
+    };
+  }
+
   // Everything the backend needs to draw one frame. World matrices are
   // brought up to date here, once per frame.
   buildFrame(width, height)
@@ -126,7 +157,8 @@ export class World
       const world = e.worldMatrix.e;
       if (e.kind === 'camera') cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === 'mesh' && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials });
+      else if (e.kind === 'grass' && e.grass.count) items.push(this.grassItem(e, world));
+      else if (e.kind === 'mesh' && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);

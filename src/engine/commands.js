@@ -15,10 +15,20 @@ import {
   createCube, createSphere, createCylinder, createCone, createPlane, createTorus
 } from './scene/mesh.js';
 import { KEYS } from './input/input.js';
+import { createSpriteQuad, newSprite, SPRITE_FREE, SPRITE_UPRIGHT2 } from './scene/sprite.js';
+import { Trail, MAX_BLADE } from './scene/trail.js';
+import { buildTree, TREE_KINDS, TREE_OAK, TREE_WILLOW, TREE_SHRUB, TREE_ASH, TREE_POPLAR, TREE_SEQUOIA, TREE_BEECH } from './scene/tree.js';
+import { barkPixels, leafPixels } from './scene/tree-textures.js';
+import { Grass, createTuft, bladePixels, MAX_PUSHERS } from './scene/grass.js';
+import { Material } from './scene/material.js';
+import { rayOnto } from './collide/picking.js';
+import { Vec3 } from './math/vec3.js';
+import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
 import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
+import { MESH_COMMANDS, MESH_CONSTANTS, createMeshCommands } from './scene/mesh-commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -38,6 +48,7 @@ export const ENGINE_COMMANDS = [
   'CreateLight%(kind = 1, parent = 0)',
   'LightColor(light, r, g, b)',
   'LightRange(light, range#)',
+  'LightShadows(light, on = 1, area# = 40)',
   'AmbientLight(r, g, b)',
 
   // Shapes and pivots
@@ -49,6 +60,36 @@ export const ENGINE_COMMANDS = [
   'CreatePlane%(divisions = 1, parent = 0)',
   'CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)',
 
+  // Trees and grass
+  'CreateTree%(kind = 1, seed = 0, parent = 0)',
+  'CreateGrass%(parent = 0)',
+  'PlantGrass(grass, x#, y#, z#, size# = 1)',
+  'PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)',
+  'GrassSize(grass, height#, width# = 0.6)',
+  'GrassWind(grass, strength#)',
+  'GrassPush(grass, entity, radius# = 1)',
+  'ClearGrass(grass)',
+  'CountGrass%(grass)',
+
+  // Ribbon trails
+  'CreateTrail%(first, second)',
+  'TrailPoint(trail, entity)',
+  'TrailLife(trail, seconds#)',
+  'TrailStep(trail, distance#)',
+  'TrailSmooth(trail, pieces)',
+  'TrailColor(trail, r, g, b, alpha# = 1)',
+  'TrailFadeColor(trail, r, g, b, alpha# = 0)',
+  'TrailEmit(trail, on)',
+  'ClearTrail(trail)',
+
+  // Sprites
+  'CreateSprite%(parent = 0)',
+  'LoadSprite%(file$, flags = 1, parent = 0)',
+  'RotateSprite(sprite, angle#)',
+  'ScaleSprite(sprite, x#, y#)',
+  'HandleSprite(sprite, x#, y#)',
+  'SpriteViewMode(sprite, mode)',
+
   // Looks
   'EntityColor(entity, r, g, b)',
   'EntityAlpha(entity, alpha#)',
@@ -56,12 +97,13 @@ export const ENGINE_COMMANDS = [
   'EntityFX(entity, flags)',
   'EntityTexture(entity, texture)',
   'EntityOrder(entity, order)',
+  'EntityBlend(entity, blend)',
 
   // Textures
-  'LoadTexture%(file$)',
-  'CreateTexture%(width, height, r = 255, g = 255, b = 255)',
+  'LoadTexture%(file$, flags = 1)',
+  'CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = 1)',
   'CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)',
-  'TexturePixel(texture, x, y, r, g, b)',
+  'TexturePixel(texture, x, y, r, g, b, a = 255)',
   'ScaleTexture(texture, u#, v#)',
   'TextureLoaded%(texture)',
   'FreeTexture(texture)',
@@ -122,6 +164,7 @@ export const ENGINE_COMMANDS = [
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
+  ...MESH_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 
@@ -135,12 +178,37 @@ export const ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
+  FX_NOSHADOWCAST: 0x20000,
+  FX_NOSHADOWRECV: 0x40000,
+  TREE_OAK,
+  TREE_WILLOW,
+  TREE_SHRUB,
+  TREE_ASH,
+  TREE_POPLAR,
+  TREE_SEQUOIA,
+  TREE_BEECH,
+  TEX_COLOR,
+  TEX_ALPHA,
+  TEX_MASKED,
+  TEX_MIPMAP,
+  TEX_CLAMPU,
+  TEX_CLAMPV,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
+  ...MESH_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
 
+
+// Blitz3D texture flags a program may pass: colour, alpha, masked,
+// mipmapped, clamped; 256 and 512 (video memory, high colour) mean nothing
+// here and are ignored. Sphere and cube maps are not supported.
+function textureFlags(flags, command)
+{
+  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  return flags;
+}
 
 export function createEngineCommands(engine)
 {
@@ -158,6 +226,60 @@ export function createEngineCommands(engine)
     engine.autoGraphics();
     return world.createMesh(mesh, parentOf(parent)).id;
   };
+  // A sprite: the shared square, lit by nothing and casting no shadow, as
+  // in Blitz3D. A loaded one glows (adds to what is behind) unless its
+  // texture is alpha or masked.
+  const makeSprite = (parent, tex) =>
+  {
+    engine.autoGraphics();
+    const e = world.createMesh(engine.sharedMesh('sprite', createSpriteQuad), parentOf(parent));
+    e.sprite = newSprite();
+    e.castShadow = false;
+    e.receiveShadow = false;
+    const m = e.material;
+    m.fullbright = true;
+    if (tex)
+    {
+      m.texture = tex;
+      if (!tex.alpha && !tex.masked) m.blend = 'add';
+    }
+    m.changed();
+    return e.id;
+  };
+  const sprite = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
+    return e.sprite;
+  };
+  // The drawn bark and leaves trees wear, made once per engine (again if a
+  // program frees one).
+  const treeTextures = new Map();
+  const treeTexture = (key, width, height, pixels, flags) =>
+  {
+    let t = treeTextures.get(key);
+    if (!t || !world.handles.has(t.handle))
+    {
+      t = world.createTexture(width, height);
+      t.pixels.set(pixels());
+      t.nearest = false;
+      t.setFlags(flags);
+      treeTextures.set(key, t);
+    }
+    return t;
+  };
+  const grass = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.grass) throw runtimeError(`Entity ${handle} is not grass (CreateGrass makes grass)`);
+    return e;
+  };
+  const trail = (handle) =>
+  {
+    const e = entity(handle);
+    if (!e.trail) throw runtimeError(`Entity ${handle} is not a trail (CreateTrail makes trails)`);
+    return e.trail;
+  };
   const style = engine.style;
   const step = () => engine.input.step;
 
@@ -166,6 +288,7 @@ export function createEngineCommands(engine)
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
+    ...createMeshCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -221,6 +344,11 @@ export function createEngineCommands(engine)
     {
       ofKind(light, 'light', 'light').light.range = Math.max(0, range);
     },
+    lightshadows(light, on, area)
+    {
+      if (on && !(area > 0)) throw runtimeError(`LightShadows needs an area above 0, not ${area}`);
+      ofKind(light, 'light', 'light').light.shadows = on ? area : 0;
+    },
     ambientlight(r, g, b)
     {
       world.ambient = [unit(r), unit(g), unit(b)];
@@ -240,6 +368,185 @@ export function createEngineCommands(engine)
       shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) =>
       shape(engine.sharedMesh('plane' + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createtree(kind, seed, parent)
+    {
+      if (!TREE_KINDS[kind]) throw runtimeError(`CreateTree needs one of the TREE_ kinds (${TREE_OAK} to ${TREE_BEECH}), not ${kind}`);
+      engine.autoGraphics();
+      const { bark, twigs, leaves } = buildTree(kind, seed);
+      const e = world.createMesh(bark, parentOf(parent));
+      e.name = 'tree';
+      e.material.texture = treeTexture('bark', 64, 128, () => barkPixels(), TEX_COLOR);
+      e.material.changed();
+      const t = world.createMesh(twigs, e);
+      t.name = 'twigs';
+      t.material.texture = treeTexture(`leaves${leaves}`, 128, 128, () => leafPixels(leaves), TEX_MASKED);
+      t.material.changed();
+      return e.id;
+    },
+    creategrass(parent)
+    {
+      engine.autoGraphics();
+      const e = world.createEntity('grass', parentOf(parent));
+      e.grass = new Grass(e.id);
+      e.grass.mesh = engine.sharedMesh('tuft', createTuft);
+      e.material = new Material();
+      e.material.texture = treeTexture('blades', 64, 64, () => bladePixels(), TEX_MASKED);
+      e.material.twoSided = true;
+      e.castShadow = false;
+      return e.id;
+    },
+    plantgrass(handle, x, y, z, size)
+    {
+      grass(handle).grass.plant(x, y, z, Math.max(0, size));
+    },
+    paintgrass(handle, x, z, radius, count, onto, size)
+    {
+      const e = grass(handle);
+      if (!(radius > 0)) throw runtimeError(`PaintGrass needs a radius above 0, not ${radius}`);
+      if (count < 0 || count > 1000000) throw runtimeError(`PaintGrass plants 0 to 1000000 tufts at a time, not ${count}`);
+      let ground = () => ({ y: 0, ny: 1 });
+      if (onto)
+      {
+        // Straight down from above `onto`, in the world; back into the
+        // grass's own space.
+        const target = entity(onto);
+        const b = target.worldBounds ? target.worldBounds() : null;
+        const top = b && !b.isEmpty() ? b.max.y + 1 : 1000;
+        const drop = b && !b.isEmpty() ? b.max.y - b.min.y + 2 : 2000;
+        const inv = e.worldMatrix.clone();
+        if (!inv.invert()) return 0;
+        const w = e.worldMatrix;
+        ground = (px, pz) =>
+        {
+          const at = new Vec3(px, 0, pz).applyMat4(w);
+          const hit = rayOnto(target, new Vec3(at.x, top, at.z), new Vec3(0, -drop, 0));
+          if (!hit) return null;
+          return { y: new Vec3(hit.x, hit.y, hit.z).applyMat4(inv).y, ny: hit.ny };
+        };
+      }
+      return e.grass.paint(x, z, radius, count, Math.max(0, size), ground);
+    },
+    grasssize(handle, height, width)
+    {
+      const g = grass(handle).grass;
+      g.height = Math.max(0, height);
+      g.width = Math.max(0, width);
+      g.version++;
+    },
+    grasswind(handle, strength)
+    {
+      grass(handle).grass.wind = Math.max(0, strength);
+    },
+    grasspush(handle, pusher, radius)
+    {
+      const g = grass(handle).grass;
+      if (pusher === 0)
+      {
+        g.pushers.length = 0;
+        return;
+      }
+      const e = entity(pusher);
+      const known = g.pushers.find((p) => p.entity === e);
+      if (known) known.radius = Math.max(0, radius);
+      else
+      {
+        if (g.pushers.length >= MAX_PUSHERS) throw runtimeError(`Grass is pushed by at most ${MAX_PUSHERS} entities`);
+        g.pushers.push({ entity: e, radius: Math.max(0, radius) });
+      }
+    },
+    cleargrass(handle)
+    {
+      grass(handle).grass.clear();
+    },
+    countgrass: (handle) => grass(handle).grass.count,
+    createtrail(first, second)
+    {
+      const blade = [entity(first), entity(second)];
+      if (blade[0] === blade[1]) throw runtimeError('CreateTrail needs two different entities for the ends of its blade');
+      engine.autoGraphics();
+      const e = world.createEntity('mesh');
+      const t = new Trail(e, blade);
+      e.mesh = t.mesh;
+      e.trail = t;
+      e.castShadow = false;
+      e.receiveShadow = false;
+      const m = e.material;
+      m.fullbright = true;
+      m.twoSided = true;
+      m.vertexColors = true;
+      m.vertexAlpha = true;
+      m.blend = 'add';
+      m.changed();
+      engine.trails.push(t);
+      return e.id;
+    },
+    trailpoint(handle, point)
+    {
+      const t = trail(handle);
+      const e = entity(point);
+      if (t.blade.includes(e)) throw runtimeError(`Entity ${point} is already on trail ${handle}'s blade`);
+      if (t.blade.length >= MAX_BLADE) throw runtimeError(`A trail's blade has at most ${MAX_BLADE} points`);
+      t.blade.push(e);
+      t.clear();
+    },
+    traillife(handle, seconds)
+    {
+      trail(handle).life = Math.max(0.01, seconds);
+    },
+    trailstep(handle, distance)
+    {
+      trail(handle).step = Math.max(0.001, distance);
+    },
+    trailsmooth(handle, pieces)
+    {
+      trail(handle).smooth = Math.max(1, Math.min(64, pieces));
+    },
+    trailcolor(handle, r, g, b, alpha)
+    {
+      const t = trail(handle);
+      const end = t.end;
+      t.setColors(r, g, b, alpha, r, g, b, 0);
+      if (t.fadeSet) t.end = end;
+    },
+    trailfadecolor(handle, r, g, b, alpha)
+    {
+      const t = trail(handle);
+      const start = t.start;
+      t.setColors(0, 0, 0, 0, r, g, b, alpha);
+      t.start = start;
+      t.fadeSet = true;
+    },
+    trailemit(handle, on)
+    {
+      trail(handle).setEmitting(on !== 0);
+    },
+    cleartrail(handle)
+    {
+      trail(handle).clear();
+    },
+    createsprite: (parent) => makeSprite(parent, null),
+    loadsprite: (file, flags, parent) => makeSprite(parent, engine.loadTexture(file).setFlags(textureFlags(flags, 'LoadSprite'))),
+    rotatesprite(handle, angle)
+    {
+      sprite(handle).angle = angle;
+    },
+    scalesprite(handle, x, y)
+    {
+      const s = sprite(handle);
+      s.scaleX = x;
+      s.scaleY = y;
+    },
+    handlesprite(handle, x, y)
+    {
+      const s = sprite(handle);
+      s.handleX = x;
+      s.handleY = y;
+    },
+    spriteviewmode(handle, mode)
+    {
+      if (mode < SPRITE_FREE || mode > SPRITE_UPRIGHT2) throw runtimeError(`SpriteViewMode needs a mode from 1 to 4, not ${mode}`);
+      sprite(handle).mode = mode;
+    },
     createtorus: (segments, thickness, parent) =>
       shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
 
@@ -268,7 +575,12 @@ export function createEngineCommands(engine)
       m.fullbright = (flags & 1) !== 0;
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
+      m.vertexColors = (flags & 2) !== 0;
+      m.vertexAlpha = (flags & 32) !== 0;
       m.changed();
+      const e = entity(handle);
+      e.castShadow = (flags & 0x20000) === 0;
+      e.receiveShadow = (flags & 0x40000) === 0;
     },
     entitytexture(handle, tex)
     {
@@ -280,19 +592,27 @@ export function createEngineCommands(engine)
     {
       entity(handle).order = order;
     },
+    entityblend(handle, blend)
+    {
+      const modes = { 1: 'alpha', 2: 'multiply', 3: 'add' };
+      if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
+      const m = material(handle);
+      m.blend = modes[blend];
+      m.changed();
+    },
 
     // -------------------------------------------------------- textures
-    loadtexture(file)
+    loadtexture(file, flags)
     {
-      return engine.loadTexture(file).handle;
+      return engine.loadTexture(file).setFlags(textureFlags(flags, 'LoadTexture')).handle;
     },
-    createtexture(width, height, r, g, b)
+    createtexture(width, height, r, g, b, flags)
     {
       if (width < 1 || height < 1 || width > 4096 || height > 4096)
       {
         throw runtimeError(`CreateTexture size must be 1 to 4096, not ${width} x ${height}`);
       }
-      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).handle;
+      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).setFlags(textureFlags(flags, 'CreateTexture')).handle;
     },
     createcheckertexture(size, cells, r1, g1, b1, r2, g2, b2)
     {
@@ -301,11 +621,11 @@ export function createEngineCommands(engine)
       t.checker(Math.max(1, cells), [byte(r1), byte(g1), byte(b1)], [byte(r2), byte(g2), byte(b2)]);
       return t.handle;
     },
-    texturepixel(tex, x, y, r, g, b)
+    texturepixel(tex, x, y, r, g, b, a)
     {
       const t = texture(tex);
       if (!t.pixels) throw runtimeError('TexturePixel only works on textures made with CreateTexture');
-      t.setPixel(x, y, byte(r), byte(g), byte(b));
+      t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
     scaletexture(tex, u, v)
     {

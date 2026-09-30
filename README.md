@@ -61,7 +61,10 @@ full screen. Projects hold several files (programs, textures, glTF
 models), are kept in the browser, go out and come back as .zip files, and
 export as one web page that plays the game anywhere, even opened from the
 disk. Examples can be edited, shared as links, or saved as projects. The
-full story is in [docs/playground.md](docs/playground.md).
+examples under **Visual effects** show each 3D effect on its own, with keys
+to switch it: shadows, texture flags, sprites, building meshes, decals,
+ribbon trails, trees and grass. The full story is in
+[docs/playground.md](docs/playground.md).
 
 ![A project in the playground](docs/screenshots/playground-project.png)
 
@@ -78,6 +81,8 @@ python3 -m http.server 8080
 ![Block Rain](docs/screenshots/block-rain-play.png)
 
 ![Coin Hop: Kenney's glTF models, collisions and animations](docs/screenshots/coin-hop.png)
+
+![Meadow: hills, trees, grass, shadows and fireflies, all made by code](docs/screenshots/meadow.png)
 
 ## Using it from the command line
 
@@ -168,7 +173,8 @@ tests/                   golden programs, unit tests, browser tests, benchmark
 
 PolyBasic is released under the MIT licence (see [LICENSE](LICENSE)).
 Parts of the compiler are derived from the Blitz3D compiler, (c) Blitz
-Research Ltd, zlib licence. The browser build includes three.js (MIT), the
+Research Ltd, zlib licence. The browser build includes three.js (MIT) and a
+port of proctree.js (Paul Brunt, BSD 3-clause) for `CreateTree`, the
 physics build Rapier (Apache-2.0) and the playground CodeMirror (MIT). The
 models in `examples/assets/kenney` are by Kenney, CC0. See
 [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).

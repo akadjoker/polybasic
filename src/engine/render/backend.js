@@ -16,8 +16,18 @@
 //     clearColor: [r, g, b],             used when there is no camera
 //     ambient: [r, g, b],
 //     cameras: [{ id, world, fov, near, far, clearColor, viewport }],
-//     lights:  [{ id, world, type, color, range }],  type 1 directional, 2 point
-//     items:   [{ id, world, mesh, materials }],      mesh: MeshData, materials: [Material]
+//     lights:  [{ id, world, type, color, range, shadows }],  type 1 directional, 2 point;
+//              shadows 0: none, otherwise the width of the square around the
+//              camera a directional light's shadows cover
+//     items:   [{ id, world, mesh, materials, castShadow, receiveShadow, sprite }],
+//              mesh: MeshData, materials: [Material]; sprite: null, or a
+//              sprite's settings: draw it with scene/sprite.js's
+//              spriteMatrix(world, camera world) for each camera;
+//              grass: absent, or a field of tufts (scene/grass.js): `mesh`
+//              drawn once per tuft, { tufts, count, version, height, width,
+//              wind, pushers } (tufts: x, y, z, size, turn in the entity's
+//              space; pushers: world x, y, z, radius)
+//     time: seconds of simulated time
 //              (submesh s of the mesh uses materials[s.material])
 //     freedEntities: [id],  freedTextures: [Texture] }
 //

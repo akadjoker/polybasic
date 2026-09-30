@@ -10,6 +10,8 @@
 
 import * as THREE from 'three';
 import { RenderBackend } from '../backend.js';
+import { spriteMatrix } from '../../scene/sprite.js';
+import { Mat4 } from '../../math/mat4.js';
 
 // Indices of a column-major 4x4 matrix that change sign under S * M * S:
 // exactly one of (row, column) is the Z row/column.
@@ -21,6 +23,46 @@ function mirrorInto(target, world)
   for (let i = 0; i < 16; i++) e[i] = world[i];
   for (const i of MIRRORED) e[i] = -e[i];
   return target;
+}
+
+// The RGBA bytes of an image, top row first.
+function imagePixels(image)
+{
+  if (!image) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  return new Uint8Array(ctx.getImageData(0, 0, image.width, image.height).data.buffer);
+}
+
+// Pixels that are not drawn (alpha 0) take the colour of a drawn
+// neighbour: smoothing between a leaf and the black around it then gives
+// leaf colour, not a dark rim.
+function bleedEdges(pixels, width, height)
+{
+  const source = pixels.slice();
+  for (let y = 0; y < height; y++)
+  {
+    for (let x = 0; x < width; x++)
+    {
+      const i = (y * width + x) * 4;
+      if (source[i + 3] !== 0) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]])
+      {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const j = (ny * width + nx) * 4;
+        if (source[j + 3] === 0) continue;
+        pixels[i] = source[j];
+        pixels[i + 1] = source[j + 1];
+        pixels[i + 2] = source[j + 2];
+        break;
+      }
+    }
+  }
 }
 
 function srgb(color, rgb)
@@ -38,6 +80,11 @@ const WRAP = {
 // a white surface facing the light to full white, as the commands promise.
 const LIGHT_SCALE = Math.PI;
 
+// Shadow maps: texels a side, for a directional light and for each of the
+// six faces of a point light's.
+const SUN_MAP = 2048;
+const POINT_MAP = 1024;
+
 export class ThreeBackend extends RenderBackend
 {
   constructor()
@@ -51,6 +98,8 @@ export class ThreeBackend extends RenderBackend
     this.cameras = new Map();     // entity id -> THREE.PerspectiveCamera
     this.width = 1;
     this.height = 1;
+    this.sprites = [];            // this frame's { obj, world, sprite }
+    this.spriteMatrix = new Mat4();
   }
 
   init(canvas)
@@ -58,6 +107,10 @@ export class ThreeBackend extends RenderBackend
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
+    // Only lights that cast shadows cost anything (three.js leaves the
+    // shadow code out of the shaders while none does).
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.scene = new THREE.Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new THREE.AmbientLight(0xffffff, 0);
@@ -94,6 +147,8 @@ export class ThreeBackend extends RenderBackend
     this.ambient.intensity = LIGHT_SCALE;
 
     const seen = new Set();
+    this.sprites.length = 0;
+    this.time = frame.time || 0;
     for (const item of frame.items)
     {
       seen.add(item.id);
@@ -123,7 +178,10 @@ export class ThreeBackend extends RenderBackend
       r.setScissor(x, gy, w, h);
       r.setClearColor(srgb(new THREE.Color(), cam.clearColor), 1);
       r.clear(true, true, true);
-      r.render(this.scene, this.syncCamera(cam, w / h));
+      const camera = this.syncCamera(cam, w / h);
+      this.faceSprites(cam.world);
+      this.fitShadows(camera);
+      r.render(this.scene, camera);
     }
   }
 
@@ -131,6 +189,11 @@ export class ThreeBackend extends RenderBackend
 
   syncItem(item)
   {
+    if (item.grass)
+    {
+      this.syncGrass(item);
+      return;
+    }
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
     // One three.js material per submesh group; a single one when all the
@@ -148,8 +211,148 @@ export class ThreeBackend extends RenderBackend
     obj.material = material;
     obj.visible = true;
     obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
+    if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });
+    else
+    {
+      mirrorInto(obj.matrix, item.world);
+      obj.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  // A field of grass: one tuft mesh drawn once per tuft. The tufts' matrices
+  // are only worked out again when the field changes; the wind and the
+  // pushing happen in the vertex shader.
+  syncGrass(item)
+  {
+    const g = item.grass;
+    let obj = this.objects.get(item.id);
+    if (obj && (!obj.isInstancedMesh || obj.userData.grassVersion !== g.version || obj.count !== g.count))
+    {
+      this.scene.remove(obj);
+      if (obj.isInstancedMesh) obj.dispose();
+      obj = null;
+    }
+    const material = this.grassMaterial(item.materials[0]);
+    if (!obj)
+    {
+      obj = new THREE.InstancedMesh(this.geometry(item.mesh), material, g.count);
+      obj.matrixAutoUpdate = false;
+      const local = new THREE.Matrix4();
+      const turn = new THREE.Matrix4();
+      const size = new THREE.Matrix4();
+      const t = g.tufts;
+      for (let i = 0; i < g.count; i++)
+      {
+        const o = i * 5;
+        const k = t[o + 3];
+        // In PolyBasic's space: moved, turned about Y, sized; then mirrored
+        // like every other matrix.
+        local.makeTranslation(t[o], t[o + 1], t[o + 2]);
+        local.multiply(turn.makeRotationY(t[o + 4]));
+        local.multiply(size.makeScale(g.width * k, g.height * k, g.width * k));
+        const e = local.elements;
+        for (const m of MIRRORED) e[m] = -e[m];
+        obj.setMatrixAt(i, local);
+      }
+      obj.instanceMatrix.needsUpdate = true;
+      // Around all the tufts, for culling: only changes with the field.
+      obj.computeBoundingSphere();
+      obj.userData.grassVersion = g.version;
+      this.objects.set(item.id, obj);
+      this.scene.add(obj);
+    }
+    obj.material = material;
+    obj.visible = true;
+    obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
     mirrorInto(obj.matrix, item.world);
     obj.matrixWorldNeedsUpdate = true;
+    const u = material.userData.grass;
+    u.time.value = this.time;
+    u.wind.value = g.wind;
+    u.height.value = g.height;
+    u.count.value = Math.min(8, g.pushers.length / 4);
+    for (let i = 0; i < u.count.value; i++)
+    {
+      const p = g.pushers;
+      u.pushers.value[i].set(p[i * 4], p[i * 4 + 1], -p[i * 4 + 2], p[i * 4 + 3]);
+    }
+  }
+
+  // The material of a grass entity, with the wind and the pushing added to
+  // its vertex shader.
+  grassMaterial(m)
+  {
+    const material = this.material(m);
+    if (material.userData.grass) return material;
+    const grass = {
+      time: { value: 0 },
+      wind: { value: 1 },
+      height: { value: 1 },
+      count: { value: 0 },
+      pushers: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) }
+    };
+    material.userData.grass = grass;
+    material.customProgramCacheKey = () => 'polybasic-grass';
+    material.onBeforeCompile = (shader) =>
+    {
+      shader.uniforms.pbTime = grass.time;
+      shader.uniforms.pbWind = grass.wind;
+      shader.uniforms.pbHeight = grass.height;
+      shader.uniforms.pbPushCount = grass.count;
+      shader.uniforms.pbPushers = grass.pushers;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', `#include <common>
+uniform float pbTime;
+uniform float pbWind;
+uniform float pbHeight;
+uniform int pbPushCount;
+uniform vec4 pbPushers[8];`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+#ifdef USE_INSTANCING
+  mat4 pbTuft = modelMatrix * instanceMatrix;
+#else
+  mat4 pbTuft = modelMatrix;
+#endif
+  vec3 pbRoot = (pbTuft * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  // Only the tops move: nothing at the root, most at the tips.
+  float pbBend = transformed.y * transformed.y;
+  // Gusts rolling across the field.
+  float pbPhase = pbTime * 1.6 + pbRoot.x * 0.35 + pbRoot.z * 0.27;
+  vec3 pbMove = vec3(sin(pbPhase) * 0.6 + sin(pbPhase * 2.3 + 1.7) * 0.25, 0.0, cos(pbPhase * 0.8 + 0.5) * 0.35);
+  pbMove *= pbWind * 0.15 * pbHeight * pbBend;
+  // Leaning away from what pushes through it.
+  for (int i = 0; i < 8; i++)
+  {
+    if (i >= pbPushCount) break;
+    vec3 pbAway = pbRoot - pbPushers[i].xyz;
+    pbAway.y = 0.0;
+    float pbDist = length(pbAway);
+    float pbReach = pbPushers[i].w;
+    if (pbDist < pbReach && pbDist > 0.0001)
+    {
+      float pbPush = 1.0 - pbDist / pbReach;
+      pbMove += normalize(pbAway) * pbPush * pbBend * pbHeight;
+      pbMove.y -= pbPush * pbBend * pbHeight * 0.4;
+    }
+  }
+  transformed += inverse(mat3(pbTuft)) * pbMove;`);
+    };
+    material.needsUpdate = true;
+    return material;
+  }
+
+  // Sprites turn to each camera that draws them.
+  faceSprites(cameraWorld)
+  {
+    for (const { obj, world, sprite } of this.sprites)
+    {
+      mirrorInto(obj.matrix, spriteMatrix(this.spriteMatrix, world, cameraWorld, sprite).e);
+      obj.matrixWorldNeedsUpdate = true;
+    }
   }
 
   geometry(mesh)
@@ -192,17 +395,39 @@ export class ThreeBackend extends RenderBackend
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
 
-    // Built-in shapes go by `alpha`; model materials say how alpha is used.
-    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1;
+    // Built-in shapes go by `alpha` and their texture's flags (TEX_ALPHA
+    // blends, TEX_MASKED cuts out); model materials say how alpha is used.
+    const flags = tex ? m.texture : null;
+    const blend = m.alphaMode ? m.alphaMode === 'blend' : m.alpha < 1 || m.vertexAlpha || (flags !== null && flags.alpha);
+    const cut = m.alphaMode === 'mask' ? m.alphaCutoff : (flags !== null && flags.masked ? 0.5 : 0);
+    // EntityBlend: adding (glows, fire) and multiplying (shade, stains) do
+    // not hide what is behind, so they do not write depth either.
+    const mixing = m.blend === 'add' || m.blend === 'multiply';
     const options = {
       color: srgb(new THREE.Color(), m.color),
       map: tex,
-      transparent: blend,
+      transparent: blend || mixing,
       opacity: m.alphaMode === 'opaque' ? 1 : m.alpha,
-      alphaTest: m.alphaMode === 'mask' ? m.alphaCutoff : 0,
+      alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? THREE.DoubleSide : THREE.FrontSide
     };
+    if (m.blend === 'add') options.blending = THREE.AdditiveBlending;
+    if (m.blend === 'multiply')
+    {
+      options.blending = THREE.MultiplyBlending;
+      options.premultipliedAlpha = true;
+    }
+    if (mixing) options.depthWrite = false;
+    // A decal lies on its surface: pulled towards the camera in depth, and
+    // leaving the depth alone so decals over decals do not flicker.
+    if (m.decal)
+    {
+      options.polygonOffset = true;
+      options.polygonOffsetFactor = -1;
+      options.polygonOffsetUnits = -4;
+      options.depthWrite = false;
+    }
     let material;
     if (m.fullbright) material = new THREE.MeshBasicMaterial(options);
     else
@@ -215,6 +440,9 @@ export class ThreeBackend extends RenderBackend
         specular: new THREE.Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    // Fully faded out (EntityAlpha 0) is not drawn at all, as in Blitz3D:
+    // it hides nothing behind it and casts no shadow, and is still picked.
+    material.visible = m.alphaMode === 'opaque' || m.alpha > 0;
     this.materials.set(m.id, { material, key });
     return material;
   }
@@ -229,11 +457,24 @@ export class ThreeBackend extends RenderBackend
     }
     if (known) known.texture.dispose();
     let texture;
-    if (t.image) texture = new THREE.Texture(t.image);
+    if (t.masked)
+    {
+      // Masked, as in Blitz3D: black pixels are not drawn.
+      const pixels = t.pixels ? new Uint8Array(t.pixels) : imagePixels(t.image);
+      if (!pixels) return null;
+      for (let i = 0; i < pixels.length; i += 4)
+      {
+        if (pixels[i] === 0 && pixels[i + 1] === 0 && pixels[i + 2] === 0) pixels[i + 3] = 0;
+      }
+      bleedEdges(pixels, t.width, t.height);
+      texture = new THREE.DataTexture(pixels, t.width, t.height, THREE.RGBAFormat);
+    }
+    else if (t.image) texture = new THREE.Texture(t.image);
     else if (t.pixels) texture = new THREE.DataTexture(new Uint8Array(t.pixels), t.width, t.height, THREE.RGBAFormat);
     else return null;
-    // Generated textures are usually pixel patterns, kept sharp.
-    if (t.nearest) texture.magFilter = THREE.NearestFilter;
+    // Generated textures are usually pixel patterns, kept sharp; images
+    // are smoothed.
+    texture.magFilter = t.nearest ? THREE.NearestFilter : THREE.LinearFilter;
     // Our rows start at the top, like the images: no flipping.
     texture.flipY = false;
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -275,14 +516,25 @@ export class ThreeBackend extends RenderBackend
       light.intensity = LIGHT_SCALE;
       light.visible = true;
       light.position.set(w[12], w[13], -w[14]);
+      light.castShadow = l.shadows > 0;
       if (l.type === 2)
       {
         light.distance = l.range;
         light.decay = 0;
+        if (light.castShadow)
+        {
+          light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
+          light.shadow.camera.near = 0.05;
+          light.shadow.camera.far = l.range > 0 ? l.range : 100;
+          light.shadow.bias = -0.002;
+          light.shadow.normalBias = 0.02;
+        }
       }
       else
       {
         // A directional light shines along its entity's forward axis.
+        light.userData.direction = new THREE.Vector3(w[8], w[9], -w[10]).normalize();
+        light.userData.area = l.shadows;
         light.target.position.set(w[12] + w[8], w[13] + w[9], -(w[14] + w[10]));
         light.target.updateMatrixWorld();
       }
@@ -290,6 +542,49 @@ export class ThreeBackend extends RenderBackend
     for (const [id, light] of this.lights)
     {
       if (!seen.has(id)) light.visible = false;
+    }
+  }
+
+  // A directional light's shadows cover a square of `area` units around
+  // what the camera looks at. Its centre moves in steps of one shadow texel
+  // (in the light's own view), so the shadows' edges do not crawl as the
+  // camera moves.
+  fitShadows(camera)
+  {
+    const eye = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const forward = new THREE.Vector3(0, 0, -1).transformDirection(camera.matrixWorld);
+    for (const light of this.lights.values())
+    {
+      if (!light.visible || !light.castShadow || light.type !== 'DirectionalLight') continue;
+      const area = light.userData.area;
+      const dir = light.userData.direction;
+      const shadow = light.shadow;
+      if (shadow.mapSize.x !== SUN_MAP) shadow.mapSize.set(SUN_MAP, SUN_MAP);
+      const cam = shadow.camera;
+      cam.left = -area / 2;
+      cam.right = area / 2;
+      cam.top = area / 2;
+      cam.bottom = -area / 2;
+      cam.near = 0.1;
+      cam.far = area * 2;
+      cam.updateProjectionMatrix();
+      const texel = area / SUN_MAP;
+      shadow.bias = -0.0005;
+      shadow.normalBias = texel * 1.5;
+
+      // The centre, a little ahead of the camera, snapped in light space.
+      const centre = eye.clone().addScaledVector(forward, area * 0.35);
+      const up = Math.abs(dir.y) > 0.99 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+      const basis = new THREE.Matrix4().lookAt(new THREE.Vector3(), dir, up);
+      const inverse = basis.clone().invert();
+      centre.applyMatrix4(inverse);
+      centre.x = Math.round(centre.x / texel) * texel;
+      centre.y = Math.round(centre.y / texel) * texel;
+      centre.applyMatrix4(basis);
+      light.target.position.copy(centre);
+      light.position.copy(centre).addScaledVector(dir, -area);
+      light.target.updateMatrixWorld();
+      light.updateMatrixWorld();
     }
   }
 

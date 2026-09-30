@@ -2369,7 +2369,7 @@ var RND_Q = 44488;
 var RND_R = 3399;
 function createCoreCommands(rt) {
   let seed = 4660;
-  const random = () => {
+  const random2 = () => {
     seed = RND_A * (seed % RND_Q) - RND_R * Math.floor(seed / RND_Q);
     if (seed < 0) seed += RND_M;
     return (seed & 65535) / 65536 + 0.5 / 65536;
@@ -2462,12 +2462,12 @@ function createCoreCommands(rt) {
     log10: Math.log10,
     // Rnd(10) gives 0 to 10, Rnd(5, 10) gives 5 to 10.
     rnd(from, to) {
-      return random() * (to - from) + from;
+      return random2() * (to - from) + from;
     },
     // Rand(6) gives 1 to 6, Rand(-3, 3) gives -3 to 3.
     rand(from, to) {
       if (to < from) [from, to] = [to, from];
-      return Math.floor(random() * (to - from + 1)) + from | 0;
+      return Math.floor(random2() * (to - from + 1)) + from | 0;
     },
     seedrnd(value) {
       seed = value & 2147483647 || 1;
@@ -3184,7 +3184,7 @@ var Mat4 = class _Mat4 {
     return this;
   }
   // Translation * Rotation * Scale, the usual order for an entity.
-  compose(pos, quat, scale) {
+  compose(pos, quat, scale2) {
     const e = this.e;
     const { x, y, z, w } = quat;
     const x2 = x + x;
@@ -3199,9 +3199,9 @@ var Mat4 = class _Mat4 {
     const wx = w * x2;
     const wy = w * y2;
     const wz = w * z2;
-    const sx = scale.x;
-    const sy = scale.y;
-    const sz = scale.z;
+    const sx = scale2.x;
+    const sy = scale2.y;
+    const sz = scale2.z;
     e[0] = (1 - (yy + zz)) * sx;
     e[1] = (xy + wz) * sx;
     e[2] = (xz - wy) * sx;
@@ -3295,14 +3295,14 @@ var Mat4 = class _Mat4 {
     return true;
   }
   // Splits a T * R * S matrix back into its parts (no shear assumed).
-  decompose(pos, quat, scale) {
+  decompose(pos, quat, scale2) {
     const e = this.e;
     let sx = Math.hypot(e[0], e[1], e[2]);
     const sy = Math.hypot(e[4], e[5], e[6]);
     const sz = Math.hypot(e[8], e[9], e[10]);
     if (this.determinant() < 0) sx = -sx;
     pos.set(e[12], e[13], e[14]);
-    scale.set(sx, sy, sz);
+    scale2.set(sx, sy, sz);
     const ix = sx ? 1 / sx : 0;
     const iy = sy ? 1 / sy : 0;
     const iz = sz ? 1 / sz : 0;
@@ -3357,11 +3357,17 @@ var Entity = class {
     this.scale = new Vec3(1, 1, 1);
     this.visible = true;
     this.order = 0;
+    this.castShadow = true;
+    this.receiveShadow = true;
     this.alive = true;
     this.mesh = null;
     this.materials = [];
     this.camera = null;
     this.light = null;
+    this.sprite = null;
+    this.decal = false;
+    this.trail = null;
+    this.grass = null;
     this.pickMode = 0;
     this.obscurer = true;
     this.collisionType = 0;
@@ -3524,10 +3530,13 @@ var Material = class _Material {
     this.fullbright = false;
     this.flat = false;
     this.twoSided = false;
+    this.blend = "alpha";
     this.texture = null;
     this.alphaMode = null;
     this.alphaCutoff = 0.5;
     this.vertexColors = false;
+    this.vertexAlpha = false;
+    this.decal = false;
     this.name = "";
   }
   changed() {
@@ -3541,10 +3550,13 @@ var Material = class _Material {
     m.fullbright = this.fullbright;
     m.flat = this.flat;
     m.twoSided = this.twoSided;
+    m.blend = this.blend;
     m.texture = this.texture;
     m.alphaMode = this.alphaMode;
     m.alphaCutoff = this.alphaCutoff;
     m.vertexColors = this.vertexColors;
+    m.vertexAlpha = this.vertexAlpha;
+    m.decal = this.decal;
     m.name = this.name;
     return m;
   }
@@ -3552,6 +3564,14 @@ var Material = class _Material {
 
 // src/engine/scene/texture.js
 var nextTextureId = 1;
+var TEX_COLOR = 1;
+var TEX_ALPHA = 2;
+var TEX_MASKED = 4;
+var TEX_MIPMAP = 8;
+var TEX_CLAMPU = 16;
+var TEX_CLAMPV = 32;
+var TEX_SPHEREMAP = 64;
+var TEX_CUBEMAP = 128;
 var Texture = class {
   constructor(width = 0, height = 0) {
     this.id = nextTextureId++;
@@ -3568,6 +3588,21 @@ var Texture = class {
     this.wrapU = "repeat";
     this.wrapV = "repeat";
     this.nearest = this.pixels !== null;
+    this.flags = TEX_COLOR;
+  }
+  // Sets the Blitz3D texture flags (TEX_* above).
+  setFlags(flags) {
+    this.flags = flags;
+    this.wrapU = flags & TEX_CLAMPU ? "clamp" : "repeat";
+    this.wrapV = flags & TEX_CLAMPV ? "clamp" : "repeat";
+    this.version++;
+    return this;
+  }
+  get alpha() {
+    return (this.flags & TEX_ALPHA) !== 0;
+  }
+  get masked() {
+    return (this.flags & TEX_MASKED) !== 0;
   }
   fill(r, g, b, a = 255) {
     const p = this.pixels;
@@ -3605,429 +3640,6 @@ var Texture = class {
     return this;
   }
 };
-
-// src/engine/scene/world.js
-var World = class {
-  constructor() {
-    this.handles = /* @__PURE__ */ new Map();
-    this.nextHandle = 1;
-    this.ambient = [64 / 255, 64 / 255, 64 / 255];
-    this.clearColor = [0, 0, 0];
-    this.freedMeshes = [];
-    this.freedTextures = [];
-    this.freedEntities = [];
-  }
-  createEntity(kind, parent = null) {
-    const e = new Entity(this.nextHandle++, kind);
-    this.handles.set(e.id, e);
-    if (kind === "mesh") e.material = new Material();
-    if (kind === "camera") {
-      e.camera = { fov: 60, near: 0.1, far: 1e3, clearColor: [0, 0, 0], viewport: null };
-    }
-    if (kind === "light") e.light = { type: 1, color: [1, 1, 1], range: 10 };
-    if (parent) e.setParent(parent, false);
-    return e;
-  }
-  createMesh(mesh, parent = null) {
-    const e = this.createEntity("mesh", parent);
-    e.mesh = mesh;
-    return e;
-  }
-  createTexture(width, height) {
-    const t = new Texture(width, height);
-    t.handle = this.nextHandle++;
-    this.handles.set(t.handle, t);
-    return t;
-  }
-  // Gives any other object kept by the engine (a sound, a song) a handle
-  // in the same space, so mixing handles up is reported clearly.
-  addHandle(object) {
-    object.handle = this.nextHandle++;
-    this.handles.set(object.handle, object);
-    return object.handle;
-  }
-  removeHandle(object) {
-    this.handles.delete(object.handle);
-  }
-  // Frees an entity and all its children.
-  freeEntity(e) {
-    for (const c of [...e.children]) this.freeEntity(c);
-    if (e.parent) e.parent.children.splice(e.parent.children.indexOf(e), 1);
-    e.parent = null;
-    e.alive = false;
-    this.handles.delete(e.id);
-    this.freedEntities.push(e.id);
-  }
-  freeTexture(t) {
-    this.handles.delete(t.handle);
-    this.freedTextures.push(t);
-  }
-  // A deep copy: children are copied too, mesh data is shared, and the
-  // material is cloned so recolouring the copy leaves the original alone.
-  copyEntity(src, parent) {
-    const e = this.createEntity(src.kind, null);
-    e.name = src.name;
-    e.position.copy(src.position);
-    e.rotation.copy(src.rotation);
-    e.scale.copy(src.scale);
-    e.visible = src.visible;
-    e.order = src.order;
-    e.mesh = src.mesh;
-    e.materials = src.materials.map((m) => m.clone());
-    e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
-    e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
-    e.pickMode = src.pickMode;
-    e.obscurer = src.obscurer;
-    e.collisionType = src.collisionType;
-    e.collisionFrom = null;
-    e.radiusX = src.radiusX;
-    e.radiusY = src.radiusY;
-    e.box = src.box ? [...src.box] : null;
-    if (parent) e.setParent(parent, false);
-    for (const c of src.children) this.copyEntity(c, e);
-    return e;
-  }
-  get entities() {
-    return [...this.handles.values()].filter((h) => h instanceof Entity);
-  }
-  // Everything the backend needs to draw one frame. World matrices are
-  // brought up to date here, once per frame.
-  buildFrame(width, height) {
-    const cameras = [];
-    const lights = [];
-    const items = [];
-    for (const e of this.handles.values()) {
-      if (!(e instanceof Entity) || !e.shown) continue;
-      const world = e.worldMatrix.e;
-      if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
-      else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
-      else if (e.kind === "mesh" && e.mesh) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials });
-    }
-    cameras.sort((a, b) => a.order - b.order || a.id - b.id);
-    items.sort((a, b) => a.order - b.order || a.id - b.id);
-    const frame = {
-      width,
-      height,
-      clearColor: this.clearColor,
-      ambient: this.ambient,
-      cameras,
-      lights,
-      items,
-      freedEntities: this.freedEntities,
-      freedTextures: this.freedTextures
-    };
-    this.freedEntities = [];
-    this.freedTextures = [];
-    return frame;
-  }
-};
-
-// src/engine/render/backend.js
-var RenderBackend = class {
-  init(surface) {
-  }
-  reset() {
-  }
-  resize(width, height, pixelRatio = 1) {
-  }
-  render(frame) {
-  }
-  dispose() {
-  }
-};
-
-// src/engine/render/null/null-backend.js
-var NullBackend = class extends RenderBackend {
-  constructor() {
-    super();
-    this.calls = [];
-    this.frames = 0;
-    this.meshes = /* @__PURE__ */ new Map();
-    this.textures = /* @__PURE__ */ new Map();
-    this.lastFrame = null;
-    this.width = 0;
-    this.height = 0;
-  }
-  init(surface) {
-    this.calls.push(["init"]);
-  }
-  reset() {
-    this.meshes.clear();
-    this.textures.clear();
-    this.lastFrame = null;
-    this.calls.push(["reset"]);
-  }
-  resize(width, height, pixelRatio = 1) {
-    this.width = width;
-    this.height = height;
-    this.calls.push(["resize", width, height, pixelRatio]);
-  }
-  render(frame) {
-    this.frames++;
-    for (const item of frame.items) {
-      if (this.meshes.get(item.mesh.id) !== item.mesh.version) this.meshes.set(item.mesh.id, item.mesh.version);
-      for (const m of item.materials) {
-        const t = m.texture;
-        if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
-      }
-    }
-    for (const t of frame.freedTextures) this.textures.delete(t.id);
-    this.lastFrame = {
-      cameras: frame.cameras.map((c) => ({ id: c.id, world: Array.from(c.world), fov: c.fov })),
-      lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world) })),
-      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world) }))
-    };
-    if (this.calls.length < 1e3) this.calls.push(["render", frame.cameras.length, frame.lights.length, frame.items.length]);
-  }
-  dispose() {
-    this.calls.push(["dispose"]);
-  }
-};
-
-// src/engine/overlay/overlay.js
-var NullOverlay = class {
-  constructor() {
-    this.ops = [];
-    this.frames = 0;
-  }
-  begin(width, height) {
-    this.ops = [];
-  }
-  end() {
-    this.frames++;
-  }
-  rect(x, y, w, h, solid, style) {
-    this.ops.push(["rect", x, y, w, h, solid, style.color]);
-  }
-  oval(x, y, w, h, solid, style) {
-    this.ops.push(["oval", x, y, w, h, solid, style.color]);
-  }
-  line(x1, y1, x2, y2, style) {
-    this.ops.push(["line", x1, y1, x2, y2, style.color]);
-  }
-  text(x, y, text, centerX, centerY, style) {
-    this.ops.push(["text", x, y, text, style.color, style.fontSize]);
-  }
-  // Without a real font, assume an average glyph is 0.6 em wide.
-  textWidth(text, style) {
-    return Math.round(text.length * style.fontSize * 0.6);
-  }
-};
-var CanvasOverlay = class {
-  constructor(canvas) {
-    this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
-    this.scale = 1;
-  }
-  // `scale` = canvas pixels per logical pixel.
-  resize(width, height, scale) {
-    this.scale = scale;
-    this.canvas.width = Math.max(1, Math.round(width * scale));
-    this.canvas.height = Math.max(1, Math.round(height * scale));
-  }
-  begin(width, height) {
-    const ctx = this.ctx;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
-  }
-  end() {
-  }
-  apply(style) {
-    const [r, g, b] = style.color;
-    const css = `rgb(${r}, ${g}, ${b})`;
-    this.ctx.fillStyle = css;
-    this.ctx.strokeStyle = css;
-    this.ctx.lineWidth = 1;
-    this.ctx.font = `${style.fontSize}px system-ui, sans-serif`;
-  }
-  rect(x, y, w, h, solid, style) {
-    this.apply(style);
-    if (solid) this.ctx.fillRect(x, y, w, h);
-    else this.ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
-  }
-  oval(x, y, w, h, solid, style) {
-    this.apply(style);
-    this.ctx.beginPath();
-    this.ctx.ellipse(x + w / 2, y + h / 2, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2);
-    if (solid) this.ctx.fill();
-    else this.ctx.stroke();
-  }
-  line(x1, y1, x2, y2, style) {
-    this.apply(style);
-    this.ctx.beginPath();
-    this.ctx.moveTo(x1 + 0.5, y1 + 0.5);
-    this.ctx.lineTo(x2 + 0.5, y2 + 0.5);
-    this.ctx.stroke();
-  }
-  text(x, y, text, centerX, centerY, style) {
-    this.apply(style);
-    this.ctx.textAlign = centerX ? "center" : "left";
-    this.ctx.textBaseline = centerY ? "middle" : "top";
-    this.ctx.fillText(text, x, y);
-  }
-  textWidth(text, style) {
-    this.apply(style);
-    return Math.round(this.ctx.measureText(text).width);
-  }
-};
-
-// src/engine/input/input.js
-var KEYS = {
-  KEY_BACKSPACE: 8,
-  KEY_TAB: 9,
-  KEY_ENTER: 13,
-  KEY_SHIFT: 16,
-  KEY_CONTROL: 17,
-  KEY_ALT: 18,
-  KEY_ESCAPE: 27,
-  KEY_SPACE: 32,
-  KEY_LEFT: 37,
-  KEY_UP: 38,
-  KEY_RIGHT: 39,
-  KEY_DOWN: 40
-};
-for (let i = 0; i < 10; i++) KEYS["KEY_" + i] = 48 + i;
-for (let i = 0; i < 26; i++) KEYS["KEY_" + String.fromCharCode(65 + i)] = 65 + i;
-for (let i = 1; i <= 12; i++) KEYS["KEY_F" + i] = 111 + i;
-var DOM_KEY_CODES = {
-  Backspace: 8,
-  Tab: 9,
-  Enter: 13,
-  NumpadEnter: 13,
-  ShiftLeft: 16,
-  ShiftRight: 16,
-  ControlLeft: 17,
-  ControlRight: 17,
-  AltLeft: 18,
-  AltRight: 18,
-  Escape: 27,
-  Space: 32,
-  ArrowLeft: 37,
-  ArrowUp: 38,
-  ArrowRight: 39,
-  ArrowDown: 40
-};
-for (let i = 0; i < 10; i++) DOM_KEY_CODES["Digit" + i] = 48 + i;
-for (let i = 0; i < 26; i++) DOM_KEY_CODES["Key" + String.fromCharCode(65 + i)] = 65 + i;
-for (let i = 1; i <= 12; i++) DOM_KEY_CODES["F" + i] = 111 + i;
-var Input = class {
-  constructor() {
-    this.down = /* @__PURE__ */ new Set();
-    this.pressed = /* @__PURE__ */ new Map();
-    this.released = /* @__PURE__ */ new Map();
-    this.buttons = /* @__PURE__ */ new Set();
-    this.buttonPresses = /* @__PURE__ */ new Map();
-    this.mouseX = 0;
-    this.mouseY = 0;
-    this.moveX = 0;
-    this.moveY = 0;
-    this.wheel = 0;
-    this.pointerLockWanted = false;
-    this.step = {
-      down: /* @__PURE__ */ new Set(),
-      hits: /* @__PURE__ */ new Map(),
-      ups: /* @__PURE__ */ new Map(),
-      buttons: /* @__PURE__ */ new Set(),
-      buttonHits: /* @__PURE__ */ new Map(),
-      x: 0,
-      y: 0,
-      speedX: 0,
-      speedY: 0,
-      wheel: 0
-    };
-  }
-  // ------------------------------------------------------ raw events
-  keyDown(code) {
-    if (this.down.has(code)) return;
-    this.down.add(code);
-    this.pressed.set(code, (this.pressed.get(code) || 0) + 1);
-  }
-  keyUp(code) {
-    if (!this.down.has(code)) return;
-    this.down.delete(code);
-    this.released.set(code, (this.released.get(code) || 0) + 1);
-  }
-  pointerMove(x, y, dx = x - this.mouseX, dy = y - this.mouseY) {
-    this.moveX += dx;
-    this.moveY += dy;
-    this.mouseX = x;
-    this.mouseY = y;
-  }
-  buttonDown(button) {
-    if (this.buttons.has(button)) return;
-    this.buttons.add(button);
-    this.buttonPresses.set(button, (this.buttonPresses.get(button) || 0) + 1);
-  }
-  buttonUp(button) {
-    this.buttons.delete(button);
-  }
-  wheelTurn(steps) {
-    this.wheel += steps;
-  }
-  // Forget held keys, e.g. when the page loses focus and key-up events
-  // would never arrive.
-  releaseAll() {
-    for (const k of [...this.down]) this.keyUp(k);
-    this.buttons.clear();
-  }
-  // ------------------------------------------------------- sampling
-  sample() {
-    const s = this.step;
-    s.down = /* @__PURE__ */ new Set([...this.down, ...this.pressed.keys()]);
-    s.hits = this.pressed;
-    s.ups = this.released;
-    s.buttons = /* @__PURE__ */ new Set([...this.buttons, ...this.buttonPresses.keys()]);
-    s.buttonHits = this.buttonPresses;
-    s.x = this.mouseX;
-    s.y = this.mouseY;
-    s.speedX = this.moveX;
-    s.speedY = this.moveY;
-    s.wheel = this.wheel;
-    this.pressed = /* @__PURE__ */ new Map();
-    this.released = /* @__PURE__ */ new Map();
-    this.buttonPresses = /* @__PURE__ */ new Map();
-    this.moveX = 0;
-    this.moveY = 0;
-    this.wheel = 0;
-  }
-};
-
-// src/engine/handles.js
-var byte = (v) => Math.max(0, Math.min(255, v | 0));
-var unit = (v) => byte(v) / 255;
-var tidy = (v) => {
-  const r = Math.round(v * 1e9) / 1e9;
-  return r === 0 ? 0 : r;
-};
-function describe(object) {
-  if (object instanceof Entity) return "an entity";
-  if (object instanceof Texture) return "a texture";
-  return object && object.handleKind ? object.handleKind : "something else";
-}
-function handleHelpers(world) {
-  const entity = (handle) => {
-    const e = world.handles.get(handle);
-    if (e instanceof Entity) return e;
-    if (handle === 0) throw runtimeError("Entity handle is 0 (no entity)");
-    if (e) throw runtimeError(`Handle ${handle} is ${describe(e)}, not an entity`);
-    throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
-  };
-  const parentOf = (handle) => handle === 0 ? null : entity(handle);
-  const texture = (handle) => {
-    const t = world.handles.get(handle);
-    if (t instanceof Texture) return t;
-    if (handle === 0) throw runtimeError("Texture handle is 0 (no texture)");
-    if (t) throw runtimeError(`Handle ${handle} is ${describe(t)}, not a texture`);
-    throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
-  };
-  const ofKind = (handle, kind, what) => {
-    const e = entity(handle);
-    if (e.kind !== kind) throw runtimeError(`Entity ${handle} is not a ${what}`);
-    return e;
-  };
-  return { entity, parentOf, texture, ofKind };
-}
 
 // src/engine/math/aabb.js
 var Aabb = class _Aabb {
@@ -4266,6 +3878,1659 @@ function createTorus(segments = 24, thickness = 0.25) {
     return [Math.cos(a) * ring + nx * thickness, ny * thickness, Math.sin(a) * ring + nz * thickness, nx, ny, nz];
   });
   return b.build();
+}
+
+// src/engine/scene/editable.js
+var linear = (c) => {
+  const v = Math.max(0, Math.min(255, c)) / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+var screen = (v) => {
+  const c = v <= 31308e-7 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+  return Math.round(Math.max(0, Math.min(1, c)) * 255);
+};
+var Surface = class {
+  constructor(mesh) {
+    this.handleKind = "a surface";
+    this.handle = 0;
+    this.mesh = mesh;
+    this.positions = [];
+    this.normals = [];
+    this.uvs = [];
+    this.colors = [];
+    this.triangles = [];
+  }
+  get vertexCount() {
+    return this.positions.length / 3;
+  }
+  get triangleCount() {
+    return this.triangles.length / 3;
+  }
+  addVertex(x, y, z, u, v) {
+    this.positions.push(x, y, z);
+    this.normals.push(0, 0, 0);
+    this.uvs.push(u, v);
+    this.colors.push(1, 1, 1, 1);
+    this.mesh.touch();
+    return this.vertexCount - 1;
+  }
+  addTriangle(a, b, c) {
+    this.triangles.push(a, b, c);
+    this.mesh.touch();
+    return this.triangleCount - 1;
+  }
+  setPosition(i, x, y, z) {
+    this.positions[i * 3] = x;
+    this.positions[i * 3 + 1] = y;
+    this.positions[i * 3 + 2] = z;
+    this.mesh.touch();
+  }
+  setNormal(i, x, y, z) {
+    this.normals[i * 3] = x;
+    this.normals[i * 3 + 1] = y;
+    this.normals[i * 3 + 2] = z;
+    this.mesh.touch();
+  }
+  setColor(i, r, g, b, a) {
+    this.colors[i * 4] = linear(r);
+    this.colors[i * 4 + 1] = linear(g);
+    this.colors[i * 4 + 2] = linear(b);
+    this.colors[i * 4 + 3] = Math.max(0, Math.min(1, a));
+    this.mesh.colored = true;
+    this.mesh.touch();
+  }
+  // A vertex colour as 0..255 on screen, or the alpha 0..1 (channel 3).
+  color(i, channel) {
+    const v = this.colors[i * 4 + channel];
+    return channel === 3 ? v : screen(v);
+  }
+  setUv(i, u, v) {
+    this.uvs[i * 2] = u;
+    this.uvs[i * 2 + 1] = v;
+    this.mesh.touch();
+  }
+  clear(vertices, triangles) {
+    if (vertices) {
+      this.positions.length = 0;
+      this.normals.length = 0;
+      this.uvs.length = 0;
+      this.colors.length = 0;
+    }
+    if (triangles) this.triangles.length = 0;
+    this.mesh.touch();
+  }
+  // Smooth normals, as Blitz3D makes them: each vertex gets the average of
+  // the facing of every triangle of the surface that has a corner where it
+  // is (so vertices at the same place share one normal).
+  updateNormals() {
+    const p = this.positions;
+    const sums = /* @__PURE__ */ new Map();
+    const key = (i) => `${p[i * 3]},${p[i * 3 + 1]},${p[i * 3 + 2]}`;
+    const t = this.triangles;
+    for (let k = 0; k < t.length; k += 3) {
+      const [a, b, c] = [t[k], t[k + 1], t[k + 2]];
+      const ux = p[b * 3] - p[a * 3];
+      const uy = p[b * 3 + 1] - p[a * 3 + 1];
+      const uz = p[b * 3 + 2] - p[a * 3 + 2];
+      const vx = p[c * 3] - p[a * 3];
+      const vy = p[c * 3 + 1] - p[a * 3 + 1];
+      const vz = p[c * 3 + 2] - p[a * 3 + 2];
+      let nx = uy * vz - uz * vy;
+      let ny = uz * vx - ux * vz;
+      let nz = ux * vy - uy * vx;
+      const l = Math.hypot(nx, ny, nz);
+      if (l <= 1e-12) continue;
+      nx /= l;
+      ny /= l;
+      nz /= l;
+      for (const v of [a, b, c]) {
+        const s = sums.get(key(v)) || [0, 0, 0];
+        s[0] += nx;
+        s[1] += ny;
+        s[2] += nz;
+        sums.set(key(v), s);
+      }
+    }
+    for (let i = 0; i < this.vertexCount; i++) {
+      const s = sums.get(key(i)) || [0, 0, 0];
+      const l = Math.hypot(s[0], s[1], s[2]) || 1;
+      this.normals[i * 3] = s[0] / l;
+      this.normals[i * 3 + 1] = s[1] / l;
+      this.normals[i * 3 + 2] = s[2] / l;
+    }
+    this.mesh.touch();
+  }
+};
+var EditableMesh = class _EditableMesh extends MeshData {
+  constructor() {
+    super([], [], [], []);
+    this.surfaces = [];
+    this.colored = false;
+    this.dirty = false;
+  }
+  // Makes a mesh a program can change from any MeshData (a built-in shape,
+  // a model part): one surface with its vertices and triangles.
+  static from(data) {
+    const m = new _EditableMesh();
+    const s = new Surface(m);
+    s.positions = Array.from(data.positions);
+    s.normals = Array.from(data.normals);
+    s.uvs = Array.from(data.uvs);
+    s.colors = data.colors ? Array.from(data.colors) : new Array(data.positions.length / 3 * 4).fill(1);
+    s.triangles = Array.from(data.indices);
+    m.colored = !!data.colors;
+    m.surfaces.push(s);
+    m.touch();
+    return m;
+  }
+  touch() {
+    this.dirty = true;
+  }
+  // Rebuilds the arrays from the surfaces, if anything changed. A triangle
+  // with a corner that no longer exists (ClearSurface of the vertices only)
+  // is left out.
+  sync() {
+    if (!this.dirty) return;
+    this.dirty = false;
+    let vertices = 0;
+    let corners = 0;
+    for (const s of this.surfaces) {
+      vertices += s.vertexCount;
+      corners += s.triangles.length;
+    }
+    const positions = new Float32Array(vertices * 3);
+    const normals = new Float32Array(vertices * 3);
+    const uvs = new Float32Array(vertices * 2);
+    const colors = new Float32Array(vertices * 4);
+    const indices = new Uint32Array(corners);
+    let base = 0;
+    let used = 0;
+    for (const s of this.surfaces) {
+      const n = s.vertexCount;
+      positions.set(s.positions, base * 3);
+      normals.set(s.normals, base * 3);
+      uvs.set(s.uvs, base * 2);
+      colors.set(s.colors, base * 4);
+      const t = s.triangles;
+      for (let k = 0; k < t.length; k += 3) {
+        const a = t[k];
+        const b = t[k + 1];
+        const c = t[k + 2];
+        if (a >= n || b >= n || c >= n) continue;
+        indices[used++] = base + a;
+        indices[used++] = base + b;
+        indices[used++] = base + c;
+      }
+      base += n;
+    }
+    this._positions = positions;
+    this._normals = normals;
+    this._uvs = uvs;
+    this._indices = used === corners ? indices : indices.slice(0, used);
+    this._colors = this.colored ? colors : null;
+    this._submeshes = [{ start: 0, count: used, material: 0 }];
+    this._bounds = new Aabb().fromPositions(positions);
+    this._version++;
+  }
+  get positions() {
+    this.sync();
+    return this._positions;
+  }
+  set positions(v) {
+    this._positions = v;
+  }
+  get normals() {
+    this.sync();
+    return this._normals;
+  }
+  set normals(v) {
+    this._normals = v;
+  }
+  get uvs() {
+    this.sync();
+    return this._uvs;
+  }
+  set uvs(v) {
+    this._uvs = v;
+  }
+  get indices() {
+    this.sync();
+    return this._indices;
+  }
+  set indices(v) {
+    this._indices = v;
+  }
+  get colors() {
+    this.sync();
+    return this._colors;
+  }
+  set colors(v) {
+    this._colors = v;
+  }
+  get submeshes() {
+    this.sync();
+    return this._submeshes;
+  }
+  set submeshes(v) {
+    this._submeshes = v;
+  }
+  get bounds() {
+    this.sync();
+    return this._bounds;
+  }
+  set bounds(v) {
+    this._bounds = v;
+  }
+  get version() {
+    this.sync();
+    return this._version;
+  }
+  set version(v) {
+    this._version = v;
+  }
+};
+
+// src/engine/scene/world.js
+var World = class {
+  constructor() {
+    this.handles = /* @__PURE__ */ new Map();
+    this.nextHandle = 1;
+    this.ambient = [64 / 255, 64 / 255, 64 / 255];
+    this.clearColor = [0, 0, 0];
+    this.freedMeshes = [];
+    this.freedTextures = [];
+    this.freedEntities = [];
+  }
+  createEntity(kind, parent = null) {
+    const e = new Entity(this.nextHandle++, kind);
+    this.handles.set(e.id, e);
+    if (kind === "mesh") e.material = new Material();
+    if (kind === "camera") {
+      e.camera = { fov: 60, near: 0.1, far: 1e3, clearColor: [0, 0, 0], viewport: null };
+    }
+    if (kind === "light") e.light = { type: 1, color: [1, 1, 1], range: 10, shadows: 0 };
+    if (parent) e.setParent(parent, false);
+    return e;
+  }
+  createMesh(mesh, parent = null) {
+    const e = this.createEntity("mesh", parent);
+    e.mesh = mesh;
+    return e;
+  }
+  createTexture(width, height) {
+    const t = new Texture(width, height);
+    t.handle = this.nextHandle++;
+    this.handles.set(t.handle, t);
+    return t;
+  }
+  // Gives any other object kept by the engine (a sound, a song) a handle
+  // in the same space, so mixing handles up is reported clearly.
+  addHandle(object) {
+    object.handle = this.nextHandle++;
+    this.handles.set(object.handle, object);
+    return object.handle;
+  }
+  removeHandle(object) {
+    this.handles.delete(object.handle);
+  }
+  // Frees an entity and all its children.
+  freeEntity(e) {
+    for (const c of [...e.children]) this.freeEntity(c);
+    if (e.parent) e.parent.children.splice(e.parent.children.indexOf(e), 1);
+    e.parent = null;
+    e.alive = false;
+    this.handles.delete(e.id);
+    this.freedEntities.push(e.id);
+    if (e.mesh instanceof EditableMesh && !this.entities.some((o) => o.mesh === e.mesh)) {
+      for (const s of e.mesh.surfaces) this.handles.delete(s.handle);
+    }
+  }
+  freeTexture(t) {
+    this.handles.delete(t.handle);
+    this.freedTextures.push(t);
+  }
+  // A deep copy: children are copied too, mesh data is shared, and the
+  // material is cloned so recolouring the copy leaves the original alone.
+  copyEntity(src, parent) {
+    const e = this.createEntity(src.kind, null);
+    e.name = src.name;
+    e.position.copy(src.position);
+    e.rotation.copy(src.rotation);
+    e.scale.copy(src.scale);
+    e.visible = src.visible;
+    e.order = src.order;
+    e.castShadow = src.castShadow;
+    e.receiveShadow = src.receiveShadow;
+    e.mesh = src.mesh;
+    e.materials = src.materials.map((m) => m.clone());
+    e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
+    e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
+    e.sprite = src.sprite ? { ...src.sprite } : null;
+    e.decal = src.decal;
+    e.grass = src.grass;
+    e.pickMode = src.pickMode;
+    e.obscurer = src.obscurer;
+    e.collisionType = src.collisionType;
+    e.collisionFrom = null;
+    e.radiusX = src.radiusX;
+    e.radiusY = src.radiusY;
+    e.box = src.box ? [...src.box] : null;
+    if (parent) e.setParent(parent, false);
+    for (const c of src.children) this.copyEntity(c, e);
+    return e;
+  }
+  get entities() {
+    return [...this.handles.values()].filter((h) => h instanceof Entity);
+  }
+  // A field of grass for the frame: its tufts, and where what pushes it is
+  // now (world x, y, z and radius, four numbers each).
+  grassItem(e, world) {
+    const g = e.grass;
+    const pushers = [];
+    g.pushers = g.pushers.filter((p) => p.entity.alive);
+    for (const p of g.pushers) {
+      const w = p.entity.worldMatrix.e;
+      pushers.push(w[12], w[13], w[14], p.radius);
+    }
+    return {
+      id: e.id,
+      order: e.order,
+      world,
+      mesh: g.mesh,
+      materials: e.materials,
+      castShadow: e.castShadow,
+      receiveShadow: e.receiveShadow,
+      sprite: null,
+      grass: { tufts: g.tufts, count: g.count, version: g.version, height: g.height, width: g.width, wind: g.wind, pushers }
+    };
+  }
+  // Everything the backend needs to draw one frame. World matrices are
+  // brought up to date here, once per frame.
+  buildFrame(width, height) {
+    const cameras = [];
+    const lights = [];
+    const items = [];
+    for (const e of this.handles.values()) {
+      if (!(e instanceof Entity) || !e.shown) continue;
+      const world = e.worldMatrix.e;
+      if (e.kind === "camera") cameras.push({ id: e.id, order: e.order, world, ...e.camera });
+      else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
+      else if (e.kind === "grass" && e.grass.count) items.push(this.grassItem(e, world));
+      else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
+    }
+    cameras.sort((a, b) => a.order - b.order || a.id - b.id);
+    items.sort((a, b) => a.order - b.order || a.id - b.id);
+    const frame = {
+      width,
+      height,
+      clearColor: this.clearColor,
+      ambient: this.ambient,
+      cameras,
+      lights,
+      items,
+      freedEntities: this.freedEntities,
+      freedTextures: this.freedTextures
+    };
+    this.freedEntities = [];
+    this.freedTextures = [];
+    return frame;
+  }
+};
+
+// src/engine/render/backend.js
+var RenderBackend = class {
+  init(surface) {
+  }
+  reset() {
+  }
+  resize(width, height, pixelRatio = 1) {
+  }
+  render(frame) {
+  }
+  dispose() {
+  }
+};
+
+// src/engine/render/null/null-backend.js
+var NullBackend = class extends RenderBackend {
+  constructor() {
+    super();
+    this.calls = [];
+    this.frames = 0;
+    this.meshes = /* @__PURE__ */ new Map();
+    this.textures = /* @__PURE__ */ new Map();
+    this.lastFrame = null;
+    this.width = 0;
+    this.height = 0;
+  }
+  init(surface) {
+    this.calls.push(["init"]);
+  }
+  reset() {
+    this.meshes.clear();
+    this.textures.clear();
+    this.lastFrame = null;
+    this.calls.push(["reset"]);
+  }
+  resize(width, height, pixelRatio = 1) {
+    this.width = width;
+    this.height = height;
+    this.calls.push(["resize", width, height, pixelRatio]);
+  }
+  render(frame) {
+    this.frames++;
+    for (const item of frame.items) {
+      if (this.meshes.get(item.mesh.id) !== item.mesh.version) this.meshes.set(item.mesh.id, item.mesh.version);
+      for (const m of item.materials) {
+        const t = m.texture;
+        if (t && this.textures.get(t.id) !== t.version) this.textures.set(t.id, t.version);
+      }
+    }
+    for (const t of frame.freedTextures) this.textures.delete(t.id);
+    this.lastFrame = {
+      cameras: frame.cameras.map((c) => ({ id: c.id, world: Array.from(c.world), fov: c.fov })),
+      lights: frame.lights.map((l) => ({ id: l.id, type: l.type, world: Array.from(l.world), shadows: l.shadows })),
+      items: frame.items.map((i) => ({ id: i.id, mesh: i.mesh.id, world: Array.from(i.world), castShadow: i.castShadow, receiveShadow: i.receiveShadow, tufts: i.grass ? i.grass.count : 0 })),
+      time: frame.time
+    };
+    if (this.calls.length < 1e3) this.calls.push(["render", frame.cameras.length, frame.lights.length, frame.items.length]);
+  }
+  dispose() {
+    this.calls.push(["dispose"]);
+  }
+};
+
+// src/engine/overlay/overlay.js
+var NullOverlay = class {
+  constructor() {
+    this.ops = [];
+    this.frames = 0;
+  }
+  begin(width, height) {
+    this.ops = [];
+  }
+  end() {
+    this.frames++;
+  }
+  rect(x, y, w, h, solid, style) {
+    this.ops.push(["rect", x, y, w, h, solid, style.color]);
+  }
+  oval(x, y, w, h, solid, style) {
+    this.ops.push(["oval", x, y, w, h, solid, style.color]);
+  }
+  line(x1, y1, x2, y2, style) {
+    this.ops.push(["line", x1, y1, x2, y2, style.color]);
+  }
+  text(x, y, text, centerX, centerY, style) {
+    this.ops.push(["text", x, y, text, style.color, style.fontSize]);
+  }
+  // Without a real font, assume an average glyph is 0.6 em wide.
+  textWidth(text, style) {
+    return Math.round(text.length * style.fontSize * 0.6);
+  }
+};
+var CanvasOverlay = class {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.scale = 1;
+  }
+  // `scale` = canvas pixels per logical pixel.
+  resize(width, height, scale2) {
+    this.scale = scale2;
+    this.canvas.width = Math.max(1, Math.round(width * scale2));
+    this.canvas.height = Math.max(1, Math.round(height * scale2));
+  }
+  begin(width, height) {
+    const ctx = this.ctx;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.setTransform(this.scale, 0, 0, this.scale, 0, 0);
+  }
+  end() {
+  }
+  apply(style) {
+    const [r, g, b] = style.color;
+    const css = `rgb(${r}, ${g}, ${b})`;
+    this.ctx.fillStyle = css;
+    this.ctx.strokeStyle = css;
+    this.ctx.lineWidth = 1;
+    this.ctx.font = `${style.fontSize}px system-ui, sans-serif`;
+  }
+  rect(x, y, w, h, solid, style) {
+    this.apply(style);
+    if (solid) this.ctx.fillRect(x, y, w, h);
+    else this.ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  }
+  oval(x, y, w, h, solid, style) {
+    this.apply(style);
+    this.ctx.beginPath();
+    this.ctx.ellipse(x + w / 2, y + h / 2, Math.abs(w / 2), Math.abs(h / 2), 0, 0, Math.PI * 2);
+    if (solid) this.ctx.fill();
+    else this.ctx.stroke();
+  }
+  line(x1, y1, x2, y2, style) {
+    this.apply(style);
+    this.ctx.beginPath();
+    this.ctx.moveTo(x1 + 0.5, y1 + 0.5);
+    this.ctx.lineTo(x2 + 0.5, y2 + 0.5);
+    this.ctx.stroke();
+  }
+  text(x, y, text, centerX, centerY, style) {
+    this.apply(style);
+    this.ctx.textAlign = centerX ? "center" : "left";
+    this.ctx.textBaseline = centerY ? "middle" : "top";
+    this.ctx.fillText(text, x, y);
+  }
+  textWidth(text, style) {
+    this.apply(style);
+    return Math.round(this.ctx.measureText(text).width);
+  }
+};
+
+// src/engine/input/input.js
+var KEYS = {
+  KEY_BACKSPACE: 8,
+  KEY_TAB: 9,
+  KEY_ENTER: 13,
+  KEY_SHIFT: 16,
+  KEY_CONTROL: 17,
+  KEY_ALT: 18,
+  KEY_ESCAPE: 27,
+  KEY_SPACE: 32,
+  KEY_LEFT: 37,
+  KEY_UP: 38,
+  KEY_RIGHT: 39,
+  KEY_DOWN: 40
+};
+for (let i = 0; i < 10; i++) KEYS["KEY_" + i] = 48 + i;
+for (let i = 0; i < 26; i++) KEYS["KEY_" + String.fromCharCode(65 + i)] = 65 + i;
+for (let i = 1; i <= 12; i++) KEYS["KEY_F" + i] = 111 + i;
+var DOM_KEY_CODES = {
+  Backspace: 8,
+  Tab: 9,
+  Enter: 13,
+  NumpadEnter: 13,
+  ShiftLeft: 16,
+  ShiftRight: 16,
+  ControlLeft: 17,
+  ControlRight: 17,
+  AltLeft: 18,
+  AltRight: 18,
+  Escape: 27,
+  Space: 32,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40
+};
+for (let i = 0; i < 10; i++) DOM_KEY_CODES["Digit" + i] = 48 + i;
+for (let i = 0; i < 26; i++) DOM_KEY_CODES["Key" + String.fromCharCode(65 + i)] = 65 + i;
+for (let i = 1; i <= 12; i++) DOM_KEY_CODES["F" + i] = 111 + i;
+var Input = class {
+  constructor() {
+    this.down = /* @__PURE__ */ new Set();
+    this.pressed = /* @__PURE__ */ new Map();
+    this.released = /* @__PURE__ */ new Map();
+    this.buttons = /* @__PURE__ */ new Set();
+    this.buttonPresses = /* @__PURE__ */ new Map();
+    this.mouseX = 0;
+    this.mouseY = 0;
+    this.moveX = 0;
+    this.moveY = 0;
+    this.wheel = 0;
+    this.pointerLockWanted = false;
+    this.step = {
+      down: /* @__PURE__ */ new Set(),
+      hits: /* @__PURE__ */ new Map(),
+      ups: /* @__PURE__ */ new Map(),
+      buttons: /* @__PURE__ */ new Set(),
+      buttonHits: /* @__PURE__ */ new Map(),
+      x: 0,
+      y: 0,
+      speedX: 0,
+      speedY: 0,
+      wheel: 0
+    };
+  }
+  // ------------------------------------------------------ raw events
+  keyDown(code) {
+    if (this.down.has(code)) return;
+    this.down.add(code);
+    this.pressed.set(code, (this.pressed.get(code) || 0) + 1);
+  }
+  keyUp(code) {
+    if (!this.down.has(code)) return;
+    this.down.delete(code);
+    this.released.set(code, (this.released.get(code) || 0) + 1);
+  }
+  pointerMove(x, y, dx = x - this.mouseX, dy = y - this.mouseY) {
+    this.moveX += dx;
+    this.moveY += dy;
+    this.mouseX = x;
+    this.mouseY = y;
+  }
+  buttonDown(button) {
+    if (this.buttons.has(button)) return;
+    this.buttons.add(button);
+    this.buttonPresses.set(button, (this.buttonPresses.get(button) || 0) + 1);
+  }
+  buttonUp(button) {
+    this.buttons.delete(button);
+  }
+  wheelTurn(steps) {
+    this.wheel += steps;
+  }
+  // Forget held keys, e.g. when the page loses focus and key-up events
+  // would never arrive.
+  releaseAll() {
+    for (const k of [...this.down]) this.keyUp(k);
+    this.buttons.clear();
+  }
+  // ------------------------------------------------------- sampling
+  sample() {
+    const s = this.step;
+    s.down = /* @__PURE__ */ new Set([...this.down, ...this.pressed.keys()]);
+    s.hits = this.pressed;
+    s.ups = this.released;
+    s.buttons = /* @__PURE__ */ new Set([...this.buttons, ...this.buttonPresses.keys()]);
+    s.buttonHits = this.buttonPresses;
+    s.x = this.mouseX;
+    s.y = this.mouseY;
+    s.speedX = this.moveX;
+    s.speedY = this.moveY;
+    s.wheel = this.wheel;
+    this.pressed = /* @__PURE__ */ new Map();
+    this.released = /* @__PURE__ */ new Map();
+    this.buttonPresses = /* @__PURE__ */ new Map();
+    this.moveX = 0;
+    this.moveY = 0;
+    this.wheel = 0;
+  }
+};
+
+// src/engine/handles.js
+var byte = (v) => Math.max(0, Math.min(255, v | 0));
+var unit = (v) => byte(v) / 255;
+var tidy = (v) => {
+  const r = Math.round(v * 1e9) / 1e9;
+  return r === 0 ? 0 : r;
+};
+function describe(object) {
+  if (object instanceof Entity) return "an entity";
+  if (object instanceof Texture) return "a texture";
+  return object && object.handleKind ? object.handleKind : "something else";
+}
+function handleHelpers(world) {
+  const entity = (handle) => {
+    const e = world.handles.get(handle);
+    if (e instanceof Entity) return e;
+    if (handle === 0) throw runtimeError("Entity handle is 0 (no entity)");
+    if (e) throw runtimeError(`Handle ${handle} is ${describe(e)}, not an entity`);
+    throw runtimeError(`Entity ${handle} does not exist (it was freed, or never created)`);
+  };
+  const parentOf = (handle) => handle === 0 ? null : entity(handle);
+  const texture = (handle) => {
+    const t = world.handles.get(handle);
+    if (t instanceof Texture) return t;
+    if (handle === 0) throw runtimeError("Texture handle is 0 (no texture)");
+    if (t) throw runtimeError(`Handle ${handle} is ${describe(t)}, not a texture`);
+    throw runtimeError(`Texture ${handle} does not exist (it was freed, or never created)`);
+  };
+  const ofKind = (handle, kind, what) => {
+    const e = entity(handle);
+    if (e.kind !== kind) throw runtimeError(`Entity ${handle} is not a ${what}`);
+    return e;
+  };
+  return { entity, parentOf, texture, ofKind };
+}
+
+// src/engine/scene/sprite.js
+var SPRITE_FREE = 1;
+var SPRITE_FIXED = 2;
+var SPRITE_UPRIGHT = 3;
+var SPRITE_UPRIGHT2 = 4;
+function newSprite() {
+  return { mode: SPRITE_FREE, angle: 0, scaleX: 1, scaleY: 1, handleX: 0, handleY: 0 };
+}
+function createSpriteQuad() {
+  return new MeshData(
+    [-1, 1, 0, 1, 1, 0, 1, -1, 0, -1, -1, 0],
+    [0, 0, -1, 0, 0, -1, 0, 0, -1, 0, 0, -1],
+    [0, 0, 1, 0, 1, 1, 0, 1],
+    [0, 1, 2, 0, 2, 3]
+  );
+}
+function normalize(v) {
+  const l = Math.hypot(v[0], v[1], v[2]) || 1;
+  return [v[0] / l, v[1] / l, v[2] / l];
+}
+function cross(a, b) {
+  return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+}
+function spriteMatrix(out, entity, camera, sprite) {
+  const col = (m, c2) => [m[c2 * 4], m[c2 * 4 + 1], m[c2 * 4 + 2]];
+  let bi;
+  let bj;
+  let bk;
+  switch (sprite.mode) {
+    case SPRITE_FIXED:
+      bi = col(entity, 0);
+      bj = col(entity, 1);
+      bk = col(entity, 2);
+      break;
+    case SPRITE_UPRIGHT: {
+      bk = normalize(col(camera, 2));
+      bi = normalize(cross(col(entity, 1), bk));
+      bj = cross(bk, bi);
+      break;
+    }
+    case SPRITE_UPRIGHT2: {
+      const f = col(camera, 2);
+      const h = Math.hypot(f[0], f[2]);
+      const z = h > 1e-9 ? [f[0] / h, 0, f[2] / h] : [0, 0, 1];
+      const x2 = [z[2], 0, -z[0]];
+      const turn = (v) => [x2[0] * v[0] + z[0] * v[2], v[1], x2[2] * v[0] + z[2] * v[2]];
+      bi = turn(col(entity, 0));
+      bj = turn(col(entity, 1));
+      bk = turn(col(entity, 2));
+      break;
+    }
+    default:
+      bi = normalize(col(camera, 0));
+      bj = normalize(col(camera, 1));
+      bk = normalize(col(camera, 2));
+  }
+  const a = sprite.angle * Math.PI / 180;
+  const c = Math.cos(a);
+  const s = Math.sin(a);
+  const x = [0, 1, 2].map((n) => (c * bi[n] + s * bj[n]) * sprite.scaleX);
+  const y = [0, 1, 2].map((n) => (-s * bi[n] + c * bj[n]) * sprite.scaleY);
+  const e = out.e;
+  for (let n = 0; n < 3; n++) {
+    e[n] = x[n];
+    e[4 + n] = y[n];
+    e[8 + n] = bk[n];
+    e[12 + n] = entity[12 + n] - sprite.handleX * x[n] - sprite.handleY * y[n];
+  }
+  e[3] = 0;
+  e[7] = 0;
+  e[11] = 0;
+  e[15] = 1;
+  return out;
+}
+
+// src/engine/scene/trail.js
+var MAX_BLADE = 8;
+var MAX_SAMPLES = 256;
+var linear2 = (c) => {
+  const v = Math.max(0, Math.min(255, c)) / 255;
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+};
+var Trail = class {
+  constructor(entity, blade) {
+    this.entity = entity;
+    this.blade = blade;
+    this.samples = [];
+    this.last = null;
+    this.current = null;
+    this.distance = 0;
+    this.currentDistance = 0;
+    this.seeded = false;
+    this.emitting = true;
+    this.life = 0.35;
+    this.step = 0.08;
+    this.smooth = 12;
+    this.start = [1, 1, 1, 1];
+    this.end = [1, 1, 1, 0];
+    this.fadeSet = false;
+    this.mesh = new MeshData([], [], [], []);
+    this.mesh.colors = new Float32Array(0);
+  }
+  setColors(r1, g1, b1, a1, r2, g2, b2, a2) {
+    this.start = [linear2(r1), linear2(g1), linear2(b1), Math.max(0, Math.min(1, a1))];
+    this.end = [linear2(r2), linear2(g2), linear2(b2), Math.max(0, Math.min(1, a2))];
+  }
+  setEmitting(on) {
+    if (this.emitting === on) return;
+    if (!on && this.current && this.samples.length && this.moved(this.current, this.samples[this.samples.length - 1].points) > 1e-4) {
+      this.push(this.current, this.currentDistance);
+    }
+    this.emitting = on;
+    this.seeded = false;
+    this.current = null;
+  }
+  clear() {
+    this.samples.length = 0;
+    this.distance = 0;
+    this.currentDistance = 0;
+    this.seeded = false;
+    this.current = null;
+    this.build();
+  }
+  // How far the furthest-moving point of two blade positions is apart.
+  moved(a, b) {
+    let d = 0;
+    for (let i = 0; i < a.length; i++) d = Math.max(d, Math.hypot(a[i][0] - b[i][0], a[i][1] - b[i][1], a[i][2] - b[i][2]));
+    return d;
+  }
+  push(points, distance) {
+    if (this.samples.length === MAX_SAMPLES) this.samples.shift();
+    this.samples.push({ points: points.map((p) => p.slice()), age: 0, distance });
+  }
+  // One step of `dt` seconds, after the world has moved.
+  update(dt) {
+    for (const s of this.samples) s.age += dt;
+    while (this.samples.length && this.samples[0].age >= this.life) this.samples.shift();
+    const alive = this.blade.length >= 2 && this.blade.every((e) => e.alive);
+    if (this.emitting && alive) {
+      const now = this.blade.map((e) => {
+        const w = e.worldMatrix.e;
+        return [w[12], w[13], w[14]];
+      });
+      this.current = now;
+      if (!this.seeded || !this.samples.length) {
+        this.push(now, this.distance);
+        this.last = now.map((p) => p.slice());
+        this.currentDistance = this.distance;
+        this.seeded = true;
+      } else {
+        const travel = this.moved(now, this.last);
+        const steps = travel > 0 ? Math.floor(travel / this.step) : 0;
+        for (let k = 1; k <= steps; k++) {
+          const t = Math.min(this.step * k / travel, 1);
+          const stepped = this.last.map((p, i) => [p[0] + (now[i][0] - p[0]) * t, p[1] + (now[i][1] - p[1]) * t, p[2] + (now[i][2] - p[2]) * t]);
+          this.distance += this.moved(stepped, this.samples[this.samples.length - 1].points);
+          this.push(stepped, this.distance);
+        }
+        if (steps > 0) {
+          const t = Math.min(this.step * steps / travel, 1);
+          this.last = this.last.map((p, i) => [p[0] + (now[i][0] - p[0]) * t, p[1] + (now[i][1] - p[1]) * t, p[2] + (now[i][2] - p[2]) * t]);
+        }
+        const tail = this.samples[this.samples.length - 1];
+        this.currentDistance = tail.distance + this.moved(now, tail.points);
+      }
+    }
+    this.build();
+  }
+  // The sample at `index`, the blade as it is now just past the last one.
+  renderSample(index) {
+    if (index < this.samples.length) return this.samples[index];
+    return { points: this.current, age: 0, distance: this.currentDistance };
+  }
+  centre(sample2) {
+    const c = [0, 0, 0];
+    for (const p of sample2.points) {
+      c[0] += p[0];
+      c[1] += p[1];
+      c[2] += p[2];
+    }
+    const n = sample2.points.length;
+    return [c[0] / n, c[1] / n, c[2] / n];
+  }
+  // Between `from` and `to`: one Hermite curve through the blade's middle,
+  // with tangents kept short where the path turns sharply, and the points'
+  // offsets from the middle blended smoothly. build() does the same inline,
+  // for speed; the tests hold the two to each other.
+  interpolate(before, from, to, after, t) {
+    const tangent = (p, q, r) => {
+      const inc = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+      const out = [r[0] - q[0], r[1] - q[1], r[2] - q[2]];
+      const li = Math.hypot(...inc);
+      const lo = Math.hypot(...out);
+      if (li < 1e-4 || lo < 1e-4 || inc[0] * out[0] + inc[1] * out[1] + inc[2] * out[2] <= 0) return [0, 0, 0];
+      const d = [inc[0] / li + out[0] / lo, inc[1] / li + out[1] / lo, inc[2] / li + out[2] / lo];
+      const ld = Math.hypot(...d);
+      if (ld < 1e-4) return [0, 0, 0];
+      const m = Math.min(li, lo) / ld;
+      return [d[0] * m, d[1] * m, d[2] * m];
+    };
+    const cb = this.centre(before);
+    const cf = this.centre(from);
+    const ct = this.centre(to);
+    const ca = this.centre(after);
+    const tf = tangent(cb, cf, ct);
+    const tt = tangent(cf, ct, ca);
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const h00 = 2 * t3 - 3 * t2 + 1;
+    const h10 = t3 - 2 * t2 + t;
+    const h01 = -2 * t3 + 3 * t2;
+    const h11 = t3 - t2;
+    const centre = [0, 1, 2].map((n) => h00 * cf[n] + h10 * tf[n] + h01 * ct[n] + h11 * tt[n]);
+    const blend = t * t * (3 - 2 * t);
+    const points = from.points.map((p, i) => [0, 1, 2].map((n) => {
+      const a = p[n] - cf[n];
+      const b = to.points[i][n] - ct[n];
+      return centre[n] + a + (b - a) * blend;
+    }));
+    return { points, age: from.age + (to.age - from.age) * t, distance: from.distance + (to.distance - from.distance) * t };
+  }
+  // Rebuilds the mesh from the samples: two triangles per piece and per
+  // gap between blade points, coloured by age. Written for speed: the
+  // middles and tangents are worked out once per sample, and everything
+  // goes straight into arrays of the right size.
+  build() {
+    let count = this.samples.length;
+    if (this.current && count && this.moved(this.current, this.samples[count - 1].points) > 1e-4) count++;
+    const strips = this.blade.length - 1;
+    const pieces = count >= 2 ? (count - 1) * this.smooth : 0;
+    const corners = pieces * strips * 6;
+    const positions = new Float32Array(corners * 3);
+    const uvs = new Float32Array(corners * 2);
+    const colors = new Float32Array(corners * 4);
+    if (pieces) {
+      const n = this.blade.length;
+      const samples = [];
+      for (let i = 0; i < count; i++) samples.push(this.renderSample(i));
+      const mid = new Float64Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        const c = this.centre(samples[i]);
+        mid[i * 3] = c[0];
+        mid[i * 3 + 1] = c[1];
+        mid[i * 3 + 2] = c[2];
+      }
+      const tan = new Float64Array(count * 3);
+      for (let i = 0; i < count; i++) {
+        const p = Math.max(i - 1, 0);
+        const q = Math.min(i + 1, count - 1);
+        const ix = mid[i * 3] - mid[p * 3];
+        const iy = mid[i * 3 + 1] - mid[p * 3 + 1];
+        const iz = mid[i * 3 + 2] - mid[p * 3 + 2];
+        const ox = mid[q * 3] - mid[i * 3];
+        const oy = mid[q * 3 + 1] - mid[i * 3 + 1];
+        const oz = mid[q * 3 + 2] - mid[i * 3 + 2];
+        const li = Math.hypot(ix, iy, iz);
+        const lo = Math.hypot(ox, oy, oz);
+        if (li < 1e-4 || lo < 1e-4 || ix * ox + iy * oy + iz * oz <= 0) continue;
+        const dx = ix / li + ox / lo;
+        const dy = iy / li + oy / lo;
+        const dz = iz / li + oz / lo;
+        const ld = Math.hypot(dx, dy, dz);
+        if (ld < 1e-4) continue;
+        const m2 = Math.min(li, lo) / ld;
+        tan[i * 3] = dx * m2;
+        tan[i * 3 + 1] = dy * m2;
+        tan[i * 3 + 2] = dz * m2;
+      }
+      const first = samples[0].distance;
+      const span2 = Math.max(samples[count - 1].distance - first, 1e-4);
+      const oldest = this.samples.length ? this.samples[0].age : 0;
+      const life = this.samples.length === MAX_SAMPLES ? Math.max(oldest, 1e-4) : this.life;
+      const sectionA = new Float64Array(n * 3);
+      const sectionB = new Float64Array(n * 3);
+      let ageA = 0;
+      let ageB = 0;
+      let distA = 0;
+      let distB = 0;
+      const at = (out, seg, t) => {
+        const from = samples[seg];
+        const to = samples[seg + 1];
+        const t2 = t * t;
+        const t3 = t2 * t;
+        const h00 = 2 * t3 - 3 * t2 + 1;
+        const h10 = t3 - 2 * t2 + t;
+        const h01 = -2 * t3 + 3 * t2;
+        const h11 = t3 - t2;
+        const blend = t2 * (3 - 2 * t);
+        const f = seg * 3;
+        const g = f + 3;
+        for (let k = 0; k < 3; k++) {
+          const centre = h00 * mid[f + k] + h10 * tan[f + k] + h01 * mid[g + k] + h11 * tan[g + k];
+          for (let i = 0; i < n; i++) {
+            const a = from.points[i][k] - mid[f + k];
+            const b = to.points[i][k] - mid[g + k];
+            out[i * 3 + k] = centre + a + (b - a) * blend;
+          }
+        }
+        return [from.age + (to.age - from.age) * t, from.distance + (to.distance - from.distance) * t];
+      };
+      let v = 0;
+      const put = (section, i, u, age, dist) => {
+        const fade = Math.max(0, Math.min(1, 1 - age / life));
+        positions[v * 3] = section[i * 3];
+        positions[v * 3 + 1] = section[i * 3 + 1];
+        positions[v * 3 + 2] = section[i * 3 + 2];
+        uvs[v * 2] = u;
+        uvs[v * 2 + 1] = (dist - first) / span2;
+        for (let k = 0; k < 4; k++) colors[v * 4 + k] = this.end[k] + (this.start[k] - this.end[k]) * fade;
+        v++;
+      };
+      for (let seg = 0; seg + 1 < count; seg++) {
+        [ageA, distA] = at(sectionA, seg, 0);
+        for (let d = 1; d <= this.smooth; d++) {
+          [ageB, distB] = at(sectionB, seg, d / this.smooth);
+          for (let i = 0; i < strips; i++) {
+            const u0 = i / strips;
+            const u1 = (i + 1) / strips;
+            put(sectionA, i, u0, ageA, distA);
+            put(sectionA, i + 1, u1, ageA, distA);
+            put(sectionB, i, u0, ageB, distB);
+            put(sectionB, i + 1, u1, ageB, distB);
+            put(sectionB, i, u0, ageB, distB);
+            put(sectionA, i + 1, u1, ageA, distA);
+          }
+          sectionA.set(sectionB);
+          ageA = ageB;
+          distA = distB;
+        }
+      }
+    }
+    const m = this.mesh;
+    m.positions = positions;
+    if (m.normals.length !== positions.length) m.normals = new Float32Array(positions.length);
+    m.uvs = uvs;
+    m.colors = colors;
+    if (m.indices.length !== corners) {
+      m.indices = new Uint32Array(corners);
+      for (let i = 0; i < corners; i++) m.indices[i] = i;
+    }
+    m.submeshes = [{ start: 0, count: corners, material: 0 }];
+    m.bounds = new Aabb().fromPositions(positions);
+    m.version++;
+  }
+};
+
+// src/engine/scene/tree.js
+/*!
+ * proctree.js
+ * Copyright (c) 2012, Paul Brunt
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *     * Redistributions of source code must retain the above copyright
+ *       notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above copyright
+ *       notice, this list of conditions and the following disclaimer in the
+ *       documentation and/or other materials provided with the distribution.
+ *     * Neither the name of tree.js nor the
+ *       names of its contributors may be used to endorse or promote products
+ *       derived from this software without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+ * DISCLAIMED. IN NO EVENT SHALL PAUL BRUNT BE LIABLE FOR ANY
+ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+var dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+var cross2 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+var length = (v) => Math.sqrt(dot(v, v));
+var scale = (v, s) => [v[0] * s, v[1] * s, v[2] * s];
+var sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+var add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+var normalize2 = (v) => {
+  const l = length(v);
+  return l > 1e-20 ? scale(v, 1 / l) : [0, 0, 0];
+};
+var axisAngle = (vec, axis, angle) => {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  return add(add(scale(vec, c), scale(cross2(axis, vec), s)), scale(axis, dot(axis, vec) * (1 - c)));
+};
+var scaleInDirection = (vector, direction, s) => {
+  const m = dot(vector, direction);
+  return add(vector, scale(direction, m * s - m));
+};
+var TREE_OAK = 1;
+var TREE_WILLOW = 2;
+var TREE_SHRUB = 3;
+var TREE_ASH = 4;
+var TREE_POPLAR = 5;
+var TREE_SEQUOIA = 6;
+var TREE_BEECH = 7;
+var BASE = {
+  clumpMax: 0.45,
+  clumpMin: 0.4,
+  lengthFalloffFactor: 0.85,
+  lengthFalloffPower: 1,
+  branchFactor: 2.45,
+  radiusFalloffRate: 0.73,
+  climbRate: 0.371,
+  trunkKink: 0.093,
+  maxRadius: 0.25,
+  treeSteps: 2,
+  taperRate: 0.95,
+  twistRate: 3.02,
+  segments: 6,
+  levels: 5,
+  sweepAmount: 0.01,
+  initialBranchLength: 0.85,
+  trunkLength: 2.5,
+  dropAmount: -0.1,
+  growAmount: 0.235,
+  vMultiplier: 0.36,
+  twigScale: 2,
+  seed: 10
+};
+var TREE_KINDS = {
+  [TREE_OAK]: { seed: 696, treeSteps: 9, initialBranchLength: 0.79, maxRadius: 0.22, trunkLength: 3.21, twigScale: 0.55, leaves: 0 },
+  [TREE_WILLOW]: { seed: 264, levels: 4, treeSteps: 9, initialBranchLength: 0.59, lengthFalloffFactor: 0.57, dropAmount: 0.4, maxRadius: 0.05, radiusFalloffRate: 0.7, twistRate: 2.62, trunkLength: 1.79, twigScale: 0.4, leaves: 1 },
+  [TREE_SHRUB]: { seed: 264, levels: 3, treeSteps: 0, initialBranchLength: 0.19, dropAmount: 0.2, maxRadius: 0.04, radiusFalloffRate: 0.58, twistRate: 5, trunkLength: 0.38, twigScale: 0.65, leaves: 0 },
+  [TREE_ASH]: { levels: 7, initialBranchLength: 0.59, lengthFalloffFactor: 0.95, dropAmount: -0.3, growAmount: 0.03, maxRadius: 0.18, radiusFalloffRate: 0.61, climbRate: 0.2, trunkKink: -0.37, twistRate: 1.41, trunkLength: 7.05, twigScale: 0.65, leaves: 1 },
+  [TREE_POPLAR]: { treeSteps: 30, dropAmount: 0, maxRadius: 0.2, climbRate: 0.3, trunkKink: 0.01, twistRate: -2.47, trunkLength: 3.61, twigScale: 1, leaves: 2 },
+  [TREE_SEQUOIA]: { seed: 264, levels: 4, treeSteps: 12, initialBranchLength: 2.19, dropAmount: 0, growAmount: -0.38, maxRadius: 0.6, radiusFalloffRate: 0.57, climbRate: 2.02, trunkKink: 0, trunkLength: 11.52, twigScale: 2, leaves: 0 },
+  [TREE_BEECH]: { seed: 325, levels: 7, treeSteps: 4, initialBranchLength: 0.89, dropAmount: 0.151, growAmount: 0.033, maxRadius: 0.21, climbRate: 0.37, twistRate: 2.21, trunkLength: 4.83, twigScale: 0.7, leaves: 0 }
+};
+function treeSettings(kind, seed = 0) {
+  const { leaves, ...own } = TREE_KINDS[kind];
+  const p = { ...BASE, ...own };
+  if (seed) p.seed = seed;
+  p.segments = Math.max(4, p.segments & ~1);
+  p.levels = Math.max(1, p.levels);
+  return { settings: p, leaves };
+}
+var Branch = class _Branch {
+  constructor(head, parent = null) {
+    this.head = head;
+    this.parent = parent;
+    this.child0 = null;
+    this.child1 = null;
+    this.length = 1;
+    this.type = null;
+  }
+  mirror(vec, norm, p) {
+    const v = cross2(norm, cross2(vec, norm));
+    const s = p.branchFactor * dot(v, vec);
+    return [vec[0] - v[0] * s, vec[1] - v[1] * s, vec[2] - v[2] * s];
+  }
+  split(level, steps, p, random2, l1 = 1, l2 = 1) {
+    const rLevel = p.levels - level;
+    let po;
+    if (this.parent) po = this.parent.head;
+    else {
+      po = [0, 0, 0];
+      this.type = "trunk";
+    }
+    const so = this.head;
+    const dir = normalize2(sub(so, po));
+    const normal = cross2(dir, [dir[2], dir[0], dir[1]]);
+    const tangent = cross2(dir, normal);
+    const r = random2(rLevel * 10 + l1 * 5 + l2 + p.seed);
+    let adj = add(scale(normal, r), scale(tangent, 1 - r));
+    if (r > 0.5) adj = scale(adj, -1);
+    const clump = (p.clumpMax - p.clumpMin) * r + p.clumpMin;
+    let newdir = normalize2(add(scale(adj, 1 - clump), scale(dir, clump)));
+    let newdir2 = this.mirror(newdir, dir, p);
+    if (r > 0.5) {
+      const t = newdir;
+      newdir = newdir2;
+      newdir2 = t;
+    }
+    if (steps > 0) {
+      const angle = steps / p.treeSteps * 2 * Math.PI * p.twistRate;
+      newdir2 = normalize2([Math.sin(angle), r, Math.cos(angle)]);
+    }
+    const grow = level * level / (p.levels * p.levels) * p.growAmount;
+    const drop = rLevel * p.dropAmount;
+    const sweep = rLevel * p.sweepAmount;
+    newdir = normalize2(add(newdir, [sweep, drop + grow, 0]));
+    newdir2 = normalize2(add(newdir2, [sweep, drop + grow, 0]));
+    this.child0 = new _Branch(add(so, scale(newdir, this.length)), this);
+    this.child1 = new _Branch(add(so, scale(newdir2, this.length)), this);
+    this.child0.length = Math.pow(this.length, p.lengthFalloffPower) * p.lengthFalloffFactor;
+    this.child1.length = Math.pow(this.length, p.lengthFalloffPower) * p.lengthFalloffFactor;
+    if (level > 0) {
+      if (steps > 0) {
+        this.child0.head = add(this.head, [(r - 0.5) * 2 * p.trunkKink, p.climbRate, (r - 0.5) * 2 * p.trunkKink]);
+        this.child0.type = "trunk";
+        this.child0.length = this.length * p.taperRate;
+        this.child0.split(level, steps - 1, p, random2, l1 + 1, l2);
+      } else this.child0.split(level - 1, 0, p, random2, l1 + 1, l2);
+      this.child1.split(level - 1, 0, p, random2, l1, l2 + 1);
+    }
+  }
+};
+var Builder2 = class {
+  constructor(p) {
+    this.p = p;
+    this.verts = [];
+    this.faces = [];
+    this.normals = [];
+    this.uv = [];
+    this.twigVerts = [];
+    this.twigNormals = [];
+    this.twigFaces = [];
+    this.twigUvs = [];
+    this.root = new Branch([0, p.trunkLength, 0]);
+    this.root.length = p.initialBranchLength;
+    const random2 = (a) => Math.abs(Math.cos(a + a * a));
+    this.root.split(p.levels, p.treeSteps, p, random2);
+    this.createForks(this.root, p.maxRadius);
+    this.createTwigs(this.root);
+    this.doFaces(this.root);
+    this.calcNormals();
+  }
+  calcNormals() {
+    const all = this.verts.map(() => []);
+    for (const f of this.faces) {
+      const n = normalize2(cross2(sub(this.verts[f[1]], this.verts[f[2]]), sub(this.verts[f[1]], this.verts[f[0]])));
+      all[f[0]].push(n);
+      all[f[1]].push(n);
+      all[f[2]].push(n);
+    }
+    this.normals = all.map((list) => {
+      let total = [0, 0, 0];
+      for (const n of list) total = add(total, n);
+      const l = length(total);
+      return l > 1e-8 ? scale(total, 1 / l) : [0, 1, 0];
+    });
+  }
+  doFaces(branch) {
+    const p = this.p;
+    const segments = p.segments;
+    const { faces, verts, uv } = this;
+    if (!branch.parent) {
+      for (let i = 0; i < verts.length; i++) uv[i] = [0, 0];
+      const tangent = normalize2(cross2(sub(branch.child0.head, branch.head), sub(branch.child1.head, branch.head)));
+      const normal = normalize2(branch.head);
+      let angle = Math.acos(Math.max(-1, Math.min(1, dot(tangent, [-1, 0, 0]))));
+      if (dot(cross2([-1, 0, 0], tangent), normal) > 0) angle = 2 * Math.PI - angle;
+      const segOffset = Math.round(angle / Math.PI / 2 * segments);
+      for (let i = 0; i < segments; i++) {
+        const v1 = branch.ring0[i];
+        const v2 = branch.root[(i + segOffset + 1) % segments];
+        const v3 = branch.root[(i + segOffset) % segments];
+        const v4 = branch.ring0[(i + 1) % segments];
+        faces.push([v1, v4, v3]);
+        faces.push([v4, v2, v3]);
+        uv[(i + segOffset) % segments] = [Math.abs(i / segments - 0.5) * 2, 0];
+        const len = length(sub(verts[branch.ring0[i]], verts[branch.root[(i + segOffset) % segments]])) * p.vMultiplier;
+        uv[branch.ring0[i]] = [Math.abs(i / segments - 0.5) * 2, len];
+        uv[branch.ring2[i]] = [Math.abs(i / segments - 0.5) * 2, len];
+      }
+    }
+    if (branch.child0.ring0) {
+      let segOffset0;
+      let segOffset1;
+      let match0;
+      let match1;
+      let v1 = normalize2(sub(verts[branch.ring1[0]], branch.head));
+      let v2 = normalize2(sub(verts[branch.ring2[0]], branch.head));
+      v1 = scaleInDirection(v1, normalize2(sub(branch.child0.head, branch.head)), 0);
+      v2 = scaleInDirection(v2, normalize2(sub(branch.child1.head, branch.head)), 0);
+      for (let i = 0; i < segments; i++) {
+        let d = normalize2(sub(verts[branch.child0.ring0[i]], branch.child0.head));
+        let l = dot(d, v1);
+        if (segOffset0 === void 0 || l > match0) {
+          match0 = l;
+          segOffset0 = segments - i;
+        }
+        d = normalize2(sub(verts[branch.child1.ring0[i]], branch.child1.head));
+        l = dot(d, v2);
+        if (segOffset1 === void 0 || l > match1) {
+          match1 = l;
+          segOffset1 = segments - i;
+        }
+      }
+      const uvScale = p.maxRadius / branch.radius;
+      for (let i = 0; i < segments; i++) {
+        let a = branch.child0.ring0[i];
+        let b = branch.ring1[(i + segOffset0 + 1) % segments];
+        let c = branch.ring1[(i + segOffset0) % segments];
+        let d = branch.child0.ring0[(i + 1) % segments];
+        faces.push([a, d, c]);
+        faces.push([d, b, c]);
+        a = branch.child1.ring0[i];
+        b = branch.ring2[(i + segOffset1 + 1) % segments];
+        c = branch.ring2[(i + segOffset1) % segments];
+        d = branch.child1.ring0[(i + 1) % segments];
+        faces.push([a, b, c]);
+        faces.push([a, d, b]);
+        const len1 = length(sub(verts[branch.child0.ring0[i]], verts[branch.ring1[(i + segOffset0) % segments]])) * uvScale;
+        const uv1 = uv[branch.ring1[(i + segOffset0 - 1) % segments]];
+        uv[branch.child0.ring0[i]] = [uv1[0], uv1[1] + len1 * p.vMultiplier];
+        uv[branch.child0.ring2[i]] = [uv1[0], uv1[1] + len1 * p.vMultiplier];
+        const len2 = length(sub(verts[branch.child1.ring0[i]], verts[branch.ring2[(i + segOffset1) % segments]])) * uvScale;
+        const uv2 = uv[branch.ring2[(i + segOffset1 - 1) % segments]];
+        uv[branch.child1.ring0[i]] = [uv2[0], uv2[1] + len2 * p.vMultiplier];
+        uv[branch.child1.ring2[i]] = [uv2[0], uv2[1] + len2 * p.vMultiplier];
+      }
+      this.doFaces(branch.child0);
+      this.doFaces(branch.child1);
+    } else {
+      for (let i = 0; i < segments; i++) {
+        faces.push([branch.child0.end, branch.ring1[(i + 1) % segments], branch.ring1[i]]);
+        faces.push([branch.child1.end, branch.ring2[(i + 1) % segments], branch.ring2[i]]);
+        let len = length(sub(verts[branch.child0.end], verts[branch.ring1[i]]));
+        uv[branch.child0.end] = [Math.abs(i / segments - 1 - 0.5) * 2, len * p.vMultiplier];
+        len = length(sub(verts[branch.child1.end], verts[branch.ring2[i]]));
+        uv[branch.child1.end] = [Math.abs(i / segments - 0.5) * 2, len * p.vMultiplier];
+      }
+    }
+  }
+  createTwigs(branch) {
+    const p = this.p;
+    if (branch.child0) {
+      this.createTwigs(branch.child0);
+      this.createTwigs(branch.child1);
+      return;
+    }
+    const tangent = normalize2(cross2(sub(branch.parent.child0.head, branch.parent.head), sub(branch.parent.child1.head, branch.parent.head)));
+    const binormal = normalize2(sub(branch.head, branch.parent.head));
+    const s = p.twigScale;
+    const corner = (t, b) => add(add(branch.head, scale(tangent, t)), scale(binormal, b));
+    const top = s * 2 - branch.length;
+    const bottom = -branch.length;
+    const v = this.twigVerts;
+    const base = v.length;
+    v.push(corner(s, top), corner(-s, top), corner(-s, bottom), corner(s, bottom));
+    v.push(corner(s, top), corner(-s, top), corner(-s, bottom), corner(s, bottom));
+    const [v1, v2, v3, v4] = [base, base + 1, base + 2, base + 3];
+    const [v8, v7, v6, v5] = [base + 4, base + 5, base + 6, base + 7];
+    this.twigFaces.push([v1, v2, v3], [v4, v1, v3], [v6, v7, v8], [v6, v8, v5]);
+    const n1 = normalize2(cross2(sub(v[v1], v[v3]), sub(v[v2], v[v3])));
+    const n2 = normalize2(cross2(sub(v[v7], v[v6]), sub(v[v8], v[v6])));
+    this.twigNormals.push(n1, n1, n1, n1, n2, n2, n2, n2);
+    this.twigUvs.push([0, 1], [1, 1], [1, 0], [0, 0], [0, 1], [1, 1], [1, 0], [0, 0]);
+  }
+  createForks(branch, radius) {
+    const p = this.p;
+    branch.radius = radius;
+    if (radius > branch.length) radius = branch.length;
+    const verts = this.verts;
+    const segments = p.segments;
+    const segmentAngle = Math.PI * 2 / segments;
+    if (!branch.parent) {
+      branch.root = [];
+      for (let i = 0; i < segments; i++) {
+        const vec = axisAngle([-1, 0, 0], [0, 1, 0], -segmentAngle * i);
+        branch.root.push(verts.length);
+        verts.push(scale(vec, radius / p.radiusFalloffRate));
+      }
+    }
+    if (!branch.child0) {
+      branch.end = verts.length;
+      verts.push(branch.head);
+      return;
+    }
+    const axis = branch.parent ? normalize2(sub(branch.head, branch.parent.head)) : normalize2(branch.head);
+    const axis1 = normalize2(sub(branch.head, branch.child0.head));
+    const axis2 = normalize2(sub(branch.head, branch.child1.head));
+    const tangent = normalize2(cross2(axis1, axis2));
+    branch.tangent = tangent;
+    const axis3 = normalize2(cross2(tangent, normalize2(add(scale(axis1, -1), scale(axis2, -1)))));
+    const dir = [axis2[0], 0, axis2[2]];
+    const centre = add(branch.head, scale(dir, -p.maxRadius / 2));
+    const ring0 = branch.ring0 = [];
+    const ring1 = branch.ring1 = [];
+    const ring2 = branch.ring2 = [];
+    let s = p.radiusFalloffRate;
+    if (branch.child0.type === "trunk" || branch.type === "trunk") s = 1 / p.taperRate;
+    const linch0 = verts.length;
+    ring0.push(linch0);
+    ring2.push(linch0);
+    verts.push(add(centre, scale(tangent, radius * s)));
+    let start = verts.length - 1;
+    const d1 = axisAngle(tangent, axis2, 1.57);
+    const d2 = normalize2(cross2(tangent, axis));
+    const k = 1 / dot(d1, d2);
+    for (let i = 1; i < segments / 2; i++) {
+      let vec = axisAngle(tangent, axis2, segmentAngle * i);
+      ring0.push(start + i);
+      ring2.push(start + i);
+      vec = scaleInDirection(vec, d2, k);
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    const linch1 = verts.length;
+    ring0.push(linch1);
+    ring1.push(linch1);
+    verts.push(add(centre, scale(tangent, -radius * s)));
+    for (let i = segments / 2 + 1; i < segments; i++) {
+      const vec = axisAngle(tangent, axis1, segmentAngle * i);
+      ring0.push(verts.length);
+      ring1.push(verts.length);
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    ring1.push(linch0);
+    ring2.push(linch1);
+    start = verts.length - 1;
+    for (let i = 1; i < segments / 2; i++) {
+      const vec = axisAngle(tangent, axis3, segmentAngle * i);
+      ring1.push(start + i);
+      ring2.push(start + (segments / 2 - i));
+      verts.push(add(centre, scale(vec, radius * s)));
+    }
+    const radius0 = branch.child0.type === "trunk" ? radius * p.taperRate : radius * p.radiusFalloffRate;
+    const radius1 = radius * p.radiusFalloffRate;
+    this.createForks(branch.child0, radius0);
+    this.createForks(branch.child1, radius1);
+  }
+};
+function toMesh(verts, normals, uvs, faces) {
+  const positions = [];
+  const n = [];
+  const t = [];
+  for (let i = 0; i < verts.length; i++) {
+    positions.push(-verts[i][0], verts[i][1], verts[i][2]);
+    n.push(-normals[i][0], normals[i][1], normals[i][2]);
+    const uv = uvs[i] || [0, 0];
+    t.push(uv[0], 1 - uv[1]);
+  }
+  const indices = [];
+  for (const f of faces) indices.push(f[0], f[2], f[1]);
+  return new MeshData(positions, n, t, indices);
+}
+function buildTree(kind, seed = 0) {
+  const { settings, leaves } = treeSettings(kind, seed);
+  const b = new Builder2(settings);
+  return {
+    bark: toMesh(b.verts, b.normals, b.uv, b.faces),
+    twigs: toMesh(b.twigVerts, b.twigNormals, b.twigUvs, b.twigFaces),
+    leaves
+  };
+}
+
+// src/engine/scene/tree-textures.js
+function hash(x, y, seed) {
+  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(seed, 2147483647);
+  h = Math.imul(h ^ h >>> 13, 1274126177);
+  return ((h ^ h >>> 16) >>> 0) / 4294967296;
+}
+function noise(x, y, period, seed) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const fx = x - xi;
+  const fy = y - yi;
+  const sx = fx * fx * (3 - 2 * fx);
+  const sy = fy * fy * (3 - 2 * fy);
+  const w = (i) => (i % period + period) % period;
+  const a = hash(w(xi), w(yi), seed);
+  const b = hash(w(xi + 1), w(yi), seed);
+  const c = hash(w(xi), w(yi + 1), seed);
+  const d = hash(w(xi + 1), w(yi + 1), seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function barkPixels(width = 64, height = 128) {
+  const px = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const u = x / width;
+      const v = y / height;
+      let n = 0;
+      let amp = 0.5;
+      for (let o = 0; o < 4; o++) {
+        const f = 1 << o;
+        n += amp * noise(u * 8 * f, v * 2 * f, 8 * f, 11 + o);
+        amp /= 2;
+      }
+      const crack = noise(u * 12, v * 3, 12, 5);
+      let shade = 0.55 + 0.6 * n;
+      if (crack < 0.28) shade *= 0.45 + crack;
+      const i = (y * width + x) * 4;
+      px[i] = 92 * shade;
+      px[i + 1] = 68 * shade;
+      px[i + 2] = 48 * shade;
+      px[i + 3] = 255;
+    }
+  }
+  return px;
+}
+var LEAF_STYLES = [
+  { count: 9, length: 0.26, width: 0.11, spread: 0.55, colour: [70, 128, 48] },
+  { count: 14, length: 0.3, width: 0.045, spread: 0.3, colour: [96, 140, 60] },
+  { count: 18, length: 0.1, width: 0.08, spread: 0.8, colour: [58, 118, 52] }
+];
+function leafPixels(style = 0, size = 128) {
+  const s = LEAF_STYLES[style] || LEAF_STYLES[0];
+  const px = new Uint8ClampedArray(size * size * 4);
+  const put = (x, y, r, g, b) => {
+    if (x < 0 || y < 0 || x >= size || y >= size) return;
+    const i = (y * size + x) * 4;
+    px[i] = r;
+    px[i + 1] = g;
+    px[i + 2] = b;
+    px[i + 3] = 255;
+  };
+  for (let k = 0; k < s.count; k++) {
+    const along = 0.12 + 0.8 * (k + 0.5) / s.count;
+    const side = k % 2 === 0 ? 1 : -1;
+    const lean = side * s.spread * (0.6 + 0.4 * hash(k, 1, style)) * (1 - along * 0.5);
+    const cx = 0.5 + Math.sin(lean) * s.length * 0.55;
+    const cy = 1 - along - Math.cos(lean) * s.length * 0.35;
+    const len = s.length * (0.75 + 0.5 * hash(k, 2, style));
+    const wid = s.width * (0.8 + 0.4 * hash(k, 3, style));
+    const tint = 0.8 + 0.35 * hash(k, 4, style);
+    const angle = lean;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    const r = Math.ceil(Math.max(len, wid) * size);
+    const x0 = Math.round(cx * size);
+    const y0 = Math.round(cy * size);
+    for (let y = y0 - r; y <= y0 + r; y++) {
+      for (let x = x0 - r; x <= x0 + r; x++) {
+        const dx = x / size - cx;
+        const dy = y / size - cy;
+        const a = (dx * sa - dy * ca) / (len / 2);
+        const b = (dx * ca + dy * sa) / (wid / 2);
+        const edge = Math.pow(1 - Math.min(1, Math.abs(a)), 0.8) * (1 - 0.25 * a);
+        if (Math.abs(b) > edge || Math.abs(a) > 1) continue;
+        const light = tint * (Math.abs(b) < 0.08 ? 1.25 : 1 - 0.3 * Math.abs(b) / Math.max(edge, 1e-3));
+        put(x, y, s.colour[0] * light, s.colour[1] * light, s.colour[2] * light);
+      }
+    }
+  }
+  const stem = [78, 60, 40];
+  for (let y = Math.round(size * 0.1); y < size; y++) {
+    const x = Math.round(size * (0.5 + 0.02 * Math.sin(y / size * 6)));
+    put(x, y, ...stem);
+    put(x + 1, y, ...stem);
+  }
+  return px;
+}
+
+// src/engine/scene/grass.js
+var TUFT_FLOATS = 5;
+var MAX_PUSHERS = 8;
+function createTuft() {
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  for (let k = 0; k < 3; k++) {
+    const a = k * Math.PI / 3;
+    const dx = Math.cos(a) * 0.5;
+    const dz = Math.sin(a) * 0.5;
+    const base = positions.length / 3;
+    positions.push(-dx, 1, -dz, dx, 1, dz, dx, 0, dz, -dx, 0, -dz);
+    for (let i = 0; i < 4; i++) normals.push(0, 1, 0);
+    uvs.push(0, 0, 1, 0, 1, 1, 0, 1);
+    indices.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+  return new MeshData(positions, normals, uvs, indices);
+}
+function random(seed) {
+  let a = seed >>> 0 || 2654435769;
+  return () => {
+    a = a + 1831565813 >>> 0;
+    let t = a;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+var Grass = class {
+  constructor(seed) {
+    this.tufts = new Float32Array(TUFT_FLOATS * 64);
+    this.count = 0;
+    this.version = 0;
+    this.height = 0.6;
+    this.width = 0.6;
+    this.wind = 1;
+    this.pushers = [];
+    this.random = random(seed);
+  }
+  plant(x, y, z, size) {
+    if ((this.count + 1) * TUFT_FLOATS > this.tufts.length) {
+      const grown = new Float32Array(this.tufts.length * 2);
+      grown.set(this.tufts);
+      this.tufts = grown;
+    }
+    const o = this.count * TUFT_FLOATS;
+    this.tufts[o] = x;
+    this.tufts[o + 1] = y;
+    this.tufts[o + 2] = z;
+    this.tufts[o + 3] = size * (0.75 + 0.5 * this.random());
+    this.tufts[o + 4] = this.random() * Math.PI * 2;
+    this.count++;
+    this.version++;
+  }
+  // Up to `count` tufts spread evenly over a disc around (x, z). `ground(x,
+  // z)` gives the height and the surface's facing there ({ y, ny }), or null
+  // where there is no ground; steep ground (facing less than half up) gets
+  // none. Returns how many were planted.
+  paint(x, z, radius, count, size, ground) {
+    let planted = 0;
+    for (let i = 0; i < count; i++) {
+      const r = radius * Math.sqrt(this.random());
+      const a = this.random() * Math.PI * 2;
+      const px = x + Math.cos(a) * r;
+      const pz = z + Math.sin(a) * r;
+      const at = ground(px, pz);
+      if (!at || at.ny < 0.5) continue;
+      this.plant(px, at.y, pz, size);
+      planted++;
+    }
+    return planted;
+  }
+  clear() {
+    this.count = 0;
+    this.version++;
+  }
+};
+function bladePixels(size = 64) {
+  const px = new Uint8ClampedArray(size * size * 4);
+  const next = random(7);
+  for (let k = 0; k < 14; k++) {
+    const root = 0.08 + 0.84 * next();
+    const lean = (next() - 0.5) * 0.5;
+    const tall = 0.55 + 0.45 * next();
+    const width = 0.035 + 0.03 * next();
+    const shade = 0.8 + 0.35 * next();
+    for (let y = 0; y < size; y++) {
+      const h = 1 - y / size;
+      if (h > tall) continue;
+      const along = h / tall;
+      const cx = root + lean * along * along;
+      const half = width * (1 - along) * size;
+      const light = shade * (0.55 + 0.45 * along);
+      for (let x = Math.floor(cx * size - half); x <= Math.ceil(cx * size + half); x++) {
+        if (x < 0 || x >= size || Math.abs(x - cx * size) > half) continue;
+        const i = (y * size + x) * 4;
+        px[i] = 70 * light;
+        px[i + 1] = 140 * light;
+        px[i + 2] = 50 * light;
+        px[i + 3] = 255;
+      }
+    }
+  }
+  return px;
 }
 
 // src/engine/collide/bvh.js
@@ -4837,6 +6102,16 @@ function scaleTri(tri, s) {
   for (let i = 0; i < 9; i++) out[i] = tri[i] * s;
   return out;
 }
+function rayOnto(e, origin, line) {
+  const best = newHit(1);
+  best.entity = null;
+  for (const part of meshParts(e)) {
+    const before = best.t;
+    rayMesh(part, origin, line, best);
+    if (best.t < before) best.entity = e;
+  }
+  return best.entity ? best : null;
+}
 function rayMesh(e, origin, line, best) {
   const inv = e.worldMatrix.clone();
   if (!inv.invert()) return;
@@ -4946,6 +6221,99 @@ function projectPoint(camera, point, width, height) {
     depth: p.z,
     inFront: true
   };
+}
+
+// src/engine/collide/decal.js
+var LIFT = 2e-3;
+function clip(points, axis, sign, limit) {
+  const out = [];
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const da = sign * a[axis] - limit;
+    const db = sign * b[axis] - limit;
+    if (da <= 0) out.push(a);
+    if (da < 0 && db > 0 || da > 0 && db < 0) {
+      const t = da / (da - db);
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+    }
+  }
+  return out;
+}
+function buildDecal(point, normal, size, angle, targets) {
+  const n = normal.clone().normalize();
+  const reference = Math.abs(n.y) > 0.99 ? new Vec3(0, 0, 1) : new Vec3(0, 1, 0);
+  let right = n.clone().cross(reference).normalize();
+  let up = right.clone().cross(n);
+  const a = angle * Math.PI / 180;
+  const r = right.clone().scale(Math.cos(a)).add(up.clone().scale(Math.sin(a)));
+  const u = right.clone().scale(-Math.sin(a)).add(up.clone().scale(Math.cos(a)));
+  right = r;
+  up = u;
+  const half = size / 2;
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const toLocal = (x, y, z) => {
+    const dx = x - point.x;
+    const dy = y - point.y;
+    const dz = z - point.z;
+    return [dx * right.x + dy * right.y + dz * right.z, dx * up.x + dy * up.y + dz * up.z, dx * n.x + dy * n.y + dz * n.z];
+  };
+  const reach = new Vec3();
+  for (const target of targets) {
+    for (const part of meshParts(target)) {
+      meshTrianglesNear(part, point, reach, half * Math.SQRT2 + 1e-6, (tri) => {
+        const ux = tri[3] - tri[0];
+        const uy = tri[4] - tri[1];
+        const uz = tri[5] - tri[2];
+        const vx = tri[6] - tri[0];
+        const vy = tri[7] - tri[1];
+        const vz = tri[8] - tri[2];
+        const face = new Vec3(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        if (face.length() < 1e-12) return;
+        face.normalize();
+        if (face.dot(n) < 0.1) return;
+        let poly = [toLocal(tri[0], tri[1], tri[2]), toLocal(tri[3], tri[4], tri[5]), toLocal(tri[6], tri[7], tri[8])];
+        for (const [axis, limit] of [[0, half], [1, half], [2, half]]) {
+          poly = clip(poly, axis, 1, limit);
+          if (poly.length >= 3) poly = clip(poly, axis, -1, limit);
+          if (poly.length < 3) return;
+        }
+        const base = positions.length / 3;
+        for (const [x, y, z] of poly) {
+          const lift = z + size * LIFT;
+          positions.push(point.x + right.x * x + up.x * y + n.x * lift, point.y + right.y * x + up.y * y + n.y * lift, point.z + right.z * x + up.z * y + n.z * lift);
+          normals.push(face.x, face.y, face.z);
+          uvs.push(x / size + 0.5, 0.5 - y / size);
+        }
+        for (let k = 1; k + 1 < poly.length; k++) indices.push(base, base + k, base + k + 1);
+      });
+    }
+  }
+  if (!indices.length) return null;
+  smoothNormals(positions, normals);
+  return new MeshData(positions, normals, uvs, indices);
+}
+function smoothNormals(positions, normals) {
+  const sums = /* @__PURE__ */ new Map();
+  const key = (i) => `${positions[i * 3].toFixed(5)},${positions[i * 3 + 1].toFixed(5)},${positions[i * 3 + 2].toFixed(5)}`;
+  for (let i = 0; i < positions.length / 3; i++) {
+    const k = key(i);
+    const s = sums.get(k) || [0, 0, 0];
+    s[0] += normals[i * 3];
+    s[1] += normals[i * 3 + 1];
+    s[2] += normals[i * 3 + 2];
+    sums.set(k, s);
+  }
+  for (let i = 0; i < positions.length / 3; i++) {
+    const s = sums.get(key(i));
+    const l = Math.hypot(s[0], s[1], s[2]) || 1;
+    normals[i * 3] = s[0] / l;
+    normals[i * 3 + 1] = s[1] / l;
+    normals[i * 3 + 2] = s[2] / l;
+  }
 }
 
 // src/engine/collide/collisions.js
@@ -5211,6 +6579,7 @@ var COLLIDE_COMMANDS = [
   "EntityCollided%(entity, type)",
   // From the world to the screen
   "CameraProject%(camera, x#, y#, z#)",
+  "CreateDecal%(texture, x#, y#, z#, nx#, ny#, nz#, size#, angle# = 0, entity = 0)",
   "ProjectedX#()",
   "ProjectedY#()",
   "ProjectedZ#()"
@@ -5230,8 +6599,54 @@ var COLLIDE_CONSTANTS = {
 var MAX_TYPE = 999;
 function createCollideCommands(engine) {
   const world = engine.world;
-  const { entity, ofKind } = handleHelpers(world);
+  const { entity, ofKind, texture } = handleHelpers(world);
   let picked = emptyPick();
+  const decal = (tex, point, normal, size, angle, target) => {
+    let targets;
+    if (target) {
+      targets = [entity(target)];
+    } else {
+      const reach = size;
+      targets = world.entities.filter((e2) => {
+        if (!e2.mesh || e2.sprite || e2.decal || e2.trail || !e2.shown) return false;
+        const b = e2.worldBounds();
+        return b && !b.isEmpty() && point.x > b.min.x - reach && point.x < b.max.x + reach && point.y > b.min.y - reach && point.y < b.max.y + reach && point.z > b.min.z - reach && point.z < b.max.z + reach;
+      });
+    }
+    let data = buildDecal(point, normal, size, angle, targets) || new MeshData([], [], [], []);
+    const owner = target ? targets[0] : null;
+    if (owner) {
+      const inv = owner.worldMatrix.clone();
+      if (inv.invert()) {
+        const w = owner.worldMatrix.e;
+        const p = data.positions;
+        const n = data.normals;
+        const toLocal = new Vec3();
+        for (let i = 0; i < p.length; i += 3) {
+          toLocal.set(p[i], p[i + 1], p[i + 2]).applyMat4(inv);
+          p[i] = toLocal.x;
+          p[i + 1] = toLocal.y;
+          p[i + 2] = toLocal.z;
+          const nx = w[0] * n[i] + w[1] * n[i + 1] + w[2] * n[i + 2];
+          const ny = w[4] * n[i] + w[5] * n[i + 1] + w[6] * n[i + 2];
+          const nz = w[8] * n[i] + w[9] * n[i + 1] + w[10] * n[i + 2];
+          const l = Math.hypot(nx, ny, nz) || 1;
+          n[i] = nx / l;
+          n[i + 1] = ny / l;
+          n[i + 2] = nz / l;
+        }
+        data = new MeshData(p, n, data.uvs, data.indices);
+      }
+    }
+    const e = world.createMesh(data, owner);
+    e.decal = true;
+    e.castShadow = false;
+    const m = e.material;
+    m.texture = tex;
+    m.decal = true;
+    m.changed();
+    return e.id;
+  };
   let projected = { x: 0, y: 0, depth: 0 };
   const collisions = engine.collisions;
   const collision = (handle, index) => {
@@ -5249,6 +6664,12 @@ function createCollideCommands(engine) {
     return picked.entity ? picked.entity.id : 0;
   };
   return {
+    createdecal(tex, x, y, z, nx, ny, nz, size, angle, target) {
+      if (!(size > 0)) throw runtimeError(`CreateDecal needs a size above 0, not ${size}`);
+      if (nx === 0 && ny === 0 && nz === 0) throw runtimeError("CreateDecal needs the way the surface faces (nx, ny, nz), not 0, 0, 0");
+      engine.autoGraphics();
+      return decal(tex === 0 ? null : texture(tex), new Vec3(x, y, z), new Vec3(nx, ny, nz), size, angle, target);
+    },
     entitypickmode(handle, mode, obscurer) {
       if (mode < PICK_NONE || mode > PICK_BOX) throw runtimeError(`EntityPickMode mode must be PICK_NONE, PICK_SPHERE, PICK_POLYGON or PICK_BOX (0 to 3), not ${mode}`);
       const e = entity(handle);
@@ -5542,13 +6963,13 @@ function bodyPoints(e) {
   const positions = [];
   const triangles = [];
   let meshes = 0;
-  const add = (x, y, z, m) => {
+  const add2 = (x, y, z, m) => {
     const p = new Vec3(x, y, z).applyMat4(m).sub(origin).applyQuat(toBody);
     positions.push(p.x, p.y, p.z);
   };
   if (e.box) {
     const { min: min2, max: max2 } = localBox(e);
-    for (let i = 0; i < 8; i++) add(i & 1 ? max2[0] : min2[0], i & 2 ? max2[1] : min2[1], i & 4 ? max2[2] : min2[2], e.worldMatrix);
+    for (let i = 0; i < 8; i++) add2(i & 1 ? max2[0] : min2[0], i & 2 ? max2[1] : min2[1], i & 4 ? max2[2] : min2[2], e.worldMatrix);
   } else {
     const visit = (n) => {
       if (n.mesh && n.mesh.positions.length) {
@@ -5556,7 +6977,7 @@ function bodyPoints(e) {
         const base = positions.length / 3;
         const m = n.worldMatrix;
         const p = n.mesh.positions;
-        for (let i = 0; i < p.length; i += 3) add(p[i], p[i + 1], p[i + 2], m);
+        for (let i = 0; i < p.length; i += 3) add2(p[i], p[i + 1], p[i + 2], m);
         for (const i of n.mesh.indices) triangles.push(base + i);
       }
       for (const c of n.children) visit(c);
@@ -5687,10 +7108,10 @@ function createPhysicsCommands(engine) {
       nonNegative(bounce, "BodyBounce");
       act(handle, false, (id) => physics.backend.setRestitution(id, bounce));
     },
-    bodydamping(handle, linear, angular) {
-      nonNegative(linear, "BodyDamping linear");
+    bodydamping(handle, linear3, angular) {
+      nonNegative(linear3, "BodyDamping linear");
       nonNegative(angular, "BodyDamping angular");
-      act(handle, true, (id) => physics.backend.setDamping(id, linear, angular));
+      act(handle, true, (id) => physics.backend.setDamping(id, linear3, angular));
     },
     bodylockrotation(handle, pitch, yaw, roll) {
       act(handle, true, (id) => physics.backend.lockRotation(id, pitch !== 0, yaw !== 0, roll !== 0));
@@ -5839,26 +7260,26 @@ function pose(model, animation, t) {
   }
 }
 function advance(state, animation, dt) {
-  const length = animation.duration;
-  if (length <= 0) {
+  const length2 = animation.duration;
+  if (length2 <= 0) {
     state.time = 0;
     return state.mode !== ANIM_ONCE;
   }
   if (state.mode === ANIM_LOOP) {
-    state.time = ((state.time + dt * state.speed) % length + length) % length;
+    state.time = ((state.time + dt * state.speed) % length2 + length2) % length2;
     return true;
   }
   if (state.mode === ANIM_ONCE) {
     state.time += dt * state.speed;
-    if (state.time >= length || state.time <= 0) {
-      state.time = Math.max(0, Math.min(length, state.time));
+    if (state.time >= length2 || state.time <= 0) {
+      state.time = Math.max(0, Math.min(length2, state.time));
       return false;
     }
     return true;
   }
   state.time += dt * state.speed * state.direction;
-  while (state.time > length || state.time < 0) {
-    if (state.time > length) state.time = 2 * length - state.time;
+  while (state.time > length2 || state.time < 0) {
+    if (state.time > length2) state.time = 2 * length2 - state.time;
     else state.time = -state.time;
     state.direction = -state.direction;
   }
@@ -6003,22 +7424,22 @@ function synthesize(recipe) {
     lowpassEnd = lowpass,
     seed = 1
   } = recipe;
-  const length = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
-  const out = new Float32Array(length);
+  const length2 = Math.max(1, Math.round(SAMPLE_RATE * Math.max(5, ms) / 1e3));
+  const out = new Float32Array(length2);
   const attack = Math.max(1, Math.round(SAMPLE_RATE * attackMs / 1e3));
-  const random = makeRandom(seed);
+  const random2 = makeRandom(seed);
   let phase = 0;
-  let noiseValue = random() * 2 - 1;
+  let noiseValue = random2() * 2 - 1;
   let filtered = 0;
-  for (let i = 0; i < length; i++) {
-    const t = i / length;
+  for (let i = 0; i < length2; i++) {
+    const t = i / length2;
     let f = freq + (freqEnd - freq) * t;
     if (arpAt > 0 && t >= arpAt) f *= arpMul;
     if (vibDepth > 0) f *= 1 + vibDepth * Math.sin(2 * Math.PI * vibHz * i / SAMPLE_RATE);
     phase += Math.max(1, f) / SAMPLE_RATE;
     if (phase >= 1) {
       phase -= Math.floor(phase);
-      noiseValue = random() * 2 - 1;
+      noiseValue = random2() * 2 - 1;
     }
     let s;
     switch (wave) {
@@ -6641,6 +8062,285 @@ function createAudioCommands(engine) {
   };
 }
 
+// src/engine/scene/mesh-commands.js
+var MESH_COMMANDS = [
+  "CreateMesh%(parent = 0)",
+  "CreateSurface%(mesh)",
+  "CountSurfaces%(mesh)",
+  "GetSurface%(mesh, index)",
+  "ClearSurface(surface, vertices = 1, triangles = 1)",
+  "AddVertex%(surface, x#, y#, z#, u# = 0, v# = 0, w# = 1)",
+  "AddTriangle%(surface, v0, v1, v2)",
+  "VertexCoords(surface, index, x#, y#, z#)",
+  "VertexNormal(surface, index, nx#, ny#, nz#)",
+  "VertexColor(surface, index, r#, g#, b#, a# = 1)",
+  "VertexTexCoords(surface, index, u#, v#, w# = 1, set = 0)",
+  "CountVertices%(surface)",
+  "CountTriangles%(surface)",
+  "VertexX#(surface, index)",
+  "VertexY#(surface, index)",
+  "VertexZ#(surface, index)",
+  "VertexNX#(surface, index)",
+  "VertexNY#(surface, index)",
+  "VertexNZ#(surface, index)",
+  "VertexRed#(surface, index)",
+  "VertexGreen#(surface, index)",
+  "VertexBlue#(surface, index)",
+  "VertexAlpha#(surface, index)",
+  "VertexU#(surface, index, set = 0)",
+  "VertexV#(surface, index, set = 0)",
+  "TriangleVertex%(surface, triangle, corner)",
+  "UpdateNormals(mesh)",
+  "ScaleMesh(mesh, x#, y#, z#)",
+  "RotateMesh(mesh, pitch#, yaw#, roll#)",
+  "PositionMesh(mesh, x#, y#, z#)",
+  "FitMesh(mesh, x#, y#, z#, width#, height#, depth#, uniform = 0)",
+  "FlipMesh(mesh)",
+  "AddMesh(source, dest)",
+  "CopyMesh%(mesh, parent = 0)",
+  "MeshWidth#(mesh)",
+  "MeshHeight#(mesh)",
+  "MeshDepth#(mesh)"
+];
+var MESH_CONSTANTS = {
+  FX_VERTEXCOLOR: 2,
+  FX_VERTEXALPHA: 32
+};
+function transform(mesh, m, t) {
+  const [[a, b, c], [d, e, f], [g, h, i]] = m;
+  const co = [
+    [e * i - f * h, f * g - d * i, d * h - e * g],
+    [c * h - b * i, a * i - c * g, b * g - a * h],
+    [b * f - c * e, c * d - a * f, a * e - b * d]
+  ];
+  for (const s of mesh.surfaces) {
+    const p = s.positions;
+    const n = s.normals;
+    for (let k = 0; k < p.length; k += 3) {
+      const [x, y, z] = [p[k], p[k + 1], p[k + 2]];
+      p[k] = a * x + b * y + c * z + t[0];
+      p[k + 1] = d * x + e * y + f * z + t[1];
+      p[k + 2] = g * x + h * y + i * z + t[2];
+      const [nx, ny, nz] = [n[k], n[k + 1], n[k + 2]];
+      const ox = co[0][0] * nx + co[0][1] * ny + co[0][2] * nz;
+      const oy = co[1][0] * nx + co[1][1] * ny + co[1][2] * nz;
+      const oz = co[2][0] * nx + co[2][1] * ny + co[2][2] * nz;
+      const l = Math.hypot(ox, oy, oz) || 1;
+      n[k] = ox / l;
+      n[k + 1] = oy / l;
+      n[k + 2] = oz / l;
+    }
+  }
+  mesh.touch();
+}
+function createMeshCommands(engine) {
+  const world = engine.world;
+  const { entity, parentOf } = handleHelpers(world);
+  const newSurface = (mesh2) => {
+    const s = new Surface(mesh2);
+    world.addHandle(s);
+    mesh2.surfaces.push(s);
+    mesh2.touch();
+    return s;
+  };
+  const mesh = (handle) => {
+    const e = entity(handle);
+    if (e.kind !== "mesh" || !e.mesh) throw runtimeError(`Entity ${handle} is not a mesh`);
+    if (e.sprite) throw runtimeError(`Entity ${handle} is a sprite: its square cannot be changed`);
+    if (e.trail) throw runtimeError(`Entity ${handle} is a trail: its mesh is made anew every step`);
+    if (!(e.mesh instanceof EditableMesh)) {
+      e.mesh = EditableMesh.from(e.mesh);
+      for (const s of e.mesh.surfaces) world.addHandle(s);
+    }
+    return e.mesh;
+  };
+  const surface = (handle) => {
+    const s = world.handles.get(handle);
+    if (s instanceof Surface) return s;
+    if (handle === 0) throw runtimeError("Surface handle is 0 (no surface)");
+    if (s) throw runtimeError(`Handle ${handle} is ${describe(s)}, not a surface`);
+    throw runtimeError(`Surface ${handle} does not exist`);
+  };
+  const vertex2 = (s, index) => {
+    if (!(index >= 0 && index < s.vertexCount)) throw runtimeError(`Surface ${s.handle} has ${s.vertexCount} vertices (0 to ${s.vertexCount - 1}), not number ${index}`);
+    return index;
+  };
+  const uvSet = (set) => {
+    if (set !== 0) throw runtimeError(`Only texture coordinate set 0 is supported, not ${set}`);
+  };
+  const copyInto = (dest, source) => {
+    for (const from of source.surfaces) {
+      const s = newSurface(dest);
+      s.positions = from.positions.slice();
+      s.normals = from.normals.slice();
+      s.uvs = from.uvs.slice();
+      s.colors = from.colors.slice();
+      s.triangles = from.triangles.slice();
+    }
+    dest.colored = dest.colored || source.colored;
+    dest.touch();
+  };
+  return {
+    createmesh(parent) {
+      engine.autoGraphics();
+      return world.createMesh(new EditableMesh(), parentOf(parent)).id;
+    },
+    createsurface: (handle) => newSurface(mesh(handle)).handle,
+    countsurfaces: (handle) => mesh(handle).surfaces.length,
+    getsurface(handle, index) {
+      const m = mesh(handle);
+      if (!(index >= 1 && index <= m.surfaces.length)) throw runtimeError(`Mesh ${handle} has ${m.surfaces.length} surface${m.surfaces.length === 1 ? "" : "s"}, not number ${index} (they are numbered from 1)`);
+      return m.surfaces[index - 1].handle;
+    },
+    clearsurface(handle, vertices, triangles) {
+      surface(handle).clear(vertices !== 0, triangles !== 0);
+    },
+    addvertex: (handle, x, y, z, u, v) => surface(handle).addVertex(x, y, z, u, v),
+    addtriangle(handle, a, b, c) {
+      const s = surface(handle);
+      return s.addTriangle(vertex2(s, a), vertex2(s, b), vertex2(s, c));
+    },
+    vertexcoords(handle, index, x, y, z) {
+      const s = surface(handle);
+      s.setPosition(vertex2(s, index), x, y, z);
+    },
+    vertexnormal(handle, index, x, y, z) {
+      const s = surface(handle);
+      s.setNormal(vertex2(s, index), x, y, z);
+    },
+    vertexcolor(handle, index, r, g, b, a) {
+      const s = surface(handle);
+      s.setColor(vertex2(s, index), r, g, b, a);
+    },
+    vertextexcoords(handle, index, u, v, w, set) {
+      uvSet(set);
+      const s = surface(handle);
+      s.setUv(vertex2(s, index), u, v);
+    },
+    countvertices: (handle) => surface(handle).vertexCount,
+    counttriangles: (handle) => surface(handle).triangleCount,
+    vertexx: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3];
+    },
+    vertexy: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3 + 1];
+    },
+    vertexz: (h, i) => {
+      const s = surface(h);
+      return s.positions[vertex2(s, i) * 3 + 2];
+    },
+    vertexnx: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3];
+    },
+    vertexny: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3 + 1];
+    },
+    vertexnz: (h, i) => {
+      const s = surface(h);
+      return s.normals[vertex2(s, i) * 3 + 2];
+    },
+    vertexred: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 0);
+    },
+    vertexgreen: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 1);
+    },
+    vertexblue: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 2);
+    },
+    vertexalpha: (h, i) => {
+      const s = surface(h);
+      return s.color(vertex2(s, i), 3);
+    },
+    vertexu: (h, i, set) => {
+      uvSet(set);
+      const s = surface(h);
+      return s.uvs[vertex2(s, i) * 2];
+    },
+    vertexv: (h, i, set) => {
+      uvSet(set);
+      const s = surface(h);
+      return s.uvs[vertex2(s, i) * 2 + 1];
+    },
+    trianglevertex(handle, triangle, corner) {
+      const s = surface(handle);
+      if (!(triangle >= 0 && triangle < s.triangleCount)) throw runtimeError(`Surface ${handle} has ${s.triangleCount} triangles (0 to ${s.triangleCount - 1}), not number ${triangle}`);
+      if (!(corner >= 0 && corner <= 2)) throw runtimeError(`A triangle's corners are 0, 1 and 2, not ${corner}`);
+      return s.triangles[triangle * 3 + corner];
+    },
+    updatenormals(handle) {
+      for (const s of mesh(handle).surfaces) s.updateNormals();
+    },
+    scalemesh(handle, x, y, z) {
+      transform(mesh(handle), [[x, 0, 0], [0, y, 0], [0, 0, z]], [0, 0, 0]);
+    },
+    rotatemesh(handle, pitch, yaw, roll) {
+      const q = new Quat().fromEuler(pitch, yaw, roll);
+      const col = (v) => new Vec3(...v).applyQuat(q);
+      const [i, j, k] = [col([1, 0, 0]), col([0, 1, 0]), col([0, 0, 1])];
+      transform(mesh(handle), [[i.x, j.x, k.x], [i.y, j.y, k.y], [i.z, j.z, k.z]], [0, 0, 0]);
+    },
+    positionmesh(handle, x, y, z) {
+      transform(mesh(handle), [[1, 0, 0], [0, 1, 0], [0, 0, 1]], [x, y, z]);
+    },
+    fitmesh(handle, x, y, z, width, height, depth, uniform) {
+      const m = mesh(handle);
+      const b = m.bounds;
+      if (b.isEmpty()) return;
+      const size = [b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z];
+      let s = [width, height, depth].map((want, n) => size[n] > 0 ? want / size[n] : 1);
+      if (uniform) {
+        if (s[0] < s[1] && s[0] < s[2]) s = [s[0], s[0], s[0]];
+        else if (s[1] < s[0] && s[1] < s[2]) s = [s[1], s[1], s[1]];
+        else s = [s[2], s[2], s[2]];
+      }
+      const centre = [(b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, (b.min.z + b.max.z) / 2];
+      const target = [x + width / 2, y + height / 2, z + depth / 2];
+      transform(m, [[s[0], 0, 0], [0, s[1], 0], [0, 0, s[2]]], [0, 1, 2].map((n) => target[n] - s[n] * centre[n]));
+    },
+    flipmesh(handle) {
+      const m = mesh(handle);
+      for (const s of m.surfaces) {
+        for (let k = 0; k < s.normals.length; k++) s.normals[k] = -s.normals[k];
+        const t = s.triangles;
+        for (let k = 0; k < t.length; k += 3) [t[k + 1], t[k + 2]] = [t[k + 2], t[k + 1]];
+      }
+      m.touch();
+    },
+    addmesh(source, dest) {
+      if (source === dest) throw runtimeError("A mesh cannot be added to itself");
+      copyInto(mesh(dest), mesh(source));
+    },
+    copymesh(handle, parent) {
+      const src = entity(handle);
+      const from = mesh(handle);
+      const e = world.createMesh(new EditableMesh(), parentOf(parent));
+      copyInto(e.mesh, from);
+      e.materials = src.materials.map((m) => m.clone());
+      return e.id;
+    },
+    meshwidth: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.x - b.min.x;
+    },
+    meshheight: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.y - b.min.y;
+    },
+    meshdepth: (handle) => {
+      const b = mesh(handle).bounds;
+      return b.isEmpty() ? 0 : b.max.z - b.min.z;
+    }
+  };
+}
+
 // src/engine/commands.js
 var ENGINE_COMMANDS = [
   // Screen
@@ -6658,6 +8358,7 @@ var ENGINE_COMMANDS = [
   "CreateLight%(kind = 1, parent = 0)",
   "LightColor(light, r, g, b)",
   "LightRange(light, range#)",
+  "LightShadows(light, on = 1, area# = 40)",
   "AmbientLight(r, g, b)",
   // Shapes and pivots
   "CreatePivot%(parent = 0)",
@@ -6667,6 +8368,33 @@ var ENGINE_COMMANDS = [
   "CreateCone%(segments = 16, solid = 1, parent = 0)",
   "CreatePlane%(divisions = 1, parent = 0)",
   "CreateTorus%(segments = 24, thickness# = 0.25, parent = 0)",
+  // Trees and grass
+  "CreateTree%(kind = 1, seed = 0, parent = 0)",
+  "CreateGrass%(parent = 0)",
+  "PlantGrass(grass, x#, y#, z#, size# = 1)",
+  "PaintGrass%(grass, x#, z#, radius#, count, onto = 0, size# = 1)",
+  "GrassSize(grass, height#, width# = 0.6)",
+  "GrassWind(grass, strength#)",
+  "GrassPush(grass, entity, radius# = 1)",
+  "ClearGrass(grass)",
+  "CountGrass%(grass)",
+  // Ribbon trails
+  "CreateTrail%(first, second)",
+  "TrailPoint(trail, entity)",
+  "TrailLife(trail, seconds#)",
+  "TrailStep(trail, distance#)",
+  "TrailSmooth(trail, pieces)",
+  "TrailColor(trail, r, g, b, alpha# = 1)",
+  "TrailFadeColor(trail, r, g, b, alpha# = 0)",
+  "TrailEmit(trail, on)",
+  "ClearTrail(trail)",
+  // Sprites
+  "CreateSprite%(parent = 0)",
+  "LoadSprite%(file$, flags = 1, parent = 0)",
+  "RotateSprite(sprite, angle#)",
+  "ScaleSprite(sprite, x#, y#)",
+  "HandleSprite(sprite, x#, y#)",
+  "SpriteViewMode(sprite, mode)",
   // Looks
   "EntityColor(entity, r, g, b)",
   "EntityAlpha(entity, alpha#)",
@@ -6674,11 +8402,12 @@ var ENGINE_COMMANDS = [
   "EntityFX(entity, flags)",
   "EntityTexture(entity, texture)",
   "EntityOrder(entity, order)",
+  "EntityBlend(entity, blend)",
   // Textures
-  "LoadTexture%(file$)",
-  "CreateTexture%(width, height, r = 255, g = 255, b = 255)",
+  "LoadTexture%(file$, flags = 1)",
+  "CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = 1)",
   "CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)",
-  "TexturePixel(texture, x, y, r, g, b)",
+  "TexturePixel(texture, x, y, r, g, b, a = 255)",
   "ScaleTexture(texture, u#, v#)",
   "TextureLoaded%(texture)",
   "FreeTexture(texture)",
@@ -6734,6 +8463,7 @@ var ENGINE_COMMANDS = [
   ...COLLIDE_COMMANDS,
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
+  ...MESH_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 var ENGINE_CONSTANTS = {
@@ -6746,11 +8476,31 @@ var ENGINE_CONSTANTS = {
   FX_FULLBRIGHT: 1,
   FX_FLAT: 4,
   FX_TWOSIDED: 16,
+  FX_NOSHADOWCAST: 131072,
+  FX_NOSHADOWRECV: 262144,
+  TREE_OAK,
+  TREE_WILLOW,
+  TREE_SHRUB,
+  TREE_ASH,
+  TREE_POPLAR,
+  TREE_SEQUOIA,
+  TREE_BEECH,
+  TEX_COLOR,
+  TEX_ALPHA,
+  TEX_MASKED,
+  TEX_MIPMAP,
+  TEX_CLAMPU,
+  TEX_CLAMPV,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
+  ...MESH_CONSTANTS,
   ...AUDIO_CONSTANTS
 };
+function textureFlags(flags, command) {
+  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  return flags;
+}
 function createEngineCommands(engine) {
   const world = engine.world;
   const { entity, parentOf, texture, ofKind } = handleHelpers(world);
@@ -6763,6 +8513,48 @@ function createEngineCommands(engine) {
     engine.autoGraphics();
     return world.createMesh(mesh, parentOf(parent)).id;
   };
+  const makeSprite = (parent, tex) => {
+    engine.autoGraphics();
+    const e = world.createMesh(engine.sharedMesh("sprite", createSpriteQuad), parentOf(parent));
+    e.sprite = newSprite();
+    e.castShadow = false;
+    e.receiveShadow = false;
+    const m = e.material;
+    m.fullbright = true;
+    if (tex) {
+      m.texture = tex;
+      if (!tex.alpha && !tex.masked) m.blend = "add";
+    }
+    m.changed();
+    return e.id;
+  };
+  const sprite = (handle) => {
+    const e = entity(handle);
+    if (!e.sprite) throw runtimeError(`Entity ${handle} is not a sprite (CreateSprite and LoadSprite make sprites)`);
+    return e.sprite;
+  };
+  const treeTextures = /* @__PURE__ */ new Map();
+  const treeTexture = (key, width, height, pixels, flags) => {
+    let t = treeTextures.get(key);
+    if (!t || !world.handles.has(t.handle)) {
+      t = world.createTexture(width, height);
+      t.pixels.set(pixels());
+      t.nearest = false;
+      t.setFlags(flags);
+      treeTextures.set(key, t);
+    }
+    return t;
+  };
+  const grass = (handle) => {
+    const e = entity(handle);
+    if (!e.grass) throw runtimeError(`Entity ${handle} is not grass (CreateGrass makes grass)`);
+    return e;
+  };
+  const trail = (handle) => {
+    const e = entity(handle);
+    if (!e.trail) throw runtimeError(`Entity ${handle} is not a trail (CreateTrail makes trails)`);
+    return e.trail;
+  };
   const style = engine.style;
   const step = () => engine.input.step;
   return {
@@ -6770,6 +8562,7 @@ function createEngineCommands(engine) {
     ...createPhysicsCommands(engine),
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
+    ...createMeshCommands(engine),
     // ---------------------------------------------------------- screen
     graphics3d(width, height) {
       if (width < 1 || height < 1) throw runtimeError(`Graphics3D needs a positive size, not ${width} x ${height}`);
@@ -6813,6 +8606,10 @@ function createEngineCommands(engine) {
     lightrange(light, range2) {
       ofKind(light, "light", "light").light.range = Math.max(0, range2);
     },
+    lightshadows(light, on, area) {
+      if (on && !(area > 0)) throw runtimeError(`LightShadows needs an area above 0, not ${area}`);
+      ofKind(light, "light", "light").light.shadows = on ? area : 0;
+    },
     ambientlight(r, g, b) {
       world.ambient = [unit(r), unit(g), unit(b)];
     },
@@ -6825,6 +8622,158 @@ function createEngineCommands(engine) {
     createcylinder: (segments, solid, parent) => shape(engine.sharedMesh(`cylinder${segments}.${solid}`, () => primitive(createCylinder(clampSegments(segments), solid !== 0), "cylinder")), parent),
     createcone: (segments, solid, parent) => shape(engine.sharedMesh(`cone${segments}.${solid}`, () => createCone(clampSegments(segments), solid !== 0)), parent),
     createplane: (divisions, parent) => shape(engine.sharedMesh("plane" + divisions, () => createPlane(Math.max(1, Math.min(256, divisions)))), parent),
+    createtree(kind, seed, parent) {
+      if (!TREE_KINDS[kind]) throw runtimeError(`CreateTree needs one of the TREE_ kinds (${TREE_OAK} to ${TREE_BEECH}), not ${kind}`);
+      engine.autoGraphics();
+      const { bark, twigs, leaves } = buildTree(kind, seed);
+      const e = world.createMesh(bark, parentOf(parent));
+      e.name = "tree";
+      e.material.texture = treeTexture("bark", 64, 128, () => barkPixels(), TEX_COLOR);
+      e.material.changed();
+      const t = world.createMesh(twigs, e);
+      t.name = "twigs";
+      t.material.texture = treeTexture(`leaves${leaves}`, 128, 128, () => leafPixels(leaves), TEX_MASKED);
+      t.material.changed();
+      return e.id;
+    },
+    creategrass(parent) {
+      engine.autoGraphics();
+      const e = world.createEntity("grass", parentOf(parent));
+      e.grass = new Grass(e.id);
+      e.grass.mesh = engine.sharedMesh("tuft", createTuft);
+      e.material = new Material();
+      e.material.texture = treeTexture("blades", 64, 64, () => bladePixels(), TEX_MASKED);
+      e.material.twoSided = true;
+      e.castShadow = false;
+      return e.id;
+    },
+    plantgrass(handle, x, y, z, size) {
+      grass(handle).grass.plant(x, y, z, Math.max(0, size));
+    },
+    paintgrass(handle, x, z, radius, count, onto, size) {
+      const e = grass(handle);
+      if (!(radius > 0)) throw runtimeError(`PaintGrass needs a radius above 0, not ${radius}`);
+      if (count < 0 || count > 1e6) throw runtimeError(`PaintGrass plants 0 to 1000000 tufts at a time, not ${count}`);
+      let ground = () => ({ y: 0, ny: 1 });
+      if (onto) {
+        const target = entity(onto);
+        const b = target.worldBounds ? target.worldBounds() : null;
+        const top = b && !b.isEmpty() ? b.max.y + 1 : 1e3;
+        const drop = b && !b.isEmpty() ? b.max.y - b.min.y + 2 : 2e3;
+        const inv = e.worldMatrix.clone();
+        if (!inv.invert()) return 0;
+        const w = e.worldMatrix;
+        ground = (px, pz) => {
+          const at = new Vec3(px, 0, pz).applyMat4(w);
+          const hit = rayOnto(target, new Vec3(at.x, top, at.z), new Vec3(0, -drop, 0));
+          if (!hit) return null;
+          return { y: new Vec3(hit.x, hit.y, hit.z).applyMat4(inv).y, ny: hit.ny };
+        };
+      }
+      return e.grass.paint(x, z, radius, count, Math.max(0, size), ground);
+    },
+    grasssize(handle, height, width) {
+      const g = grass(handle).grass;
+      g.height = Math.max(0, height);
+      g.width = Math.max(0, width);
+      g.version++;
+    },
+    grasswind(handle, strength) {
+      grass(handle).grass.wind = Math.max(0, strength);
+    },
+    grasspush(handle, pusher, radius) {
+      const g = grass(handle).grass;
+      if (pusher === 0) {
+        g.pushers.length = 0;
+        return;
+      }
+      const e = entity(pusher);
+      const known = g.pushers.find((p) => p.entity === e);
+      if (known) known.radius = Math.max(0, radius);
+      else {
+        if (g.pushers.length >= MAX_PUSHERS) throw runtimeError(`Grass is pushed by at most ${MAX_PUSHERS} entities`);
+        g.pushers.push({ entity: e, radius: Math.max(0, radius) });
+      }
+    },
+    cleargrass(handle) {
+      grass(handle).grass.clear();
+    },
+    countgrass: (handle) => grass(handle).grass.count,
+    createtrail(first, second) {
+      const blade = [entity(first), entity(second)];
+      if (blade[0] === blade[1]) throw runtimeError("CreateTrail needs two different entities for the ends of its blade");
+      engine.autoGraphics();
+      const e = world.createEntity("mesh");
+      const t = new Trail(e, blade);
+      e.mesh = t.mesh;
+      e.trail = t;
+      e.castShadow = false;
+      e.receiveShadow = false;
+      const m = e.material;
+      m.fullbright = true;
+      m.twoSided = true;
+      m.vertexColors = true;
+      m.vertexAlpha = true;
+      m.blend = "add";
+      m.changed();
+      engine.trails.push(t);
+      return e.id;
+    },
+    trailpoint(handle, point) {
+      const t = trail(handle);
+      const e = entity(point);
+      if (t.blade.includes(e)) throw runtimeError(`Entity ${point} is already on trail ${handle}'s blade`);
+      if (t.blade.length >= MAX_BLADE) throw runtimeError(`A trail's blade has at most ${MAX_BLADE} points`);
+      t.blade.push(e);
+      t.clear();
+    },
+    traillife(handle, seconds) {
+      trail(handle).life = Math.max(0.01, seconds);
+    },
+    trailstep(handle, distance) {
+      trail(handle).step = Math.max(1e-3, distance);
+    },
+    trailsmooth(handle, pieces) {
+      trail(handle).smooth = Math.max(1, Math.min(64, pieces));
+    },
+    trailcolor(handle, r, g, b, alpha) {
+      const t = trail(handle);
+      const end = t.end;
+      t.setColors(r, g, b, alpha, r, g, b, 0);
+      if (t.fadeSet) t.end = end;
+    },
+    trailfadecolor(handle, r, g, b, alpha) {
+      const t = trail(handle);
+      const start = t.start;
+      t.setColors(0, 0, 0, 0, r, g, b, alpha);
+      t.start = start;
+      t.fadeSet = true;
+    },
+    trailemit(handle, on) {
+      trail(handle).setEmitting(on !== 0);
+    },
+    cleartrail(handle) {
+      trail(handle).clear();
+    },
+    createsprite: (parent) => makeSprite(parent, null),
+    loadsprite: (file, flags, parent) => makeSprite(parent, engine.loadTexture(file).setFlags(textureFlags(flags, "LoadSprite"))),
+    rotatesprite(handle, angle) {
+      sprite(handle).angle = angle;
+    },
+    scalesprite(handle, x, y) {
+      const s = sprite(handle);
+      s.scaleX = x;
+      s.scaleY = y;
+    },
+    handlesprite(handle, x, y) {
+      const s = sprite(handle);
+      s.handleX = x;
+      s.handleY = y;
+    },
+    spriteviewmode(handle, mode) {
+      if (mode < SPRITE_FREE || mode > SPRITE_UPRIGHT2) throw runtimeError(`SpriteViewMode needs a mode from 1 to 4, not ${mode}`);
+      sprite(handle).mode = mode;
+    },
     createtorus: (segments, thickness, parent) => shape(engine.sharedMesh(`torus${segments}.${thickness}`, () => createTorus(clampSegments(segments), Math.max(0.01, Math.min(1, thickness)))), parent),
     // ----------------------------------------------------------- looks
     entitycolor(handle, r, g, b) {
@@ -6847,7 +8796,12 @@ function createEngineCommands(engine) {
       m.fullbright = (flags & 1) !== 0;
       m.flat = (flags & 4) !== 0;
       m.twoSided = (flags & 16) !== 0;
+      m.vertexColors = (flags & 2) !== 0;
+      m.vertexAlpha = (flags & 32) !== 0;
       m.changed();
+      const e = entity(handle);
+      e.castShadow = (flags & 131072) === 0;
+      e.receiveShadow = (flags & 262144) === 0;
     },
     entitytexture(handle, tex) {
       const m = material(handle);
@@ -6857,15 +8811,22 @@ function createEngineCommands(engine) {
     entityorder(handle, order) {
       entity(handle).order = order;
     },
-    // -------------------------------------------------------- textures
-    loadtexture(file) {
-      return engine.loadTexture(file).handle;
+    entityblend(handle, blend) {
+      const modes = { 1: "alpha", 2: "multiply", 3: "add" };
+      if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
+      const m = material(handle);
+      m.blend = modes[blend];
+      m.changed();
     },
-    createtexture(width, height, r, g, b) {
+    // -------------------------------------------------------- textures
+    loadtexture(file, flags) {
+      return engine.loadTexture(file).setFlags(textureFlags(flags, "LoadTexture")).handle;
+    },
+    createtexture(width, height, r, g, b, flags) {
       if (width < 1 || height < 1 || width > 4096 || height > 4096) {
         throw runtimeError(`CreateTexture size must be 1 to 4096, not ${width} x ${height}`);
       }
-      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).handle;
+      return world.createTexture(width, height).fill(byte(r), byte(g), byte(b)).setFlags(textureFlags(flags, "CreateTexture")).handle;
     },
     createcheckertexture(size, cells, r1, g1, b1, r2, g2, b2) {
       if (size < 1 || size > 4096) throw runtimeError(`CreateCheckerTexture size must be 1 to 4096, not ${size}`);
@@ -6873,10 +8834,10 @@ function createEngineCommands(engine) {
       t.checker(Math.max(1, cells), [byte(r1), byte(g1), byte(b1)], [byte(r2), byte(g2), byte(b2)]);
       return t.handle;
     },
-    texturepixel(tex, x, y, r, g, b) {
+    texturepixel(tex, x, y, r, g, b, a) {
       const t = texture(tex);
       if (!t.pixels) throw runtimeError("TexturePixel only works on textures made with CreateTexture");
-      t.setPixel(x, y, byte(r), byte(g), byte(b));
+      t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
     scaletexture(tex, u, v) {
       const t = texture(tex);
@@ -7044,10 +9005,10 @@ function container(bytes) {
   if (bytes.length >= 12 && view.getUint32(0, true) === GLB_MAGIC) {
     const version = view.getUint32(4, true);
     if (version !== 2) throw new Error(`this is a version ${version} .glb, only version 2 is read`);
-    const length = Math.min(view.getUint32(8, true), bytes.length);
+    const length2 = Math.min(view.getUint32(8, true), bytes.length);
     let json = null;
     let bin = null;
-    for (let at = 12; at + 8 <= length; ) {
+    for (let at = 12; at + 8 <= length2; ) {
       const size = view.getUint32(at, true);
       const type = view.getUint32(at + 4, true);
       const body = bytes.subarray(at + 8, at + 8 + size);
@@ -7231,8 +9192,8 @@ var Reader = class {
     if (!info) return { set: 0, transform: null };
     const tt = info.extensions && info.extensions.KHR_texture_transform;
     const set = tt && tt.texCoord !== void 0 ? tt.texCoord : info.texCoord || 0;
-    const transform = tt && (tt.offset || tt.rotation || tt.scale) ? tt : null;
-    return { set, transform };
+    const transform2 = tt && (tt.offset || tt.rotation || tt.scale) ? tt : null;
+    return { set, transform: transform2 };
   }
   // -------------------------------------------------------------- meshes
   mesh(index) {
@@ -7259,7 +9220,7 @@ var Reader = class {
       let tri = prim.indices !== void 0 ? Array.from(this.accessor(prim.indices)) : Array.from({ length: count }, (_, i) => i);
       tri = toTriangles(tri, mode);
       const matIndex = prim.material !== void 0 ? prim.material : -1;
-      const { set, transform } = this.uvSetup(matIndex);
+      const { set, transform: transform2 } = this.uvSetup(matIndex);
       const uvKey = `TEXCOORD_${set}`;
       const uv = attr[uvKey] !== void 0 ? this.accessor(attr[uvKey]) : null;
       const nor = attr.NORMAL !== void 0 ? this.accessor(attr.NORMAL) : null;
@@ -7277,10 +9238,10 @@ var Reader = class {
         if (nor) normals.push(-nor[v * 3], nor[v * 3 + 1], nor[v * 3 + 2]);
         let u = uv ? uv[v * 2] : 0;
         let w = uv ? uv[v * 2 + 1] : 0;
-        if (transform) {
-          const [sx, sy] = transform.scale || [1, 1];
-          const r = transform.rotation || 0;
-          const [ox, oy] = transform.offset || [0, 0];
+        if (transform2) {
+          const [sx, sy] = transform2.scale || [1, 1];
+          const r = transform2.rotation || 0;
+          const [ox, oy] = transform2.offset || [0, 0];
           const c = Math.cos(r);
           const s = Math.sin(r);
           const tu = c * sx * u + s * sy * w + ox;
@@ -7324,25 +9285,25 @@ var Reader = class {
   node(n, index) {
     const position = new Vec3();
     const rotation = new Quat();
-    const scale = new Vec3(1, 1, 1);
+    const scale2 = new Vec3(1, 1, 1);
     if (n.matrix) {
       const m = new Mat4().fromArray(n.matrix);
       for (const i of [1, 2, 3, 4, 8, 12]) m.e[i] = -m.e[i];
-      m.decompose(position, rotation, scale);
+      m.decompose(position, rotation, scale2);
     } else {
       const t = n.translation || [0, 0, 0];
       const r = n.rotation || [0, 0, 0, 1];
       const s = n.scale || [1, 1, 1];
       position.set(-t[0], t[1], t[2]);
       rotation.set(r[0], -r[1], -r[2], r[3]).normalize();
-      scale.set(s[0], s[1], s[2]);
+      scale2.set(s[0], s[1], s[2]);
     }
     if (n.skin !== void 0) this.warnOnce("skin", "the model is skinned, which PolyBasic does not play yet: it shows in its rest pose");
     return {
       name: n.name || "",
       position,
       rotation,
-      scale,
+      scale: scale2,
       mesh: n.mesh !== void 0 ? n.mesh : -1,
       children: n.children || [],
       index
@@ -7787,6 +9748,7 @@ var Engine = class {
     this.models = new Models(this);
     this.steps = 0;
     this.audio = new Audio(this, options.audio || new NullAudio());
+    this.trails = [];
     this.backend = options.backend || new NullBackend();
     this.overlay = options.overlay || new NullOverlay();
     this.input = options.input || new Input();
@@ -7907,6 +9869,8 @@ var Engine = class {
     this.physics.step(STEP_MS / 1e3);
     this.collisions.update();
     this.audio.step();
+    this.trails = this.trails.filter((t) => t.entity.alive);
+    for (const t of this.trails) t.update(STEP_MS / 1e3);
   }
   // The program stopped (for whatever reason): let go of what only a
   // running program needs. The scene stays on screen.
@@ -7916,6 +9880,7 @@ var Engine = class {
   }
   renderFrame() {
     const frame = this.world.buildFrame(this.width, this.height);
+    frame.time = this.steps * STEP_MS / 1e3;
     this.backend.render(frame);
     this.frames++;
     const now = this.now();
@@ -8383,7 +10348,7 @@ function denormalize(value, array) {
       throw new Error("THREE.MathUtils: Invalid component type.");
   }
 }
-function normalize(value, array) {
+function normalize3(value, array) {
   switch (array.constructor) {
     case Float32Array:
       return value;
@@ -8739,8 +10704,8 @@ var Vector2 = class _Vector2 {
    * @return {Vector2} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -8904,8 +10869,8 @@ var Vector2 = class _Vector2 {
    * @param {number} length - The new length of this vector.
    * @return {Vector2} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -9047,17 +11012,17 @@ var Quaternion = class {
     let x0 = src0[srcOffset0 + 0], y0 = src0[srcOffset0 + 1], z0 = src0[srcOffset0 + 2], w0 = src0[srcOffset0 + 3];
     let x1 = src1[srcOffset1 + 0], y1 = src1[srcOffset1 + 1], z1 = src1[srcOffset1 + 2], w1 = src1[srcOffset1 + 3];
     if (w0 !== w1 || x0 !== x1 || y0 !== y1 || z0 !== z1) {
-      let dot = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
-      if (dot < 0) {
+      let dot2 = x0 * x1 + y0 * y1 + z0 * z1 + w0 * w1;
+      if (dot2 < 0) {
         x1 = -x1;
         y1 = -y1;
         z1 = -z1;
         w1 = -w1;
-        dot = -dot;
+        dot2 = -dot2;
       }
       let s = 1 - t;
-      if (dot < 0.9995) {
-        const theta = Math.acos(dot);
+      if (dot2 < 0.9995) {
+        const theta = Math.acos(dot2);
         const sin = Math.sin(theta);
         s = Math.sin(s * theta) / sin;
         t = Math.sin(t * theta) / sin;
@@ -9497,17 +11462,17 @@ var Quaternion = class {
    */
   slerp(qb, t) {
     let x = qb._x, y = qb._y, z = qb._z, w = qb._w;
-    let dot = this.dot(qb);
-    if (dot < 0) {
+    let dot2 = this.dot(qb);
+    if (dot2 < 0) {
       x = -x;
       y = -y;
       z = -z;
       w = -w;
-      dot = -dot;
+      dot2 = -dot2;
     }
     let s = 1 - t;
-    if (dot < 0.9995) {
-      const theta = Math.acos(dot);
+    if (dot2 < 0.9995) {
+      const theta = Math.acos(dot2);
       const sin = Math.sin(theta);
       s = Math.sin(s * theta) / sin;
       t = Math.sin(t * theta) / sin;
@@ -10090,8 +12055,8 @@ var Vector3 = class _Vector3 {
    * @return {Vector3} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -10200,8 +12165,8 @@ var Vector3 = class _Vector3 {
    * @param {number} length - The new length of this vector.
    * @return {Vector3} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -12165,8 +14130,8 @@ var Vector4 = class _Vector4 {
    * @return {Vector4} A reference to this vector.
    */
   clampLength(min, max) {
-    const length = this.length();
-    return this.divideScalar(length || 1).multiplyScalar(clamp(length, min, max));
+    const length2 = this.length();
+    return this.divideScalar(length2 || 1).multiplyScalar(clamp(length2, min, max));
   }
   /**
    * The components of this vector are rounded down to the nearest integer value.
@@ -12280,8 +14245,8 @@ var Vector4 = class _Vector4 {
    * @param {number} length - The new length of this vector.
    * @return {Vector4} A reference to this vector.
    */
-  setLength(length) {
-    return this.normalize().multiplyScalar(length);
+  setLength(length2) {
+    return this.normalize().multiplyScalar(length2);
   }
   /**
    * Linearly interpolates between the given vector and this instance, where
@@ -13610,14 +15575,14 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  compose(position, quaternion, scale) {
+  compose(position, quaternion, scale2) {
     const te = this.elements;
     const x = quaternion._x, y = quaternion._y, z = quaternion._z, w = quaternion._w;
     const x2 = x + x, y2 = y + y, z2 = z + z;
     const xx = x * x2, xy = x * y2, xz = x * z2;
     const yy = y * y2, yz = y * z2, zz = z * z2;
     const wx = w * x2, wy = w * y2, wz = w * z2;
-    const sx = scale.x, sy = scale.y, sz = scale.z;
+    const sx = scale2.x, sy = scale2.y, sz = scale2.z;
     te[0] = (1 - (yy + zz)) * sx;
     te[1] = (xy + wz) * sx;
     te[2] = (xz - wy) * sx;
@@ -13649,14 +15614,14 @@ var Matrix4 = class _Matrix4 {
    * @param {Vector3} scale - The scale vector.
    * @return {Matrix4} A reference to this matrix.
    */
-  decompose(position, quaternion, scale) {
+  decompose(position, quaternion, scale2) {
     const te = this.elements;
     position.x = te[12];
     position.y = te[13];
     position.z = te[14];
     const det = this.determinantAffine();
     if (det === 0) {
-      scale.set(1, 1, 1);
+      scale2.set(1, 1, 1);
       quaternion.identity();
       return this;
     }
@@ -13678,9 +15643,9 @@ var Matrix4 = class _Matrix4 {
     _m1$2.elements[9] *= invSZ;
     _m1$2.elements[10] *= invSZ;
     quaternion.setFromRotationMatrix(_m1$2);
-    scale.x = sx;
-    scale.y = sy;
-    scale.z = sz;
+    scale2.x = sx;
+    scale2.y = sy;
+    scale2.z = sz;
     return this;
   }
   /**
@@ -14236,7 +16201,7 @@ var Object3D = class _Object3D extends EventDispatcher {
     const position = new Vector3();
     const rotation = new Euler();
     const quaternion = new Quaternion();
-    const scale = new Vector3(1, 1, 1);
+    const scale2 = new Vector3(1, 1, 1);
     function onRotationChange() {
       quaternion.setFromEuler(rotation, false);
     }
@@ -14291,7 +16256,7 @@ var Object3D = class _Object3D extends EventDispatcher {
       scale: {
         configurable: true,
         enumerable: true,
-        value: scale
+        value: scale2
       },
       /**
        * Represents the object's model-view matrix.
@@ -17361,7 +19326,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setComponent(index, component, value) {
-    if (this.normalized) value = normalize(value, this.array);
+    if (this.normalized) value = normalize3(value, this.array);
     this.array[index * this.itemSize + component] = value;
     return this;
   }
@@ -17384,7 +19349,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setX(index, x) {
-    if (this.normalized) x = normalize(x, this.array);
+    if (this.normalized) x = normalize3(x, this.array);
     this.array[index * this.itemSize] = x;
     return this;
   }
@@ -17407,7 +19372,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setY(index, y) {
-    if (this.normalized) y = normalize(y, this.array);
+    if (this.normalized) y = normalize3(y, this.array);
     this.array[index * this.itemSize + 1] = y;
     return this;
   }
@@ -17430,7 +19395,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setZ(index, z) {
-    if (this.normalized) z = normalize(z, this.array);
+    if (this.normalized) z = normalize3(z, this.array);
     this.array[index * this.itemSize + 2] = z;
     return this;
   }
@@ -17453,7 +19418,7 @@ var BufferAttribute = class extends EventDispatcher {
    * @return {BufferAttribute} A reference to this instance.
    */
   setW(index, w) {
-    if (this.normalized) w = normalize(w, this.array);
+    if (this.normalized) w = normalize3(w, this.array);
     this.array[index * this.itemSize + 3] = w;
     return this;
   }
@@ -17468,8 +19433,8 @@ var BufferAttribute = class extends EventDispatcher {
   setXY(index, x, y) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -17487,9 +19452,9 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZ(index, x, y, z) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
-      z = normalize(z, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
+      z = normalize3(z, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -17509,10 +19474,10 @@ var BufferAttribute = class extends EventDispatcher {
   setXYZW(index, x, y, z, w) {
     index *= this.itemSize;
     if (this.normalized) {
-      x = normalize(x, this.array);
-      y = normalize(y, this.array);
-      z = normalize(z, this.array);
-      w = normalize(w, this.array);
+      x = normalize3(x, this.array);
+      y = normalize3(y, this.array);
+      z = normalize3(z, this.array);
+      w = normalize3(w, this.array);
     }
     this.array[index + 0] = x;
     this.array[index + 1] = y;
@@ -17801,9 +19766,9 @@ var Sphere = class {
     _v1$3.subVectors(point, this.center);
     const lengthSq = _v1$3.lengthSq();
     if (lengthSq > this.radius * this.radius) {
-      const length = Math.sqrt(lengthSq);
-      const delta = (length - this.radius) * 0.5;
-      this.center.addScaledVector(_v1$3, delta / length);
+      const length2 = Math.sqrt(lengthSq);
+      const delta = (length2 - this.radius) * 0.5;
+      this.center.addScaledVector(_v1$3, delta / length2);
       this.radius += delta;
     }
     return this;
@@ -20282,6 +22247,242 @@ var DataTexture = class extends Texture2 {
     this.unpackAlignment = 1;
   }
 };
+var InstancedBufferAttribute = class extends BufferAttribute {
+  /**
+   * Constructs a new instanced buffer attribute.
+   *
+   * @param {TypedArray} array - The array holding the attribute data.
+   * @param {number} itemSize - The item size.
+   * @param {boolean} [normalized=false] - Whether the data are normalized or not.
+   * @param {number} [meshPerAttribute=1] - How often a value of this buffer attribute should be repeated.
+   */
+  constructor(array, itemSize, normalized, meshPerAttribute = 1) {
+    super(array, itemSize, normalized);
+    this.isInstancedBufferAttribute = true;
+    this.meshPerAttribute = meshPerAttribute;
+  }
+  copy(source) {
+    super.copy(source);
+    this.meshPerAttribute = source.meshPerAttribute;
+    return this;
+  }
+  toJSON() {
+    const data = super.toJSON();
+    data.meshPerAttribute = this.meshPerAttribute;
+    data.isInstancedBufferAttribute = true;
+    return data;
+  }
+};
+var _instanceLocalMatrix = /* @__PURE__ */ new Matrix4();
+var _instanceWorldMatrix = /* @__PURE__ */ new Matrix4();
+var _instanceIntersects = [];
+var _box3 = /* @__PURE__ */ new Box3();
+var _identity = /* @__PURE__ */ new Matrix4();
+var _mesh$1 = /* @__PURE__ */ new Mesh();
+var _sphere$4 = /* @__PURE__ */ new Sphere();
+var InstancedMesh = class extends Mesh {
+  /**
+   * Constructs a new instanced mesh.
+   *
+   * @param {BufferGeometry} [geometry] - The mesh geometry.
+   * @param {Material|Array<Material>} [material] - The mesh material.
+   * @param {number} count - The number of instances.
+   */
+  constructor(geometry, material, count) {
+    super(geometry, material);
+    this.isInstancedMesh = true;
+    this.instanceMatrix = new InstancedBufferAttribute(new Float32Array(count * 16), 16);
+    this.instanceColor = null;
+    this.morphTexture = null;
+    this.count = count;
+    this.boundingBox = null;
+    this.boundingSphere = null;
+    for (let i = 0; i < count; i++) {
+      this.setMatrixAt(i, _identity);
+    }
+  }
+  /**
+   * Computes the bounding box of the instanced mesh, and updates {@link InstancedMesh#boundingBox}.
+   * The bounding box is not automatically computed by the engine; this method must be called by your app.
+   * You may need to recompute the bounding box if an instance is transformed via {@link InstancedMesh#setMatrixAt}.
+   */
+  computeBoundingBox() {
+    const geometry = this.geometry;
+    const count = this.count;
+    if (this.boundingBox === null) {
+      this.boundingBox = new Box3();
+    }
+    if (geometry.boundingBox === null) {
+      geometry.computeBoundingBox();
+    }
+    this.boundingBox.makeEmpty();
+    for (let i = 0; i < count; i++) {
+      this.getMatrixAt(i, _instanceLocalMatrix);
+      _box3.copy(geometry.boundingBox).applyMatrix4(_instanceLocalMatrix);
+      this.boundingBox.union(_box3);
+    }
+  }
+  /**
+   * Computes the bounding sphere of the instanced mesh, and updates {@link InstancedMesh#boundingSphere}
+   * The engine automatically computes the bounding sphere when it is needed, e.g., for ray casting or view frustum culling.
+   * You may need to recompute the bounding sphere if an instance is transformed via {@link InstancedMesh#setMatrixAt}.
+   */
+  computeBoundingSphere() {
+    const geometry = this.geometry;
+    const count = this.count;
+    if (this.boundingSphere === null) {
+      this.boundingSphere = new Sphere();
+    }
+    if (geometry.boundingSphere === null) {
+      geometry.computeBoundingSphere();
+    }
+    this.boundingSphere.makeEmpty();
+    for (let i = 0; i < count; i++) {
+      this.getMatrixAt(i, _instanceLocalMatrix);
+      _sphere$4.copy(geometry.boundingSphere).applyMatrix4(_instanceLocalMatrix);
+      this.boundingSphere.union(_sphere$4);
+    }
+  }
+  copy(source, recursive) {
+    super.copy(source, recursive);
+    this.instanceMatrix.copy(source.instanceMatrix);
+    if (source.morphTexture !== null) this.morphTexture = source.morphTexture.clone();
+    if (source.instanceColor !== null) this.instanceColor = source.instanceColor.clone();
+    this.count = source.count;
+    if (source.boundingBox !== null) this.boundingBox = source.boundingBox.clone();
+    if (source.boundingSphere !== null) this.boundingSphere = source.boundingSphere.clone();
+    return this;
+  }
+  /**
+   * Gets the color of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Color} color - The target object that is used to store the method's result.
+   * @return {Color} A reference to the target color.
+   */
+  getColorAt(index, color) {
+    if (this.instanceColor === null) {
+      return color.setRGB(1, 1, 1);
+    } else {
+      return color.fromArray(this.instanceColor.array, index * 3);
+    }
+  }
+  /**
+   * Gets the local transformation matrix of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Matrix4} matrix - The target object that is used to store the method's result.
+   * @return {Matrix4} A reference to the target matrix.
+   */
+  getMatrixAt(index, matrix) {
+    return matrix.fromArray(this.instanceMatrix.array, index * 16);
+  }
+  /**
+   * Gets the morph target weights of the defined instance.
+   *
+   * @param {number} index - The instance index.
+   * @param {Mesh} object - The target object that is used to store the method's result.
+   */
+  getMorphAt(index, object) {
+    const objectInfluences = object.morphTargetInfluences;
+    const array = this.morphTexture.source.data.data;
+    const len = objectInfluences.length + 1;
+    const dataIndex = index * len + 1;
+    for (let i = 0; i < objectInfluences.length; i++) {
+      objectInfluences[i] = array[dataIndex + i];
+    }
+  }
+  raycast(raycaster, intersects) {
+    const matrixWorld = this.matrixWorld;
+    const raycastTimes = this.count;
+    _mesh$1.geometry = this.geometry;
+    _mesh$1.material = this.material;
+    if (_mesh$1.material === void 0) return;
+    if (this.boundingSphere === null) this.computeBoundingSphere();
+    _sphere$4.copy(this.boundingSphere);
+    _sphere$4.applyMatrix4(matrixWorld);
+    if (raycaster.ray.intersectsSphere(_sphere$4) === false) return;
+    for (let instanceId = 0; instanceId < raycastTimes; instanceId++) {
+      this.getMatrixAt(instanceId, _instanceLocalMatrix);
+      _instanceWorldMatrix.multiplyMatrices(matrixWorld, _instanceLocalMatrix);
+      _mesh$1.matrixWorld = _instanceWorldMatrix;
+      _mesh$1.raycast(raycaster, _instanceIntersects);
+      for (let i = 0, l = _instanceIntersects.length; i < l; i++) {
+        const intersect = _instanceIntersects[i];
+        intersect.instanceId = instanceId;
+        intersect.object = this;
+        intersects.push(intersect);
+      }
+      _instanceIntersects.length = 0;
+    }
+  }
+  /**
+   * Sets the given color to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#instanceColor} to `true` after updating all the colors.
+   *
+   * @param {number} index - The instance index.
+   * @param {Color} color - The instance color.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setColorAt(index, color) {
+    if (this.instanceColor === null) {
+      this.instanceColor = new InstancedBufferAttribute(new Float32Array(this.instanceMatrix.count * 3).fill(1), 3);
+    }
+    color.toArray(this.instanceColor.array, index * 3);
+    return this;
+  }
+  /**
+   * Sets the given local transformation matrix to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#instanceMatrix} to `true` after updating all the matrices.
+   *
+   * @param {number} index - The instance index.
+   * @param {Matrix4} matrix - The local transformation.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setMatrixAt(index, matrix) {
+    matrix.toArray(this.instanceMatrix.array, index * 16);
+    return this;
+  }
+  /**
+   * Sets the morph target weights to the defined instance. Make sure you set the `needsUpdate` flag of
+   * {@link InstancedMesh#morphTexture} to `true` after updating all the influences.
+   *
+   * @param {number} index - The instance index.
+   * @param {Mesh} object -  A mesh which `morphTargetInfluences` property containing the morph target weights
+   * of a single instance.
+   * @return {InstancedMesh} A reference to this instanced mesh.
+   */
+  setMorphAt(index, object) {
+    const objectInfluences = object.morphTargetInfluences;
+    const len = objectInfluences.length + 1;
+    if (this.morphTexture === null) {
+      this.morphTexture = new DataTexture(new Float32Array(len * this.count), len, this.count, RedFormat, FloatType);
+    }
+    const array = this.morphTexture.source.data.data;
+    let morphInfluencesSum = 0;
+    for (let i = 0; i < objectInfluences.length; i++) {
+      morphInfluencesSum += objectInfluences[i];
+    }
+    const morphBaseInfluence = this.geometry.morphTargetsRelative ? 1 : 1 - morphInfluencesSum;
+    const dataIndex = len * index;
+    array[dataIndex] = morphBaseInfluence;
+    array.set(objectInfluences, dataIndex + 1);
+    return this;
+  }
+  updateMorphTargets() {
+  }
+  /**
+   * Frees the GPU-related resources allocated by this instance. Call this
+   * method whenever this instance is no longer used in your app.
+   */
+  dispose() {
+    super.dispose();
+    if (this.morphTexture !== null) {
+      this.morphTexture.dispose();
+      this.morphTexture = null;
+    }
+  }
+};
 var _sphere$3 = /* @__PURE__ */ new Sphere();
 var _defaultSpriteCenter = /* @__PURE__ */ new Vector2(0.5, 0.5);
 var _vector$6 = /* @__PURE__ */ new Vector3();
@@ -22024,8 +24225,8 @@ var LoadingManager = class {
       }
       return url;
     };
-    this.setURLModifier = function(transform) {
-      urlModifier = transform;
+    this.setURLModifier = function(transform2) {
+      urlModifier = transform2;
       return this;
     };
     this.addHandler = function(regex, loader) {
@@ -26277,11 +28478,11 @@ function WebGLEnvironments(renderer) {
   }
   function isCubeTextureComplete(image) {
     let count = 0;
-    const length = 6;
-    for (let i = 0; i < length; i++) {
+    const length2 = 6;
+    for (let i = 0; i < length2; i++) {
       if (image[i] !== void 0) count++;
     }
-    return count === length;
+    return count === length2;
   }
   function onCubemapDispose(event) {
     const texture = event.target;
@@ -29158,8 +31359,8 @@ function WebGLLights(extensions) {
     state.ambient[0] = r;
     state.ambient[1] = g;
     state.ambient[2] = b;
-    const hash = state.hash;
-    if (hash.sunLength !== sunLength || hash.directionalLength !== directionalLength || hash.pointLength !== pointLength || hash.spotLength !== spotLength || hash.rectAreaLength !== rectAreaLength || hash.hemiLength !== hemiLength || hash.numSunShadows !== numSunShadows || hash.numDirectionalShadows !== numDirectionalShadows || hash.numPointShadows !== numPointShadows || hash.numSpotShadows !== numSpotShadows || hash.numSpotMaps !== numSpotMaps || hash.numLightProbes !== numLightProbes) {
+    const hash2 = state.hash;
+    if (hash2.sunLength !== sunLength || hash2.directionalLength !== directionalLength || hash2.pointLength !== pointLength || hash2.spotLength !== spotLength || hash2.rectAreaLength !== rectAreaLength || hash2.hemiLength !== hemiLength || hash2.numSunShadows !== numSunShadows || hash2.numDirectionalShadows !== numDirectionalShadows || hash2.numPointShadows !== numPointShadows || hash2.numSpotShadows !== numSpotShadows || hash2.numSpotMaps !== numSpotMaps || hash2.numLightProbes !== numLightProbes) {
       state.sun.length = sunLength;
       state.directional.length = directionalLength;
       state.spot.length = spotLength;
@@ -29182,18 +31383,18 @@ function WebGLLights(extensions) {
       state.spotLightMap.length = numSpotMaps;
       state.numSpotLightShadowsWithMaps = numSpotShadowsWithMaps;
       state.numLightProbes = numLightProbes;
-      hash.sunLength = sunLength;
-      hash.directionalLength = directionalLength;
-      hash.pointLength = pointLength;
-      hash.spotLength = spotLength;
-      hash.rectAreaLength = rectAreaLength;
-      hash.hemiLength = hemiLength;
-      hash.numSunShadows = numSunShadows;
-      hash.numDirectionalShadows = numDirectionalShadows;
-      hash.numPointShadows = numPointShadows;
-      hash.numSpotShadows = numSpotShadows;
-      hash.numSpotMaps = numSpotMaps;
-      hash.numLightProbes = numLightProbes;
+      hash2.sunLength = sunLength;
+      hash2.directionalLength = directionalLength;
+      hash2.pointLength = pointLength;
+      hash2.spotLength = spotLength;
+      hash2.rectAreaLength = rectAreaLength;
+      hash2.hemiLength = hemiLength;
+      hash2.numSunShadows = numSunShadows;
+      hash2.numDirectionalShadows = numDirectionalShadows;
+      hash2.numPointShadows = numPointShadows;
+      hash2.numSpotShadows = numSpotShadows;
+      hash2.numSpotMaps = numSpotMaps;
+      hash2.numLightProbes = numLightProbes;
       state.version = nextVersion++;
     }
   }
@@ -30470,15 +32671,15 @@ function WebGLTextures(_gl, extensions, state, properties, capabilities, utils, 
     return useOffscreenCanvas ? new OffscreenCanvas(width, height) : createElementNS("canvas");
   }
   function resizeImage(image, needsNewCanvas, maxSize) {
-    let scale = 1;
+    let scale2 = 1;
     const dimensions = getDimensions(image);
     if (dimensions.width > maxSize || dimensions.height > maxSize) {
-      scale = maxSize / Math.max(dimensions.width, dimensions.height);
+      scale2 = maxSize / Math.max(dimensions.width, dimensions.height);
     }
-    if (scale < 1) {
+    if (scale2 < 1) {
       if (typeof HTMLImageElement !== "undefined" && image instanceof HTMLImageElement || typeof HTMLCanvasElement !== "undefined" && image instanceof HTMLCanvasElement || typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap || typeof VideoFrame !== "undefined" && image instanceof VideoFrame) {
-        const width = Math.floor(scale * dimensions.width);
-        const height = Math.floor(scale * dimensions.height);
+        const width = Math.floor(scale2 * dimensions.width);
+        const height = Math.floor(scale2 * dimensions.height);
         if (_canvas2 === void 0) _canvas2 = createCanvas(width, height);
         const canvas = needsNewCanvas ? createCanvas(width, height) : _canvas2;
         canvas.width = width;
@@ -35218,6 +37419,35 @@ function mirrorInto(target, world) {
   for (const i of MIRRORED) e[i] = -e[i];
   return target;
 }
+function imagePixels(image) {
+  if (!image) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = image.width;
+  canvas.height = image.height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(image, 0, 0);
+  return new Uint8Array(ctx.getImageData(0, 0, image.width, image.height).data.buffer);
+}
+function bleedEdges(pixels, width, height) {
+  const source = pixels.slice();
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4;
+      if (source[i + 3] !== 0) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const j = (ny * width + nx) * 4;
+        if (source[j + 3] === 0) continue;
+        pixels[i] = source[j];
+        pixels[i + 1] = source[j + 1];
+        pixels[i + 2] = source[j + 2];
+        break;
+      }
+    }
+  }
+}
 function srgb(color, rgb) {
   return color.setRGB(rgb[0], rgb[1], rgb[2], SRGBColorSpace);
 }
@@ -35227,6 +37457,8 @@ var WRAP = {
   mirror: MirroredRepeatWrapping
 };
 var LIGHT_SCALE = Math.PI;
+var SUN_MAP = 2048;
+var POINT_MAP = 1024;
 var ThreeBackend = class extends RenderBackend {
   constructor() {
     super();
@@ -35238,11 +37470,15 @@ var ThreeBackend = class extends RenderBackend {
     this.cameras = /* @__PURE__ */ new Map();
     this.width = 1;
     this.height = 1;
+    this.sprites = [];
+    this.spriteMatrix = new Mat4();
   }
   init(canvas) {
     this.renderer = new WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = PCFShadowMap;
     this.scene = new Scene();
     this.scene.matrixWorldAutoUpdate = true;
     this.ambient = new AmbientLight(16777215, 0);
@@ -35271,6 +37507,8 @@ var ThreeBackend = class extends RenderBackend {
     srgb(this.ambient.color, frame.ambient);
     this.ambient.intensity = LIGHT_SCALE;
     const seen = /* @__PURE__ */ new Set();
+    this.sprites.length = 0;
+    this.time = frame.time || 0;
     for (const item of frame.items) {
       seen.add(item.id);
       this.syncItem(item);
@@ -35294,11 +37532,18 @@ var ThreeBackend = class extends RenderBackend {
       r.setScissor(x, gy, w, h);
       r.setClearColor(srgb(new Color(), cam.clearColor), 1);
       r.clear(true, true, true);
-      r.render(this.scene, this.syncCamera(cam, w / h));
+      const camera = this.syncCamera(cam, w / h);
+      this.faceSprites(cam.world);
+      this.fitShadows(camera);
+      r.render(this.scene, camera);
     }
   }
   // ------------------------------------------------------------ meshes
   syncItem(item) {
+    if (item.grass) {
+      this.syncGrass(item);
+      return;
+    }
     let obj = this.objects.get(item.id);
     const geometry = this.geometry(item.mesh);
     const materials = item.materials.map((m) => this.material(m));
@@ -35313,8 +37558,130 @@ var ThreeBackend = class extends RenderBackend {
     obj.material = material;
     obj.visible = true;
     obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
+    if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });
+    else {
+      mirrorInto(obj.matrix, item.world);
+      obj.matrixWorldNeedsUpdate = true;
+    }
+  }
+  // A field of grass: one tuft mesh drawn once per tuft. The tufts' matrices
+  // are only worked out again when the field changes; the wind and the
+  // pushing happen in the vertex shader.
+  syncGrass(item) {
+    const g = item.grass;
+    let obj = this.objects.get(item.id);
+    if (obj && (!obj.isInstancedMesh || obj.userData.grassVersion !== g.version || obj.count !== g.count)) {
+      this.scene.remove(obj);
+      if (obj.isInstancedMesh) obj.dispose();
+      obj = null;
+    }
+    const material = this.grassMaterial(item.materials[0]);
+    if (!obj) {
+      obj = new InstancedMesh(this.geometry(item.mesh), material, g.count);
+      obj.matrixAutoUpdate = false;
+      const local = new Matrix4();
+      const turn = new Matrix4();
+      const size = new Matrix4();
+      const t = g.tufts;
+      for (let i = 0; i < g.count; i++) {
+        const o = i * 5;
+        const k = t[o + 3];
+        local.makeTranslation(t[o], t[o + 1], t[o + 2]);
+        local.multiply(turn.makeRotationY(t[o + 4]));
+        local.multiply(size.makeScale(g.width * k, g.height * k, g.width * k));
+        const e = local.elements;
+        for (const m of MIRRORED) e[m] = -e[m];
+        obj.setMatrixAt(i, local);
+      }
+      obj.instanceMatrix.needsUpdate = true;
+      obj.computeBoundingSphere();
+      obj.userData.grassVersion = g.version;
+      this.objects.set(item.id, obj);
+      this.scene.add(obj);
+    }
+    obj.material = material;
+    obj.visible = true;
+    obj.renderOrder = item.order;
+    obj.castShadow = item.castShadow !== false;
+    obj.receiveShadow = item.receiveShadow !== false;
     mirrorInto(obj.matrix, item.world);
     obj.matrixWorldNeedsUpdate = true;
+    const u = material.userData.grass;
+    u.time.value = this.time;
+    u.wind.value = g.wind;
+    u.height.value = g.height;
+    u.count.value = Math.min(8, g.pushers.length / 4);
+    for (let i = 0; i < u.count.value; i++) {
+      const p = g.pushers;
+      u.pushers.value[i].set(p[i * 4], p[i * 4 + 1], -p[i * 4 + 2], p[i * 4 + 3]);
+    }
+  }
+  // The material of a grass entity, with the wind and the pushing added to
+  // its vertex shader.
+  grassMaterial(m) {
+    const material = this.material(m);
+    if (material.userData.grass) return material;
+    const grass = {
+      time: { value: 0 },
+      wind: { value: 1 },
+      height: { value: 1 },
+      count: { value: 0 },
+      pushers: { value: Array.from({ length: 8 }, () => new Vector4()) }
+    };
+    material.userData.grass = grass;
+    material.customProgramCacheKey = () => "polybasic-grass";
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.pbTime = grass.time;
+      shader.uniforms.pbWind = grass.wind;
+      shader.uniforms.pbHeight = grass.height;
+      shader.uniforms.pbPushCount = grass.count;
+      shader.uniforms.pbPushers = grass.pushers;
+      shader.vertexShader = shader.vertexShader.replace("#include <common>", `#include <common>
+uniform float pbTime;
+uniform float pbWind;
+uniform float pbHeight;
+uniform int pbPushCount;
+uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin_vertex>
+#ifdef USE_INSTANCING
+  mat4 pbTuft = modelMatrix * instanceMatrix;
+#else
+  mat4 pbTuft = modelMatrix;
+#endif
+  vec3 pbRoot = (pbTuft * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  // Only the tops move: nothing at the root, most at the tips.
+  float pbBend = transformed.y * transformed.y;
+  // Gusts rolling across the field.
+  float pbPhase = pbTime * 1.6 + pbRoot.x * 0.35 + pbRoot.z * 0.27;
+  vec3 pbMove = vec3(sin(pbPhase) * 0.6 + sin(pbPhase * 2.3 + 1.7) * 0.25, 0.0, cos(pbPhase * 0.8 + 0.5) * 0.35);
+  pbMove *= pbWind * 0.15 * pbHeight * pbBend;
+  // Leaning away from what pushes through it.
+  for (int i = 0; i < 8; i++)
+  {
+    if (i >= pbPushCount) break;
+    vec3 pbAway = pbRoot - pbPushers[i].xyz;
+    pbAway.y = 0.0;
+    float pbDist = length(pbAway);
+    float pbReach = pbPushers[i].w;
+    if (pbDist < pbReach && pbDist > 0.0001)
+    {
+      float pbPush = 1.0 - pbDist / pbReach;
+      pbMove += normalize(pbAway) * pbPush * pbBend * pbHeight;
+      pbMove.y -= pbPush * pbBend * pbHeight * 0.4;
+    }
+  }
+  transformed += inverse(mat3(pbTuft)) * pbMove;`);
+    };
+    material.needsUpdate = true;
+    return material;
+  }
+  // Sprites turn to each camera that draws them.
+  faceSprites(cameraWorld) {
+    for (const { obj, world, sprite } of this.sprites) {
+      mirrorInto(obj.matrix, spriteMatrix(this.spriteMatrix, world, cameraWorld, sprite).e);
+      obj.matrixWorldNeedsUpdate = true;
+    }
   }
   geometry(mesh) {
     const known = this.geometries.get(mesh.id);
@@ -35349,16 +37716,31 @@ var ThreeBackend = class extends RenderBackend {
     const known = this.materials.get(m.id);
     if (known && known.key === key) return known.material;
     if (known) known.material.dispose();
-    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1;
+    const flags = tex ? m.texture : null;
+    const blend = m.alphaMode ? m.alphaMode === "blend" : m.alpha < 1 || m.vertexAlpha || flags !== null && flags.alpha;
+    const cut = m.alphaMode === "mask" ? m.alphaCutoff : flags !== null && flags.masked ? 0.5 : 0;
+    const mixing = m.blend === "add" || m.blend === "multiply";
     const options = {
       color: srgb(new Color(), m.color),
       map: tex,
-      transparent: blend,
+      transparent: blend || mixing,
       opacity: m.alphaMode === "opaque" ? 1 : m.alpha,
-      alphaTest: m.alphaMode === "mask" ? m.alphaCutoff : 0,
+      alphaTest: cut,
       vertexColors: m.vertexColors,
       side: m.twoSided ? DoubleSide : FrontSide
     };
+    if (m.blend === "add") options.blending = AdditiveBlending;
+    if (m.blend === "multiply") {
+      options.blending = MultiplyBlending;
+      options.premultipliedAlpha = true;
+    }
+    if (mixing) options.depthWrite = false;
+    if (m.decal) {
+      options.polygonOffset = true;
+      options.polygonOffsetFactor = -1;
+      options.polygonOffsetUnits = -4;
+      options.depthWrite = false;
+    }
     let material;
     if (m.fullbright) material = new MeshBasicMaterial(options);
     else {
@@ -35370,6 +37752,7 @@ var ThreeBackend = class extends RenderBackend {
         specular: new Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    material.visible = m.alphaMode === "opaque" || m.alpha > 0;
     this.materials.set(m.id, { material, key });
     return material;
   }
@@ -35381,10 +37764,18 @@ var ThreeBackend = class extends RenderBackend {
     }
     if (known) known.texture.dispose();
     let texture;
-    if (t.image) texture = new Texture2(t.image);
+    if (t.masked) {
+      const pixels = t.pixels ? new Uint8Array(t.pixels) : imagePixels(t.image);
+      if (!pixels) return null;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] === 0 && pixels[i + 1] === 0 && pixels[i + 2] === 0) pixels[i + 3] = 0;
+      }
+      bleedEdges(pixels, t.width, t.height);
+      texture = new DataTexture(pixels, t.width, t.height, RGBAFormat);
+    } else if (t.image) texture = new Texture2(t.image);
     else if (t.pixels) texture = new DataTexture(new Uint8Array(t.pixels), t.width, t.height, RGBAFormat);
     else return null;
-    if (t.nearest) texture.magFilter = NearestFilter;
+    texture.magFilter = t.nearest ? NearestFilter : LinearFilter;
     texture.flipY = false;
     texture.colorSpace = SRGBColorSpace;
     texture.wrapS = WRAP[t.wrapU] || RepeatWrapping;
@@ -35419,16 +37810,64 @@ var ThreeBackend = class extends RenderBackend {
       light.intensity = LIGHT_SCALE;
       light.visible = true;
       light.position.set(w[12], w[13], -w[14]);
+      light.castShadow = l.shadows > 0;
       if (l.type === 2) {
         light.distance = l.range;
         light.decay = 0;
+        if (light.castShadow) {
+          light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
+          light.shadow.camera.near = 0.05;
+          light.shadow.camera.far = l.range > 0 ? l.range : 100;
+          light.shadow.bias = -2e-3;
+          light.shadow.normalBias = 0.02;
+        }
       } else {
+        light.userData.direction = new Vector3(w[8], w[9], -w[10]).normalize();
+        light.userData.area = l.shadows;
         light.target.position.set(w[12] + w[8], w[13] + w[9], -(w[14] + w[10]));
         light.target.updateMatrixWorld();
       }
     }
     for (const [id, light] of this.lights) {
       if (!seen.has(id)) light.visible = false;
+    }
+  }
+  // A directional light's shadows cover a square of `area` units around
+  // what the camera looks at. Its centre moves in steps of one shadow texel
+  // (in the light's own view), so the shadows' edges do not crawl as the
+  // camera moves.
+  fitShadows(camera) {
+    const eye = new Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const forward = new Vector3(0, 0, -1).transformDirection(camera.matrixWorld);
+    for (const light of this.lights.values()) {
+      if (!light.visible || !light.castShadow || light.type !== "DirectionalLight") continue;
+      const area = light.userData.area;
+      const dir = light.userData.direction;
+      const shadow = light.shadow;
+      if (shadow.mapSize.x !== SUN_MAP) shadow.mapSize.set(SUN_MAP, SUN_MAP);
+      const cam = shadow.camera;
+      cam.left = -area / 2;
+      cam.right = area / 2;
+      cam.top = area / 2;
+      cam.bottom = -area / 2;
+      cam.near = 0.1;
+      cam.far = area * 2;
+      cam.updateProjectionMatrix();
+      const texel = area / SUN_MAP;
+      shadow.bias = -5e-4;
+      shadow.normalBias = texel * 1.5;
+      const centre = eye.clone().addScaledVector(forward, area * 0.35);
+      const up = Math.abs(dir.y) > 0.99 ? new Vector3(0, 0, 1) : new Vector3(0, 1, 0);
+      const basis = new Matrix4().lookAt(new Vector3(), dir, up);
+      const inverse = basis.clone().invert();
+      centre.applyMatrix4(inverse);
+      centre.x = Math.round(centre.x / texel) * texel;
+      centre.y = Math.round(centre.y / texel) * texel;
+      centre.applyMatrix4(basis);
+      light.target.position.copy(centre);
+      light.position.copy(centre).addScaledVector(dir, -area);
+      light.target.updateMatrixWorld();
+      light.updateMatrixWorld();
     }
   }
   syncCamera(cam, aspect2) {
@@ -35916,7 +38355,7 @@ var WebAudioBackend = class extends AudioBackend {
   }
   playNote(s, track, event, when, stepTime) {
     const ctx = sharedContext;
-    const length = event.length * stepTime;
+    const length2 = event.length * stepTime;
     const remember = (node) => {
       s.nodes.add(node);
       node.onended = () => s.nodes.delete(node);
@@ -35953,18 +38392,18 @@ var WebAudioBackend = class extends AudioBackend {
     g.setValueAtTime(0, when);
     let end;
     if (track.inst === INST_PLUCK) {
-      end = when + Math.min(length, 0.35);
+      end = when + Math.min(length2, 0.35);
       g.linearRampToValueAtTime(peak, when + 5e-3);
       g.exponentialRampToValueAtTime(1e-4, end);
     } else if (track.inst === INST_PAD) {
-      end = when + length;
-      g.linearRampToValueAtTime(peak * 0.7, when + Math.min(0.3, length * 0.5));
-      g.setValueAtTime(peak * 0.7, when + length * 0.8);
+      end = when + length2;
+      g.linearRampToValueAtTime(peak * 0.7, when + Math.min(0.3, length2 * 0.5));
+      g.setValueAtTime(peak * 0.7, when + length2 * 0.8);
       g.linearRampToValueAtTime(0, end);
     } else {
-      end = when + length;
+      end = when + length2;
       g.linearRampToValueAtTime(peak, when + 0.01);
-      g.setValueAtTime(peak, when + Math.max(0.01, length - 0.03));
+      g.setValueAtTime(peak, when + Math.max(0.01, length2 - 0.03));
       g.linearRampToValueAtTime(0, end);
     }
     let out = gain;
@@ -36046,9 +38485,9 @@ function createScreen(container2) {
   const fit = () => {
     const area = container2.getBoundingClientRect();
     if (area.width <= 0 || area.height <= 0) return;
-    const scale = Math.min(area.width / width, area.height / height);
-    const cssW = Math.max(1, Math.floor(width * scale));
-    const cssH = Math.max(1, Math.floor(height * scale));
+    const scale2 = Math.min(area.width / width, area.height / height);
+    const cssW = Math.max(1, Math.floor(width * scale2));
+    const cssH = Math.max(1, Math.floor(height * scale2));
     box.style.width = `${cssW}px`;
     box.style.height = `${cssH}px`;
     const ratio = Math.min(MAX_PIXEL_RATIO, cssW * (window.devicePixelRatio || 1) / width);

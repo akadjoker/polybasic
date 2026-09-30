@@ -1,0 +1,1 @@
+Runtime error (rt_entity_blend.pb, line 3): EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not 4

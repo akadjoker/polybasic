@@ -161,6 +161,85 @@ End Function
   near(w[10], Math.cos(Math.PI / 3), 1e-9, 'forward z');
 });
 
+test('shadows reach the backend: lights that cast them, entities that cast and receive', async () =>
+{
+  const module = await load(`
+Global sun, lamp, box, ground, copy
+cam = CreateCamera()
+sun = CreateLight()
+LightShadows sun, True, 25
+lamp = CreateLight(LIGHT_POINT)
+LightShadows lamp
+box = CreateCube()
+ground = CreatePlane()
+EntityFX ground, FX_NOSHADOWCAST
+EntityFX box, FX_FULLBRIGHT Or FX_NOSHADOWRECV
+copy = CopyEntity(box)
+Function Update()
+  If FrameCount() = 2 Then LightShadows lamp, False
+End Function
+`);
+  const backend = new NullBackend();
+  backend.init(null);
+  const engine = new Engine({ backend });
+  await runProgram(module, new CaptureHost(), { engine, maxUpdates: 3 });
+  const f = backend.lastFrame;
+  const [sun, lamp] = f.lights;
+  assert(sun.shadows === 25 && lamp.shadows === 0, `lights: ${JSON.stringify(f.lights.map((l) => l.shadows))}`);
+  const [box, ground, copy] = f.items;
+  assert(box.castShadow && !box.receiveShadow, `box: ${JSON.stringify(box)}`);
+  assert(!ground.castShadow && ground.receiveShadow, 'ground');
+  assert(copy.castShadow && !copy.receiveShadow, 'a copy keeps the shadow flags');
+  const result = await runProgram(await load('l = CreateLight()\nLightShadows l, True, 0\n'), new CaptureHost(), { engine: new Engine() });
+  assert(result.status === 'error' && /area above 0/.test(result.error.message), JSON.stringify(result));
+});
+
+test('grass: painted onto what is under it, never onto steep ground, up to 8 pushers', async () =>
+{
+  const module = await load(`
+Global meadow, count, slope
+; A platform 2 high, 10 wide; beside it a ramp at 70 degrees (too steep)
+; and one at 45 (not).
+deck = CreateCube()
+ScaleEntity deck, 5, 1, 5
+PositionEntity deck, 0, 1, 0
+; Ramps are planes: a box's narrow top edge would be flat ground of its own.
+ramp = CreatePlane()
+ScaleEntity ramp, 5, 1, 5
+RotateEntity ramp, 0, 0, 70
+PositionEntity ramp, 20, 0, 0
+gentle = CreatePlane()
+ScaleEntity gentle, 5, 1, 5
+RotateEntity gentle, 0, 0, 45
+PositionEntity gentle, -20, 0, 0
+meadow = CreateGrass()
+count = PaintGrass(meadow, 0, 0, 3, 500, deck)
+slope = CreateGrass()
+Print PaintGrass(slope, 20, 0, 2, 200, ramp)
+Print CountGrass(meadow)
+Print PaintGrass(slope, -20, 0, 2, 200, gentle)
+`);
+  const engine = new Engine();
+  const host = new CaptureHost();
+  const result = await runProgram(module, host, { engine });
+  assert(result.status !== 'error', result.error && result.error.message);
+  const [onRamp, planted, onGentle] = host.output.trim().split('\n').map(Number);
+  assert(planted === 500 && onRamp === 0 && onGentle === 200, `planted ${planted}, on the steep ramp ${onRamp}, on the gentle one ${onGentle}`);
+  const field = engine.world.entities.find((e) => e.grass && e.grass.count);
+  const t = field.grass.tufts;
+  for (let i = 0; i < field.grass.count; i++)
+  {
+    near(t[i * 5 + 1], 2, 1e-5, `tuft ${i} height`);
+    assert(Math.hypot(t[i * 5], t[i * 5 + 2]) <= 3 + 1e-6, `tuft ${i} outside the disc`);
+  }
+  const many = await runProgram(await load(`g = CreateGrass()
+For i = 1 To 9
+  GrassPush g, CreatePivot(), 1
+Next
+`), new CaptureHost(), { engine: new Engine() });
+  assert(many.status === 'error' && /at most 8/.test(many.error.message), JSON.stringify(many));
+});
+
 test('a program with a scene but no Update still renders one frame', async () =>
 {
   const module = await load('CreateCamera()\nCreateCube()\n');

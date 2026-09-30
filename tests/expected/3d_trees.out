@@ -1,0 +1,5 @@
+leaves found 1, parent 1
+oak 8 high, 6324 triangles, 352 pairs of leaf cards
+another seed, another shape 1; the same seed, the same shape 1
+ 8 6 1 8 13 38 10
+Runtime error (3d_trees.pb, line 14): CreateTree needs one of the TREE_ kinds (1 to 7), not 8
