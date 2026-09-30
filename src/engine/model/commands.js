@@ -86,7 +86,7 @@ export function createModelCommands(engine)
     {
       // A model still loading starts the animation when it arrives.
       const e = model(handle, true);
-      if (mode < ANIM_STOP || mode > ANIM_PINGPONG) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_ONCE or ANIM_PINGPONG (0 to 3), not ${mode}`);
+      if (mode < ANIM_STOP || mode > ANIM_ONCE) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_PINGPONG or ANIM_ONCE (0 to 3), not ${mode}`);
       if (index < 0) throw runtimeError(`Animate needs an animation number from 1, or 0 to stop, not ${index}`);
       if (index !== 0 && e.model.loaded) animation(e, index);
       models.play(e, index, mode, speed);

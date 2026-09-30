@@ -4,8 +4,9 @@
 
 export const ANIM_STOP = 0;
 export const ANIM_LOOP = 1;
-export const ANIM_ONCE = 2;
-export const ANIM_PINGPONG = 3;
+// Blitz3D's values (animator.h): 2 is ping-pong, 3 once.
+export const ANIM_PINGPONG = 2;
+export const ANIM_ONCE = 3;
 
 // The value of a channel at time t (seconds), written into out (3 or 4
 // numbers).
