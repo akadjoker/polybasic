@@ -23,6 +23,7 @@ import { Grass, createTuft, bladePixels, MAX_PUSHERS } from './scene/grass.js';
 import { Material } from './scene/material.js';
 import { rayOnto } from './collide/picking.js';
 import { Vec3 } from './math/vec3.js';
+import { Quat } from './math/quat.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
@@ -116,6 +117,7 @@ export const ENGINE_COMMANDS = [
   'RotateEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)',
   'TurnEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)',
   'PointEntity(entity, target, roll# = 0)',
+  'AlignToVector(entity, x#, y#, z#, axis, rate# = 1)',
   'ScaleEntity(entity, x#, y#, z#)',
   'EntityX#(entity, isGlobal = 0)',
   'EntityY#(entity, isGlobal = 0)',
@@ -671,6 +673,26 @@ export function createEngineCommands(engine)
     {
       const e = entity(handle);
       e.pointAt(entity(target).worldPosition(), roll);
+    },
+    // Blitz3D's AlignToVector: turns the entity's axis (1 X, 2 Y, 3 Z)
+    // towards the vector by `rate` of the angle, the shortest way; from
+    // pointing straight away, about its Y, Z or X axis respectively.
+    aligntovector(handle, x, y, z, axis, rate)
+    {
+      if (axis < 1 || axis > 3) throw runtimeError(`AlignToVector axis must be 1 (X), 2 (Y) or 3 (Z), not ${axis}`);
+      const e = entity(handle);
+      const to = new Vec3(x, y, z);
+      const length = to.length();
+      if (length <= 1e-6) return;
+      to.scale(1 / length);
+      const q = e.worldRotation();
+      const unit = (i) => new Vec3(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuat(q);
+      const from = unit(axis - 1);
+      const dot = Math.max(-1, Math.min(1, from.dot(to)));
+      if (dot >= 1 - 1e-6) return;
+      const about = dot <= -1 + 1e-6 ? unit(axis % 3) : from.clone().cross(to).normalize();
+      const turn = new Quat().setAxisAngle(about.x, about.y, about.z, Math.acos(dot) * rate * 180 / Math.PI);
+      e.setWorldRotation(q.premultiply(turn));
     },
     scaleentity(handle, x, y, z)
     {

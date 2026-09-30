@@ -1,0 +1,8 @@
+Z towards +X: 1.0 0.0 0.0
+Y towards (0, 1, 1): 0.0 0.707107 0.707107
+half way from +Z to +Y, pitch -45.0
+and half again, pitch -67.5
+from pointing away: yaw 0.0, pitch 0.0
+child's Z towards -Z: 0.0 -1.0
+a zero vector changes nothing, a bad axis is an error:
+Runtime error (3d_align.pb, line 38): AlignToVector axis must be 1 (X), 2 (Y) or 3 (Z), not 4
