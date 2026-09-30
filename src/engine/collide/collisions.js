@@ -7,8 +7,10 @@
 // dst, method, response` says how entities of type src meet those of type
 // dst:
 //   method   1 sphere   the other entity's EntityRadius sphere
-//            2 polygon  the other entity's mesh triangles (both sides)
-//            3 box      the other entity's EntityBox, from the outside
+//            2 polygon  the other entity's mesh triangles (both sides; for
+//                       a model, the triangles of all its parts)
+//            3 box      the other entity's EntityBox (or the box around
+//                       its mesh or model), from the outside
 //   response 1 stop     stop at the first contact
 //            2 slide    slide along what was hit
 //            3 slide, but a surface facing up (a floor, a ramp) does not
@@ -23,7 +25,7 @@
 import { Vec3 } from '../math/vec3.js';
 import { Entity } from '../scene/entity.js';
 import { newHit, sweepTriangle, sweepSphere } from './sweep.js';
-import { boxTriangles, shapeBounds, segmentNearBox } from './shapes.js';
+import { boxTriangles, shapeBounds, segmentNearBox, meshParts } from './shapes.js';
 import { meshTrianglesNear } from './picking.js';
 
 export const COLLIDE_SPHERE = 1;
@@ -53,23 +55,37 @@ export class Collisions
     this.tri = new Float64Array(9);
   }
 
-  // The world box of an entity's shape for a method, cached for the step.
-  boundsOf(e, method)
+  entry(e)
   {
     let c = this.cache.get(e);
     if (!c)
     {
-      c = { bounds: [], boxTris: null, inv: undefined };
+      c = { bounds: [], boxTris: null, inv: undefined, parts: null };
       this.cache.set(e, c);
     }
+    return c;
+  }
+
+  // The world box of an entity's shape for a method, cached for the step.
+  boundsOf(e, method)
+  {
+    const c = this.entry(e);
     if (c.bounds[method] === undefined) c.bounds[method] = shapeBounds(e, method);
     return c.bounds[method];
+  }
+
+  // The entities whose triangles make up e (itself, or a model's parts).
+  partsOf(e)
+  {
+    const c = this.entry(e);
+    if (!c.parts) c.parts = meshParts(e);
+    return c.parts;
   }
 
   // The inverse world matrix, or null when there is none (a zero scale).
   inverseOf(e)
   {
-    const c = this.cache.get(e);
+    const c = this.entry(e);
     if (c.inv === undefined)
     {
       const inv = e.worldMatrix.clone();
@@ -80,7 +96,7 @@ export class Collisions
 
   boxTrianglesOf(e)
   {
-    const c = this.cache.get(e);
+    const c = this.entry(e);
     if (!c.boxTris) c.boxTris = boxTriangles(e);
     return c.boxTris;
   }
@@ -269,12 +285,16 @@ export class Collisions
       if (rule.method === COLLIDE_SPHERE) this.sphereHit(other, wPos, wVel, rx, ry, hit);
       else if (rule.method === COLLIDE_POLYGON)
       {
-        const inv = other.mesh ? this.inverseOf(other) : null;
-        if (!inv) continue;
-        meshTrianglesNear(other, wPos, wVel, [rx, ry, rx], (t) =>
+        // A model is met as a whole: the triangles of all its parts.
+        for (const part of this.partsOf(other))
         {
-          sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(t, 0), true, hit);
-        }, inv);
+          const inv = this.inverseOf(part);
+          if (!inv) continue;
+          meshTrianglesNear(part, wPos, wVel, [rx, ry, rx], (t) =>
+          {
+            sweepTriangle(pos.x, pos.y, pos.z, vel.x, vel.y, vel.z, toE(t, 0), true, hit);
+          }, inv);
+        }
       }
       else
       {

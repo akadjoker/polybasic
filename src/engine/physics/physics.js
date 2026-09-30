@@ -9,7 +9,8 @@
 //
 // The body's shape is worked out when EntityBody is called, from the
 // entity's mesh (or all the meshes below it, for a loaded model), its box
-// or radius, and its scale at that moment.
+// or radius, and its scale at that moment. A model still loading gets its
+// body when it arrives.
 
 import { Vec3 } from '../math/vec3.js';
 import { Quat } from '../math/quat.js';
@@ -29,20 +30,26 @@ export const SHAPE_MESH = 6;
 
 const TYPES = { [BODY_STATIC]: 'static', [BODY_DYNAMIC]: 'dynamic', [BODY_KINEMATIC]: 'kinematic' };
 
+export const MESH_NOT_DYNAMIC = 'SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX';
+
 // 9.8 m/s^2 with one unit as half a metre (the built-in shapes are 2 units
 // across, about a metre).
 export const DEFAULT_GRAVITY = [0, -19.6, 0];
 
 export class Physics
 {
-  constructor(world, load)
+  constructor(world, load, warn = () => {})
   {
     this.world = world;
     this.load = load;         // () => Promise<PhysicsBackend>, or null
+    this.warn = warn;
     this.backend = null;
     this.loading = null;
     this.gravity = [...DEFAULT_GRAVITY];
     this.bodies = new Map();  // entity -> { id, type, position, rotation }
+    // Bodies of models still loading: entity -> { pending, type, ops }.
+    // What the program does to them meanwhile waits in `ops`.
+    this.waiting = new Map();
   }
 
   get available()
@@ -71,9 +78,37 @@ export class Physics
     if (this.backend) this.backend.setGravity(x, y, z);
   }
 
+  // The body of e: { id, type, ... }, or { pending: true, type, ops } for
+  // a model that has not arrived yet, or null.
   body(e)
   {
-    return this.bodies.get(e) || null;
+    return this.bodies.get(e) || this.waiting.get(e) || null;
+  }
+
+  // Like add, for a model still loading: the body is made when
+  // `whenLoaded` calls back, and what was asked of it meanwhile follows.
+  addLater(e, kind, shapeKind, options, whenLoaded)
+  {
+    this.remove(e);
+    const pending = { pending: true, type: TYPES[kind], ops: [] };
+    this.waiting.set(e, pending);
+    whenLoaded(() =>
+    {
+      if (this.waiting.get(e) !== pending) return;
+      this.waiting.delete(e);
+      if (!e.alive || !this.backend) return;
+      try
+      {
+        this.add(e, kind, shapeKind, options);
+      }
+      catch (err)
+      {
+        this.warn(`EntityBody: ${err.message}`);
+        return;
+      }
+      const id = this.bodies.get(e).id;
+      for (const op of pending.ops) op(id);
+    });
   }
 
   // Gives entity e a body of `kind` (BODY_...) with a shape (SHAPE_...).
@@ -98,6 +133,7 @@ export class Physics
 
   remove(e)
   {
+    this.waiting.delete(e);
     const b = this.bodies.get(e);
     if (!b) return;
     this.backend.removeBody(b.id);
@@ -158,6 +194,7 @@ export class Physics
     if (this.backend) this.backend.dispose();
     this.backend = null;
     this.bodies.clear();
+    this.waiting.clear();
   }
 }
 
@@ -178,10 +215,7 @@ function buildShape(e, type, kind)
   {
     throw new Error(`Entity ${e.id} has no mesh to make a ${kind === SHAPE_HULL ? 'SHAPE_HULL' : 'SHAPE_MESH'} from`);
   }
-  if (kind === SHAPE_MESH && type === 'dynamic')
-  {
-    throw new Error('SHAPE_MESH is for BODY_STATIC and BODY_KINEMATIC bodies; a moving body needs a solid shape such as SHAPE_HULL or SHAPE_BOX');
-  }
+  if (kind === SHAPE_MESH && type === 'dynamic') throw new Error(MESH_NOT_DYNAMIC);
   if (kind === SHAPE_MESH)
   {
     return { shape: { kind: 'mesh', vertices: Float32Array.from(points.positions), indices: Uint32Array.from(points.triangles) }, offset: [0, 0, 0] };

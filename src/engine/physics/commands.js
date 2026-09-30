@@ -6,7 +6,8 @@ import { handleHelpers, tidy } from '../handles.js';
 import { runtimeError } from '../../runtime/errors.js';
 import {
   BODY_STATIC, BODY_DYNAMIC, BODY_KINEMATIC,
-  SHAPE_AUTO, SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE, SHAPE_CYLINDER, SHAPE_HULL, SHAPE_MESH
+  SHAPE_AUTO, SHAPE_BOX, SHAPE_SPHERE, SHAPE_CAPSULE, SHAPE_CYLINDER, SHAPE_HULL, SHAPE_MESH,
+  MESH_NOT_DYNAMIC
 } from './physics.js';
 
 export const PHYSICS_COMMANDS = [
@@ -86,6 +87,19 @@ export function createPhysicsCommands(engine)
     if (dynamicOnly && b.type !== 'dynamic') throw runtimeError(`Entity ${handle} has a ${b.type} body; only a dynamic body (BODY_DYNAMIC) can be pushed or weighed`);
     return b;
   };
+  // Does something to a body: now, or once a model still loading has it.
+  const act = (handle, dynamicOnly, fn) =>
+  {
+    const b = bodyOf(handle, dynamicOnly);
+    if (b.pending) b.ops.push(fn);
+    else fn(b.id);
+  };
+  // Reads a body: a model's body that is not there yet reads as still.
+  const read = (handle, fn) =>
+  {
+    const b = bodyOf(handle);
+    return b.pending ? 0 : tidy(fn(b.id));
+  };
   const nonNegative = (v, what) =>
   {
     if (!(v >= 0)) throw runtimeError(`${what} must be 0 or more, not ${v}`);
@@ -103,7 +117,14 @@ export function createPhysicsCommands(engine)
       ready();
       if (kind < BODY_STATIC || kind > BODY_KINEMATIC) throw runtimeError(`EntityBody kind must be BODY_STATIC, BODY_DYNAMIC or BODY_KINEMATIC (1 to 3), not ${kind}`);
       if (shape < SHAPE_AUTO || shape > SHAPE_MESH) throw runtimeError(`EntityBody shape must be one of the SHAPE_ constants (0 to 6), not ${shape}`);
+      if (shape === SHAPE_MESH && kind === BODY_DYNAMIC) throw runtimeError(`EntityBody: ${MESH_NOT_DYNAMIC}`);
       const e = entity(handle);
+      if (e.model && !e.model.loaded && !e.model.failed)
+      {
+        // A model still loading: the body comes with its parts.
+        physics.addLater(e, kind, shape, DEFAULTS, (fn) => engine.models.whenLoaded(e, fn));
+        return;
+      }
       try
       {
         physics.add(e, kind, shape, DEFAULTS);
@@ -122,59 +143,63 @@ export function createPhysicsCommands(engine)
     bodymass(handle, mass)
     {
       if (!(mass > 0)) throw runtimeError(`BodyMass must be more than 0, not ${mass}`);
-      physics.backend.setMass(bodyOf(handle, true).id, mass);
+      act(handle, true, (id) => physics.backend.setMass(id, mass));
     },
     bodyfriction(handle, friction)
     {
-      physics.backend.setFriction(bodyOf(handle).id, nonNegative(friction, 'BodyFriction'));
+      nonNegative(friction, 'BodyFriction');
+      act(handle, false, (id) => physics.backend.setFriction(id, friction));
     },
     bodybounce(handle, bounce)
     {
-      physics.backend.setRestitution(bodyOf(handle).id, nonNegative(bounce, 'BodyBounce'));
+      nonNegative(bounce, 'BodyBounce');
+      act(handle, false, (id) => physics.backend.setRestitution(id, bounce));
     },
     bodydamping(handle, linear, angular)
     {
-      physics.backend.setDamping(bodyOf(handle, true).id, nonNegative(linear, 'BodyDamping linear'), nonNegative(angular, 'BodyDamping angular'));
+      nonNegative(linear, 'BodyDamping linear');
+      nonNegative(angular, 'BodyDamping angular');
+      act(handle, true, (id) => physics.backend.setDamping(id, linear, angular));
     },
     bodylockrotation(handle, pitch, yaw, roll)
     {
-      physics.backend.lockRotation(bodyOf(handle, true).id, pitch !== 0, yaw !== 0, roll !== 0);
+      act(handle, true, (id) => physics.backend.lockRotation(id, pitch !== 0, yaw !== 0, roll !== 0));
     },
     applyforce(handle, x, y, z)
     {
-      physics.backend.applyForce(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.applyForce(id, [x, y, z]));
     },
     applyimpulse(handle, x, y, z)
     {
-      physics.backend.applyImpulse(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.applyImpulse(id, [x, y, z]));
     },
     applytorque(handle, pitch, yaw, roll)
     {
-      physics.backend.applyTorque(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+      act(handle, true, (id) => physics.backend.applyTorque(id, toAxes(pitch, yaw, roll)));
     },
     setvelocity(handle, x, y, z)
     {
-      physics.backend.setVelocity(bodyOf(handle, true).id, [x, y, z]);
+      act(handle, true, (id) => physics.backend.setVelocity(id, [x, y, z]));
     },
     setangularvelocity(handle, pitch, yaw, roll)
     {
-      physics.backend.setAngularVelocity(bodyOf(handle, true).id, toAxes(pitch, yaw, roll));
+      act(handle, true, (id) => physics.backend.setAngularVelocity(id, toAxes(pitch, yaw, roll)));
     },
-    bodyvx: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[0]),
-    bodyvy: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[1]),
-    bodyvz: (handle) => tidy(physics.backend.velocity(bodyOf(handle).id)[2]),
-    bodypitchspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[0] / DEG),
-    bodyyawspeed: (handle) => tidy(-physics.backend.angularVelocity(bodyOf(handle).id)[1] / DEG),
-    bodyrollspeed: (handle) => tidy(physics.backend.angularVelocity(bodyOf(handle).id)[2] / DEG),
+    bodyvx: (handle) => read(handle, (id) => physics.backend.velocity(id)[0]),
+    bodyvy: (handle) => read(handle, (id) => physics.backend.velocity(id)[1]),
+    bodyvz: (handle) => read(handle, (id) => physics.backend.velocity(id)[2]),
+    bodypitchspeed: (handle) => read(handle, (id) => physics.backend.angularVelocity(id)[0] / DEG),
+    bodyyawspeed: (handle) => read(handle, (id) => -physics.backend.angularVelocity(id)[1] / DEG),
+    bodyrollspeed: (handle) => read(handle, (id) => physics.backend.angularVelocity(id)[2] / DEG),
     countcontacts(handle)
     {
-      bodyOf(handle);
+      if (bodyOf(handle).pending) return 0;
       return physics.contacts(entity(handle)).length;
     },
     contactentity(handle, index)
     {
-      bodyOf(handle);
-      const list = physics.contacts(entity(handle));
+      const b = bodyOf(handle);
+      const list = b.pending ? [] : physics.contacts(entity(handle));
       const other = list[index - 1];
       if (!other) throw runtimeError(`Entity ${handle} touches ${list.length} bod${list.length === 1 ? 'y' : 'ies'}, not number ${index}`);
       return other.id;

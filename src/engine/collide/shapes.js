@@ -1,9 +1,33 @@
 // The shapes rays and moving spheres meet, in world space.
+//
+// A model (the pivot LoadMesh returns) counts as one thing: its triangles
+// are those of all its parts, and its box is the box around them.
 
 import { Vec3 } from '../math/vec3.js';
 
+// The entities whose triangles make up e: e itself when it has a mesh, the
+// shown parts of a model, or none.
+export function meshParts(e)
+{
+  if (e.mesh) return [e];
+  if (!e.model || !e.model.loaded) return [];
+  const parts = [];
+  const walk = (n) =>
+  {
+    for (const c of n.children)
+    {
+      if (!c.visible) continue;
+      if (c.mesh && c.mesh.positions.length) parts.push(c);
+      walk(c);
+    }
+  };
+  walk(e);
+  return parts;
+}
+
 // The entity's box in its own space: EntityBox if set, else the bounds of
-// its mesh, else the -1..1 cube the built-in shapes fill.
+// its mesh (or of a model's parts), else the -1..1 cube the built-in
+// shapes fill.
 export function localBox(e)
 {
   if (e.box)
@@ -15,6 +39,29 @@ export function localBox(e)
   {
     const b = e.mesh.bounds;
     return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+  }
+  const parts = e.mesh ? [] : meshParts(e);
+  const inv = e.worldMatrix.clone();
+  if (parts.length && inv.invert())
+  {
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    const p = new Vec3();
+    for (const part of parts)
+    {
+      const b = part.mesh.bounds;
+      for (let i = 0; i < 8; i++)
+      {
+        p.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMat4(part.worldMatrix).applyMat4(inv);
+        lo[0] = Math.min(lo[0], p.x);
+        lo[1] = Math.min(lo[1], p.y);
+        lo[2] = Math.min(lo[2], p.z);
+        hi[0] = Math.max(hi[0], p.x);
+        hi[1] = Math.max(hi[1], p.y);
+        hi[2] = Math.max(hi[2], p.z);
+      }
+    }
+    return { min: lo, max: hi };
   }
   return { min: [-1, -1, -1], max: [1, 1, 1] };
 }
@@ -62,8 +109,8 @@ export function boxTriangles(e, out = new Float64Array(108))
 }
 
 // The world box around the entity's shape for a mode (1 sphere,
-// 2 polygon, 3 box), or null when it has none (a polygon entity whose mesh
-// has not loaded). Used to skip entities a ray or a move cannot reach.
+// 2 polygon, 3 box), or null when it has none (a model that has not
+// arrived yet). Used to skip entities a ray or a move cannot reach.
 export function shapeBounds(e, mode)
 {
   if (mode === 1)
@@ -74,9 +121,20 @@ export function shapeBounds(e, mode)
   }
   if (mode === 2)
   {
-    if (!e.mesh || e.mesh.bounds.isEmpty()) return null;
-    const b = e.worldBounds();
-    return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+    const lo = [Infinity, Infinity, Infinity];
+    const hi = [-Infinity, -Infinity, -Infinity];
+    for (const part of meshParts(e))
+    {
+      if (part.mesh.bounds.isEmpty()) continue;
+      const b = part.worldBounds();
+      lo[0] = Math.min(lo[0], b.min.x);
+      lo[1] = Math.min(lo[1], b.min.y);
+      lo[2] = Math.min(lo[2], b.min.z);
+      hi[0] = Math.max(hi[0], b.max.x);
+      hi[1] = Math.max(hi[1], b.max.y);
+      hi[2] = Math.max(hi[2], b.max.z);
+    }
+    return lo[0] <= hi[0] ? { min: lo, max: hi } : null;
   }
   const { min, max } = localBox(e);
   const lo = [Infinity, Infinity, Infinity];

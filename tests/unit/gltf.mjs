@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readGltf } from '../../src/engine/model/gltf.js';
 import { sample, advance, ANIM_LOOP, ANIM_ONCE, ANIM_PINGPONG } from '../../src/engine/model/animation.js';
+import { newModel } from '../../src/engine/model/model.js';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../../src/index.js';
 import { Mat4 } from '../../src/engine/math/mat4.js';
 import { Vec3 } from '../../src/engine/math/vec3.js';
@@ -211,7 +212,7 @@ test('node transforms: TRS and matrix nodes land where the mirrored glTF world p
   const { data } = await read(b.gltf());
   const engine = new Engine();
   const root = engine.world.createEntity('pivot');
-  root.model = { data: null, nodes: [], loaded: false };
+  root.model = newModel();
   engine.models.build(root, data);
   const a = root.children[0];
   const bb = a.children[0];
@@ -426,7 +427,7 @@ test('every Kenney model reads like three.js GLTFLoader reads it, mirrored', asy
 
     const engine = new Engine();
     const root = engine.world.createEntity('pivot');
-    root.model = { data: null, nodes: [], loaded: false };
+    root.model = newModel();
     engine.models.build(root, data);
     const ours = [];
     const walk = (e) =>
