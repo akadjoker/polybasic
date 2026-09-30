@@ -25,6 +25,19 @@ function mirrorInto(target, world)
   return target;
 }
 
+// The reflection through a mirror's XZ plane, in PolyBasic space:
+// M * diag(1, -1, 1) * M^-1. three.js turns the triangles of whatever it
+// draws with a mirrored matrix round by itself.
+function reflection(world)
+{
+  const m = new Mat4().fromArray(world);
+  const inverse = m.clone();
+  inverse.invert();
+  const flip = new Mat4();
+  flip.e[5] = -1;
+  return m.multiply(flip).multiply(inverse);
+}
+
 // The RGBA bytes of an image, top row first.
 function imagePixels(image)
 {
@@ -179,8 +192,24 @@ export class ThreeBackend extends RenderBackend
       r.setClearColor(srgb(new THREE.Color(), cam.clearColor), 1);
       r.clear(true, true, true);
       const camera = this.syncCamera(cam, w / h);
-      this.faceSprites(cam.world);
       this.fitShadows(camera);
+      const mirrors = frame.mirrors || [];
+      for (const m of mirrors)
+      {
+        const reflect = reflection(m.world);
+        // Sprites face the camera as seen in the mirror.
+        this.faceSprites(new Mat4().multiplyMatrices(reflect, new Mat4().fromArray(cam.world)).e);
+        mirrorInto(this.scene.matrix, reflect.e);
+        this.scene.matrixAutoUpdate = false;
+        this.scene.updateMatrixWorld(true);
+        r.render(this.scene, camera);
+      }
+      if (mirrors.length)
+      {
+        this.scene.matrix.identity();
+        this.scene.updateMatrixWorld(true);
+      }
+      this.faceSprites(cam.world);
       r.render(this.scene, camera);
     }
   }

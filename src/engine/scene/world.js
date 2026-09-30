@@ -153,12 +153,14 @@ export class World
     const cameras = [];
     const lights = [];
     const items = [];
+    const mirrors = [];
     for (const e of this.handles.values())
     {
       if (!(e instanceof Entity) || !e.shown) continue;
       const world = e.worldMatrix.e;
       if (e.kind === 'camera') cameras.push({ id: e.id, order: e.order, world, ...e.camera });
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
+      else if (e.kind === 'mirror') mirrors.push({ id: e.id, world });
       else if (e.kind === 'grass' && e.grass.count) items.push(this.grassItem(e, world));
       else if (e.kind === 'mesh' && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
     }
@@ -172,6 +174,7 @@ export class World
       cameras,
       lights,
       items,
+      mirrors,
       freedEntities: this.freedEntities,
       freedTextures: this.freedTextures
     };

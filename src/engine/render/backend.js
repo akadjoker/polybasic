@@ -19,6 +19,10 @@
 //     lights:  [{ id, world, type, color, range, shadows }],  type 1 directional, 2 point;
 //              shadows 0: none, otherwise the width of the square around the
 //              camera a directional light's shadows cover
+//     mirrors: [{ id, world }]: for each camera, the world is first drawn
+//              reflected through each mirror's XZ plane (triangles turned
+//              round), then drawn as it is over that, without clearing
+//              the depth, as Blitz3D does (world.cpp)
 //     items:   [{ id, world, mesh, materials, castShadow, receiveShadow, sprite }],
 //              mesh: MeshData, materials: [Material]; sprite: null, or a
 //              sprite's settings: draw it with scene/sprite.js's

@@ -18,7 +18,7 @@ export class Entity
   constructor(id, kind)
   {
     this.id = id;
-    this.kind = kind;       // 'pivot' | 'mesh' | 'camera' | 'light'
+    this.kind = kind;       // 'pivot' | 'mesh' | 'camera' | 'light' | 'mirror' | 'grass'
     this.name = '';
     this.parent = null;
     this.children = [];

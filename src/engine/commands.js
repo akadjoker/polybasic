@@ -57,6 +57,7 @@ export const ENGINE_COMMANDS = [
 
   // Shapes and pivots
   'CreatePivot%(parent = 0)',
+  'CreateMirror%(parent = 0)',
   'CreateCube%(parent = 0)',
   'CreateSphere%(segments = 16, parent = 0)',
   'CreateCylinder%(segments = 16, solid = 1, parent = 0)',
@@ -377,6 +378,11 @@ export function createEngineCommands(engine)
     createpivot(parent)
     {
       return world.createEntity('pivot', parentOf(parent)).id;
+    },
+    createmirror(parent)
+    {
+      engine.autoGraphics();
+      return world.createEntity('mirror', parentOf(parent)).id;
     },
     createcube: (parent) => shape(engine.sharedMesh('cube', () => createCube()), parent),
     createsphere: (segments, parent) =>
