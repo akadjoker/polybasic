@@ -297,7 +297,7 @@ leaves the original alone.
 | `CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = TEX_COLOR)` | A texture filled with one colour, to paint on. |
 | `CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)` | A square checkerboard of `cells` x `cells` squares. |
 | `TexturePixel texture, x, y, r, g, b, a = 255` | Paints one pixel of a created texture; (0, 0) is the top-left. `a` is how solid it is (0 to 255), for textures with `TEX_ALPHA` or `TEX_MASKED`. |
-| `ScaleTexture texture, u#, v#` | Repeats the texture `u` times across and `v` times down. |
+| `ScaleTexture texture, u#, v#` | Makes the texture `u` times wider and `v` times taller, as in Blitz3D: `ScaleTexture tex, 0.5, 0.5` repeats it twice each way over a surface, `ScaleTexture tex, 4, 4` stretches one copy over four times the area. |
 | `FreeTexture texture` | Releases it. |
 
 **Texture flags** are Blitz3D's, added up:

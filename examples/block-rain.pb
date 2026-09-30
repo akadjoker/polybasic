@@ -40,7 +40,7 @@ AmbientLight 60, 66, 90
 platform = CreateCube()
 ScaleEntity platform, HALF_WIDTH + 0.4, 0.2, HALF_DEPTH + 0.4
 floor = CreateCheckerTexture(128, 8, 60, 70, 100, 80, 92, 128)
-ScaleTexture floor, 3, 1
+ScaleTexture floor, 1 / 3.0, 1
 EntityTexture platform, floor
 
 ; A glowing rim along the front edge

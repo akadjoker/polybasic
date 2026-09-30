@@ -8858,10 +8858,13 @@ function createEngineCommands(engine) {
       if (!t.pixels) throw runtimeError("TexturePixel only works on textures made with CreateTexture");
       t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
+    // As Blitz3D (setScale(1/u, 1/v)): the texture is u times larger, so
+    // 0.5 repeats it twice.
     scaletexture(tex, u, v) {
       const t = texture(tex);
-      t.scaleU = u;
-      t.scaleV = v;
+      if (u === 0 || v === 0) throw runtimeError(`ScaleTexture needs sizes other than 0, not ${u}, ${v}`);
+      t.scaleU = 1 / u;
+      t.scaleV = 1 / v;
     },
     textureloaded: (tex) => texture(tex).loaded ? 1 : 0,
     freetexture(tex) {

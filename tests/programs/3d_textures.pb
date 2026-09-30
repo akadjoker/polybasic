@@ -6,7 +6,7 @@ missing = LoadTexture("assets/none.png")
 Print "handle " + tex + ", loaded right away: " + TextureLoaded(tex)
 checker = CreateCheckerTexture(64, 8, 255, 0, 0)
 TexturePixel checker, 0, 0, 0, 255, 0
-ScaleTexture checker, 2, 2
+ScaleTexture checker, 0.5, 0.5
 EntityTexture cube, checker
 EntityColor cube, 255, 128, 0
 EntityAlpha cube, 0.5
