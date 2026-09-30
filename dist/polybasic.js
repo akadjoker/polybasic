@@ -7027,7 +7027,7 @@ var Engine = class {
   }
 };
 function resolveUrl(base, file) {
-  if (!base || /^[a-z]+:|^\//i.test(file)) return file;
+  if (!base || /^[a-z][a-z0-9+.-]*:/i.test(file)) return file;
   try {
     return new URL(file, base).href;
   } catch {
@@ -34642,6 +34642,11 @@ function attachDomInput(input, element, toLogical) {
 
 // src/engine/browser.js
 var MAX_PIXEL_RATIO = 2;
+var PROJECT_SCHEME = "polybasic-project:";
+var IMAGE_TYPES = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+function projectPath(url) {
+  return decodeURIComponent(new URL(url).pathname.replace(/^\/+/, ""));
+}
 function createScreen(container2) {
   const box = document.createElement("div");
   box.className = "polybasic-screen";
@@ -34725,7 +34730,20 @@ function createScreen(container2) {
       overlay.begin(width, height);
     },
     // A fresh engine for one run of a program, drawing on this screen.
+    //   baseUrl      the program's URL: its files are relative to it
+    //   files        a project's files: { read(path) -> Uint8Array or null },
+    //                used for URLs of PROJECT_SCHEME
+    //   loadPhysics  instead of fetching dist/physics.js (an exported page
+    //                carries its own)
     newEngine(options = {}) {
+      const files = options.files || null;
+      const own = (url) => {
+        if (!url.startsWith(PROJECT_SCHEME)) return null;
+        const path = projectPath(url);
+        const bytes = files ? files.read(path) : null;
+        if (!bytes) throw new Error(`there is no file "${path}" in the project`);
+        return bytes;
+      };
       input.releaseAll();
       input.sample();
       overlay.begin(width, height);
@@ -34733,10 +34751,15 @@ function createScreen(container2) {
         backend,
         overlay,
         input,
-        loadImage,
-        loadFile,
+        loadImage: async (url) => {
+          const bytes = own(url);
+          if (!bytes) return loadImage(url);
+          const ext = url.split(".").pop().toLowerCase();
+          return decodeImage(bytes, IMAGE_TYPES[ext] || "application/octet-stream");
+        },
+        loadFile: async (url) => own(url) || loadFile(url),
         decodeImage,
-        loadPhysics,
+        loadPhysics: options.loadPhysics || loadPhysics,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) => {
           width = w;
@@ -34775,6 +34798,8 @@ export {
   NodeHost,
   NullBackend,
   NullOverlay,
+  PHYSICS_KEYS,
+  PROJECT_SCHEME,
   Plane,
   PolyRuntimeError,
   Quat,
@@ -34801,6 +34826,7 @@ export {
   formatError,
   loadProgram,
   parseSignature,
+  projectPath,
   runProgram2 as runProgram,
   runSource
 };

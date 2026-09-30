@@ -16,6 +16,10 @@
 //   - glTF models draw textured, with the texture in a PNG file or inside
 //     the .glb, and match three.js's own GLTFLoader picture (so nothing is
 //     mirrored);
+//   - playground projects: saved examples run from their own files,
+//     several files with uploads and Include, errors in the right file,
+//     everything kept across reloads; .zip out and back in; an exported
+//     page that plays alone, from a server or opened from the disk;
 //   - the playground: every example runs, an edit changes the picture, a
 //     compile error is marked at its line, a share link brings the code back;
 //   - no console errors anywhere.
@@ -152,6 +156,12 @@ async function canvasPixels(page, selector = null)
     return { width: copy.width, height: copy.height, data: btoa(text) };
   }, selector);
   return { width: encoded.width, height: encoded.height, data: Buffer.from(encoded.data, 'base64') };
+}
+
+// Colour statistics of the playground's screen.
+async function pgStatsOf(page)
+{
+  return page.evaluate(`(${canvasStats})(window.polybasicPlayground.getScreen().canvas)`);
 }
 
 async function playerStats(page)
@@ -659,6 +669,39 @@ try
     console.log(`      ${facts.coinHop}; ${facts.crates}; ${facts.paint}`);
   });
 
+  await check('playground projects are kept in IndexedDB across page loads', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/programs/manifest.json`);
+    const made = await page.evaluate(async () =>
+    {
+      const { ProjectStore } = await import('/web/projects.js');
+      const store = await ProjectStore.open();
+      const p = await store.create('Kept', { 'main.pb': 'Print 1\n', 'assets/a.bin': new Uint8Array([7, 8, 9]) });
+      await store.writeFile(p.id, 'lib/util.pb', 'Function F()\nEnd Function\n');
+      await store.renameFile(p.id, 'main.pb', 'game.pb');
+      return { id: p.id, persistent: store.persistent };
+    });
+    assert(made.persistent, 'IndexedDB was not used');
+    await page.reload();
+    const back = await page.evaluate(async (id) =>
+    {
+      const { ProjectStore } = await import('/web/projects.js');
+      const store = await ProjectStore.open();
+      const p = await store.get(id);
+      const files = await store.readAll(id);
+      const result = { name: p.name, main: p.main, paths: p.paths, bin: Array.from(files.get('assets/a.bin')), game: new TextDecoder().decode(files.get('game.pb')) };
+      await store.remove(id);
+      result.afterRemove = (await store.get(id)) === null && (await store.readAll(id)).size === 0;
+      return result;
+    }, made.id);
+    assert(back.name === 'Kept' && back.main === 'game.pb', JSON.stringify(back));
+    assert(back.paths.join() === 'assets/a.bin,game.pb,lib/util.pb', back.paths.join());
+    assert(back.bin.join() === '7,8,9' && back.game === 'Print 1\n', JSON.stringify(back));
+    assert(back.afterRemove, 'the project was not removed');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   // ── Playground ──────────────────────────────────────────────────────
 
   const playground = await openPage(browser, `${base}/web/`, { width: 1400, height: 850 });
@@ -674,6 +717,273 @@ try
     }, null, { timeout: 20000 });
     await playground.waitForTimeout(600);
   };
+
+  // ── Playground projects ────────────────────────────────────────────
+
+  // Answers the page's prompt() and confirm() dialogs in order.
+  const answering = (page) =>
+  {
+    const answers = [];
+    // A string answers a prompt; anything else just accepts (a confirm).
+    page.on('dialog', (d) =>
+    {
+      const value = answers.length ? answers.shift() : undefined;
+      d.accept(typeof value === 'string' ? value : undefined);
+    });
+    return (...values) => answers.push(...values);
+  };
+  const project = (page, fn, arg) => page.evaluate(fn, arg);
+  const consoleText = (page) => page.textContent('#console');
+
+  await check('playground: an example saved as a project runs from its own files', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=coin-hop`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'coin-hop', null, { timeout: 20000 });
+    answer('Hop copy');
+    await page.click('#saveAsProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const info = await project(page, () => window.polybasicPlayground.getProject());
+    assert(info.name === 'Hop copy' && info.main === 'coin-hop.pb', JSON.stringify(info));
+    assert(info.paths.includes('assets/kenney/character.glb') && info.paths.includes('assets/kenney/Textures/colormap.png'), info.paths.join());
+    // From now on the site's example files are out of reach.
+    const blocked = [];
+    await page.route('**/examples/**', (route) =>
+    {
+      blocked.push(route.request().url());
+      route.abort();
+    });
+    await page.reload();
+    await page.waitForFunction((id) => window.polybasicPlayground && window.polybasicPlayground.getProjectId() === id, info.id, { timeout: 20000 });
+    await page.waitForFunction(() =>
+    {
+      const s = window.polybasicPlayground.getSession();
+      return s && s.engine.frames > 10;
+    }, null, { timeout: 20000 });
+    const models = await page.evaluate(() => window.polybasicPlayground.getSession().engine.world.entities.filter((e) => e.model && e.model.loaded).length);
+    assert(models > 10, `only ${models} models loaded`);
+    assert(blocked.length === 0, `the project fetched site files: ${blocked.join(', ')}`);
+    const text = await consoleText(page);
+    assert(!/error|could not/i.test(text), `console: ${text}`);
+    const pixels = await pgStatsOf(page);
+    assert(pixels.colours > 50, `blank screen (${pixels.colours} colours)`);
+    await page.screenshot({ path: join(SHOTS, 'playground-project.png') });
+    await project(page, (id) => window.polybasicPlayground.getStore().remove(id), info.id);
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('playground: a project with several files, an upload, Include and errors in the right file', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId(), null, { timeout: 20000 });
+    answer('Files test');
+    await page.click('#newBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const id = await project(page, () => window.polybasicPlayground.getProjectId());
+
+    // An image and a program file, as if chosen with Upload. The program
+    // loads the image: a path relative to the main program, not to itself.
+    const TILE = 'Function Tile()\n  Return LoadTexture("assets/tile.png")\nEnd Function\n';
+    const tile = Array.from(readFileSync(join(ROOT, 'examples/assets/tile.png')));
+    await project(page, ({ bytes, helpers }) => window.polybasicPlayground.upload([
+      { name: 'tile.png', bytes: new Uint8Array(bytes) },
+      { name: 'helpers.pb', bytes: new TextEncoder().encode(helpers) }
+    ]), { bytes: tile, helpers: 'Function Twice(x)\n  Return x * 2\nEnd Function\n' + TILE });
+    let info = await project(page, () => window.polybasicPlayground.getProject());
+    assert(info.paths.join() === 'assets/tile.png,helpers.pb,main.pb', info.paths.join());
+    // The image is shown with how to use it.
+    const asset = await page.textContent('#assetView');
+    assert(asset.includes('LoadTexture("assets/tile.png")') && await page.isVisible('#assetView img'), asset);
+
+    // Move helpers.pb into a folder with the Rename button.
+    await project(page, () => window.polybasicPlayground.openFile('helpers.pb'));
+    answer('lib/helpers.pb');
+    await page.click('#renameFileBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getOpenPath() === 'lib/helpers.pb', null, { timeout: 5000 });
+
+    // The main program includes it and uses the uploaded image.
+    await project(page, () => window.polybasicPlayground.openFile('main.pb'));
+    await project(page, () => window.polybasicPlayground.setText(`Include "lib/helpers.pb"
+Global tex, cube
+cube = CreateCube()
+camera = CreateCamera()
+PositionEntity camera, 0, 0, -4
+tex = Tile()
+EntityTexture cube, tex
+Print "twice 21 = " + Twice(21)
+Function Update()
+  ; Files started in the main body are in by the first Update.
+  If FrameCount() = 1 Then Print "texture loaded " + TextureLoaded(tex)
+  TurnEntity cube, 0, 1, 0
+End Function
+`));
+    await page.click('#runBtn');
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('texture loaded'), null, { timeout: 10000 });
+    assert(/twice 21 = 42\s*texture loaded 1/.test(await consoleText(page)), await consoleText(page));
+
+    // An error in the included file opens that file and marks the line.
+    await project(page, () => window.polybasicPlayground.openFile('lib/helpers.pb'));
+    await project(page, (text) => window.polybasicPlayground.setText(text), 'Function Twice(x)\n  Return x * \nEnd Function\n' + TILE);
+    await project(page, () => window.polybasicPlayground.openFile('main.pb'));
+    await page.click('#runBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getOpenPath() === 'lib/helpers.pb', null, { timeout: 5000 });
+    await page.waitForSelector('.cm-lint-marker-error', { timeout: 5000 });
+    assert(/Compile error: .*\(lib\/helpers\.pb, line 2/.test(await consoleText(page)), await consoleText(page));
+    await project(page, (text) => window.polybasicPlayground.setText(text), 'Function Twice(x)\n  Return x * 2\nEnd Function\n' + TILE);
+
+    // Make another program the main one, then delete the old main.
+    answer('other.pb');
+    await page.click('#newFileBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getOpenPath() === 'other.pb', null, { timeout: 5000 });
+    await project(page, () => window.polybasicPlayground.setText('Print "other runs"\n'));
+    await page.click('#mainFileBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProject().main === 'other.pb', null, { timeout: 5000 });
+    await page.click('#runBtn');
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('other runs'), null, { timeout: 5000 });
+    await project(page, () => window.polybasicPlayground.openFile('main.pb'));
+    answer(true);
+    await page.click('#deleteFileBtn');
+    await page.waitForFunction(() => !window.polybasicPlayground.getProject().paths.includes('main.pb'), null, { timeout: 5000 });
+
+    // Everything is still there after a reload.
+    await project(page, () => window.polybasicPlayground.saveNow());
+    await page.goto(`${base}/web/#project=${id}`);
+    await page.waitForFunction((pid) => window.polybasicPlayground && window.polybasicPlayground.getProjectId() === pid, id, { timeout: 20000 });
+    info = await project(page, () => window.polybasicPlayground.getProject());
+    assert(info.main === 'other.pb' && info.paths.join() === 'assets/tile.png,lib/helpers.pb,other.pb', JSON.stringify(info));
+    const helpers = await project(page, async () =>
+    {
+      await window.polybasicPlayground.openFile('lib/helpers.pb');
+      return window.polybasicPlayground.getText();
+    });
+    assert(helpers.includes('Return x * 2'), helpers);
+    await page.screenshot({ path: join(SHOTS, 'playground-files.png') });
+
+    answer(true);
+    await page.click('#deleteProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProgramId(), null, { timeout: 10000 });
+    assert(await project(page, async (pid) => (await window.polybasicPlayground.getStore().get(pid)) === null, id), 'the project was not deleted');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('playground: a project downloads as .zip and comes back as the same project', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    answer('Spin to zip');
+    await page.click('#saveAsProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const first = await project(page, () => window.polybasicPlayground.getProject());
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#exportZipBtn')]);
+    assert(download.suggestedFilename() === 'spin-to-zip.zip', download.suggestedFilename());
+    const zipPath = join(SHOTS, 'spin-to-zip.zip');
+    await download.saveAs(zipPath);
+    const bytes = Array.from(readFileSync(zipPath));
+    const secondId = await project(page, (b) => window.polybasicPlayground.importZip('spin-to-zip.zip', new Uint8Array(b)), bytes);
+    const second = await project(page, () => window.polybasicPlayground.getProject());
+    assert(secondId && second.id !== first.id && second.name === 'Spin to zip' && second.main === first.main, JSON.stringify(second));
+    assert(second.paths.join() === first.paths.join(), `${second.paths} vs ${first.paths}`);
+    const same = await project(page, async ([a, b]) =>
+    {
+      const store = window.polybasicPlayground.getStore();
+      const fa = await store.readAll(a);
+      const fb = await store.readAll(b);
+      return [...fa].every(([p, d]) => fb.get(p) && fb.get(p).join() === d.join());
+    }, [first.id, second.id]);
+    assert(same, 'the imported files differ');
+    await page.waitForFunction(() =>
+    {
+      const s = window.polybasicPlayground.getSession();
+      return s && s.engine.frames > 5;
+    }, null, { timeout: 20000 });
+    for (const id of [first.id, second.id]) await project(page, (x) => window.polybasicPlayground.getStore().remove(x), id);
+    noConsoleErrors(page);
+    await page.close();
+  });
+
+  await check('playground: an exported page plays on its own, from a server or from the disk, physics included', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=crates`, { width: 1400, height: 850 });
+    const answer = answering(page);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'crates', null, { timeout: 20000 });
+    answer('Crates page');
+    await page.click('#saveAsProjectBtn');
+    await page.waitForFunction(() => window.polybasicPlayground.getProjectId(), null, { timeout: 20000 });
+    const id = await project(page, () => window.polybasicPlayground.getProjectId());
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#exportPageBtn')]);
+    assert(download.suggestedFilename() === 'crates-page.html', download.suggestedFilename());
+    const htmlPath = join(SHOTS, 'crates-page.html');
+    await download.saveAs(htmlPath);
+    await project(page, (x) => window.polybasicPlayground.getStore().remove(x), id);
+    noConsoleErrors(page);
+    await page.close();
+    const size = readFileSync(htmlPath).length;
+
+    const results = [];
+    for (const url of [`${base}/tests/output/crates-page.html`, `file://${htmlPath}`])
+    {
+      const game = await browser.newPage({ viewport: { width: 800, height: 600 } });
+      const problems = [];
+      game.on('console', (m) =>
+      {
+        if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`);
+      });
+      game.on('pageerror', (e) => problems.push(e.message));
+      // Only the page itself may be fetched.
+      const fetched = [];
+      await game.route('**/*', (route) =>
+      {
+        const u = route.request().url();
+        if (u === url) return route.continue();
+        if (u.startsWith('blob:') || u.startsWith('data:')) return route.continue();
+        fetched.push(u);
+        return route.abort();
+      });
+      await game.goto(url);
+      await game.waitForFunction(() => window.polybasicPage && window.polybasicPage.engine && window.polybasicPage.engine.frames > 30, null, { timeout: 30000 });
+      const state = await game.evaluate(() => ({
+        status: window.polybasicPage.status,
+        bodies: window.polybasicPage.engine.physics.bodies.size,
+        colours: 0
+      }));
+      const stats = await game.evaluate(`(${canvasStats})(window.polybasicPage.screen.canvas)`);
+      await game.screenshot({ path: join(SHOTS, url.startsWith('file:') ? 'exported-page-file.png' : 'exported-page.png') });
+      assert(state.status === 'running', `status ${state.status} at ${url}`);
+      assert(state.bodies > 20, `${state.bodies} bodies at ${url}`);
+      assert(stats.colours > 30, `blank page at ${url}`);
+      assert(fetched.length === 0, `fetched: ${fetched.join(', ')}`);
+      assert(problems.length === 0, `console at ${url}:\n${problems.join('\n')}`);
+      results.push(url.startsWith('file:') ? 'from the disk' : 'from a server');
+      await game.close();
+    }
+    facts.exportedPage = `${(size / 1024 / 1024).toFixed(2)} MB page with physics, plays ${results.join(' and ')}`;
+    console.log(`      ${facts.exportedPage}`);
+  });
+
+  await check('playground: a program kept by an earlier playground becomes a project', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/programs/manifest.json`);
+    await page.evaluate(() => window.localStorage.setItem('polybasic.playground.source.new', 'Print "from before"\n'));
+    await page.goto(`${base}/web/`);
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId(), null, { timeout: 20000 });
+    const found = await page.evaluate(async () =>
+    {
+      const store = window.polybasicPlayground.getStore();
+      const list = await store.list();
+      const p = list.find((x) => x.name === 'My program');
+      const text = p ? new TextDecoder().decode((await store.readAll(p.id)).get('main.pb')) : null;
+      if (p) await store.remove(p.id);
+      return { text, left: window.localStorage.getItem('polybasic.playground.source.new') };
+    });
+    assert(found.text === 'Print "from before"\n', JSON.stringify(found));
+    assert(found.left === null, 'the old copy was not removed');
+    noConsoleErrors(page);
+    await page.close();
+  });
 
   await check('playground: every example runs', async () =>
   {
@@ -757,6 +1067,15 @@ try
     await other.close();
     // Put the example back as it was for anyone looking at the page.
     await playground.evaluate(() => window.localStorage.clear());
+  });
+
+  await check('the site root leads to the playground', async () =>
+  {
+    const page = await openPage(browser, `${base}/`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId(), null, { timeout: 20000 });
+    assert(new URL(page.url()).pathname === '/web/', page.url());
+    noConsoleErrors(page);
+    await page.close();
   });
 }
 finally

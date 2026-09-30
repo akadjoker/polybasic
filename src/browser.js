@@ -3,5 +3,5 @@
 
 export * from './index.js';
 export { ThreeBackend } from './engine/render/three/three-backend.js';
-export { createScreen } from './engine/browser.js';
+export { createScreen, PROJECT_SCHEME, projectPath } from './engine/browser.js';
 export { attachDomInput } from './engine/input/dom-input.js';

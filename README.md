@@ -53,11 +53,19 @@ function is ordinary synchronous JavaScript. The full story is in
 
 ## The playground
 
-`web/index.html` is a small playground: a code editor with highlighting,
+`web/index.html` is the playground: a code editor with highlighting,
 completion and live error marks, Run/Stop, the 3D screen, a console for
-`Print` and errors (click an error to jump to its line), the examples, Share
-links that carry the code in the URL, and full screen. Serve the repository
-with any static server and open `/web/`:
+`Print` and errors (click an error to jump to its line), the examples and
+full screen. Projects hold several files (programs, textures, glTF
+models), are kept in the browser, go out and come back as .zip files, and
+export as one web page that plays the game anywhere, even opened from the
+disk. Examples can be edited, shared as links, or saved as projects. The
+full story is in [docs/playground.md](docs/playground.md).
+
+![A project in the playground](docs/screenshots/playground-project.png)
+
+It is a static site: serve the repository with any web server and open
+`/web/` (the root page leads there):
 
 ```
 python3 -m http.server 8080
@@ -134,9 +142,9 @@ src/engine/commands.js   the 3D, 2D and input commands
 src/node.js              Node glue: files from disk, physics on Rapier
 dist/polybasic.js        the browser build (npm run build)
 dist/physics.js          the physics engine for the browser, fetched only when used
-web/                     the playground and the player page
+web/                     the playground (projects, zip, page export) and the player page
 examples/                example programs; assets/kenney has CC0 models by Kenney
-docs/                    language.md, commands-3d.md
+docs/                    language.md, commands-3d.md, playground.md
 tests/                   golden programs, unit tests, browser tests, benchmark
 ```
 
@@ -150,7 +158,8 @@ tests/                   golden programs, unit tests, browser tests, benchmark
 3. **Collisions, picking and physics** behind PolyBasic's own commands
    (Rapier first), and glTF models loaded into our own mesh data, with
    their node animations. Done.
-4. **The full playground**: projects with files, export to a single page.
+4. **The full playground**: projects with files, kept in the browser,
+   .zip import and export, export to a single page. Done.
 5. **Games**: more original example games written in PolyBasic.
 
 ## Licence

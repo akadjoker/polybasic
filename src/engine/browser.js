@@ -18,6 +18,19 @@ import { attachDomInput } from './input/dom-input.js';
 // More pixels than this per logical pixel costs speed for little gain.
 const MAX_PIXEL_RATIO = 2;
 
+// URLs of files in a playground project (kept in the browser, not on a
+// server): polybasic-project:///main.pb, polybasic-project:///assets/a.png.
+// They resolve relative paths like any URL and never reach the network.
+export const PROJECT_SCHEME = 'polybasic-project:';
+
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
+
+// The path of a project URL inside the project ("assets/a.png").
+export function projectPath(url)
+{
+  return decodeURIComponent(new URL(url).pathname.replace(/^\/+/, ''));
+}
+
 export function createScreen(container)
 {
   const box = document.createElement('div');
@@ -115,8 +128,23 @@ export function createScreen(container)
       overlay.begin(width, height);
     },
     // A fresh engine for one run of a program, drawing on this screen.
+    //   baseUrl      the program's URL: its files are relative to it
+    //   files        a project's files: { read(path) -> Uint8Array or null },
+    //                used for URLs of PROJECT_SCHEME
+    //   loadPhysics  instead of fetching dist/physics.js (an exported page
+    //                carries its own)
     newEngine(options = {})
     {
+      const files = options.files || null;
+      // A project file, or null for a URL that is not a project's.
+      const own = (url) =>
+      {
+        if (!url.startsWith(PROJECT_SCHEME)) return null;
+        const path = projectPath(url);
+        const bytes = files ? files.read(path) : null;
+        if (!bytes) throw new Error(`there is no file "${path}" in the project`);
+        return bytes;
+      };
       input.releaseAll();
       input.sample();
       overlay.begin(width, height);
@@ -124,10 +152,16 @@ export function createScreen(container)
         backend,
         overlay,
         input,
-        loadImage,
-        loadFile,
+        loadImage: async (url) =>
+        {
+          const bytes = own(url);
+          if (!bytes) return loadImage(url);
+          const ext = url.split('.').pop().toLowerCase();
+          return decodeImage(bytes, IMAGE_TYPES[ext] || 'application/octet-stream');
+        },
+        loadFile: async (url) => own(url) || loadFile(url),
         decodeImage,
-        loadPhysics,
+        loadPhysics: options.loadPhysics || loadPhysics,
         baseUrl: options.baseUrl || document.baseURI,
         onResize: (w, h) =>
         {
