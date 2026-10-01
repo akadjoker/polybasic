@@ -40,7 +40,7 @@
 // texture V counted from the bottom; the result is turned into PolyBasic's
 // (X mirrored, corners swapped, V from the top), as the glTF reader does.
 //
-// The kinds are Radion's presets (Oak, Willow, Shrub, Ash, Poplar, Sequoia,
+// The kinds are presets (Oak, Willow, Shrub, Ash, Poplar, Sequoia,
 // Beech), all on the same base settings.
 
 import { MeshData } from './mesh.js';
