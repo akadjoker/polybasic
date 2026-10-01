@@ -1,9 +1,25 @@
 {
   "categories": [
-    { "id": "tutorials", "title": "Tutorials" },
-    { "id": "3d", "title": "3D" },
-    { "id": "effects", "title": "Visual effects" },
-    { "id": "language", "title": "Language" }
+    {
+      "id": "tutorials",
+      "title": "Tutorials"
+    },
+    {
+      "id": "3d",
+      "title": "3D"
+    },
+    {
+      "id": "effects",
+      "title": "Visual effects"
+    },
+    {
+      "id": "blitz3d",
+      "title": "Blitz3D samples"
+    },
+    {
+      "id": "language",
+      "title": "Language"
+    }
   ],
   "programs": [
     {
@@ -220,6 +236,18 @@
       "assets": []
     },
     {
+      "id": "terrain",
+      "title": "Terrain",
+      "category": "effects",
+      "file": "../examples/terrain.pb",
+      "description": "Hills from a heightmap (LoadTerrain, from Blitz3D's driver sample): fly over them, raise and dig the ground under the pointer (ModifyTerrain), turn shading on and off.",
+      "controls": "Right drag look, WASD fly, Q/E down and up, left button raise, Shift + left or middle button dig, L shading",
+      "assets": [
+        "assets/blitz3d/driver/heightmap_256.bmp",
+        "assets/blitz3d/driver/terrain-1.jpg"
+      ]
+    },
+    {
       "id": "trees",
       "title": "Trees",
       "category": "effects",
@@ -236,6 +264,19 @@
       "description": "A field swaying in the wind, parted by a ball rolling through it; click to paint more tufts.",
       "controls": "Arrows or WASD roll the ball, click to paint grass, 1/2 wind, C mow, R sow again",
       "assets": []
+    },
+    {
+      "id": "driver",
+      "title": "Driver",
+      "category": "blitz3d",
+      "file": "../examples/driver.pb",
+      "description": "Mark Sibly's Blitz3D driving sample, ported: a car held up by four wheel spheres that collide with the terrain, turned each step to lie along them (AlignToVector), with a camera that follows.",
+      "controls": "Up/Down drive, Left/Right steer",
+      "assets": [
+        "assets/blitz3d/driver/heightmap_256.bmp",
+        "assets/blitz3d/driver/terrain-1.jpg",
+        "assets/blitz3d/driver/car.glb"
+      ]
     },
     {
       "id": "tour",

@@ -21,14 +21,17 @@ import { buildTree, TREE_KINDS, TREE_OAK, TREE_WILLOW, TREE_SHRUB, TREE_ASH, TRE
 import { barkPixels, leafPixels } from './scene/tree-textures.js';
 import { Grass, createTuft, bladePixels, MAX_PUSHERS } from './scene/grass.js';
 import { Material } from './scene/material.js';
+import { newBrush, paintModel } from './scene/brush.js';
 import { rayOnto } from './collide/picking.js';
 import { Vec3 } from './math/vec3.js';
+import { Quat } from './math/quat.js';
 import { TEX_COLOR, TEX_ALPHA, TEX_MASKED, TEX_MIPMAP, TEX_CLAMPU, TEX_CLAMPV, TEX_SPHEREMAP, TEX_CUBEMAP } from './scene/texture.js';
 import { COLLIDE_COMMANDS, COLLIDE_CONSTANTS, createCollideCommands } from './collide/commands.js';
 import { PHYSICS_COMMANDS, PHYSICS_CONSTANTS, createPhysicsCommands } from './physics/commands.js';
 import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/commands.js';
 import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
 import { MESH_COMMANDS, MESH_CONSTANTS, createMeshCommands } from './scene/mesh-commands.js';
+import { TERRAIN_COMMANDS, createTerrainCommands } from './scene/terrain-commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -115,6 +118,7 @@ export const ENGINE_COMMANDS = [
   'RotateEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)',
   'TurnEntity(entity, pitch#, yaw#, roll#, isGlobal = 0)',
   'PointEntity(entity, target, roll# = 0)',
+  'AlignToVector(entity, x#, y#, z#, axis, rate# = 1)',
   'ScaleEntity(entity, x#, y#, z#)',
   'EntityX#(entity, isGlobal = 0)',
   'EntityY#(entity, isGlobal = 0)',
@@ -166,6 +170,7 @@ export const ENGINE_COMMANDS = [
   ...PHYSICS_COMMANDS,
   ...MODEL_COMMANDS,
   ...MESH_COMMANDS,
+  ...TERRAIN_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 
@@ -216,11 +221,20 @@ export function createEngineCommands(engine)
   const world = engine.world;
 
   const { entity, parentOf, texture, ofKind } = handleHelpers(world);
-  const material = (handle) =>
+  // Changes the look of a mesh, or the brush of a model (see brush.js).
+  const look = (handle, change) =>
   {
     const e = entity(handle);
+    if (e.model)
+    {
+      if (!e.brush) e.brush = newBrush();
+      change(e.brush);
+      paintModel(e);
+      return;
+    }
     if (!e.material) throw runtimeError(`Entity ${handle} is a ${e.kind}, which has no surface to colour`);
-    return e.material;
+    change(e.material);
+    e.material.changed();
   };
   const shape = (mesh, parent) =>
   {
@@ -290,6 +304,7 @@ export function createEngineCommands(engine)
     ...createModelCommands(engine),
     ...createAudioCommands(engine),
     ...createMeshCommands(engine),
+    ...createTerrainCommands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -554,40 +569,34 @@ export function createEngineCommands(engine)
     // ----------------------------------------------------------- looks
     entitycolor(handle, r, g, b)
     {
-      const m = material(handle);
-      m.color = [unit(r), unit(g), unit(b)];
-      m.changed();
+      look(handle, (m) => { m.color = [unit(r), unit(g), unit(b)]; });
     },
     entityalpha(handle, alpha)
     {
-      const m = material(handle);
-      m.alpha = Math.max(0, Math.min(1, alpha));
-      m.changed();
+      look(handle, (m) => { m.alpha = Math.max(0, Math.min(1, alpha)); });
     },
     entityshininess(handle, shininess)
     {
-      const m = material(handle);
-      m.shininess = Math.max(0, Math.min(1, shininess));
-      m.changed();
+      look(handle, (m) => { m.shininess = Math.max(0, Math.min(1, shininess)); });
     },
     entityfx(handle, flags)
     {
-      const m = material(handle);
-      m.fullbright = (flags & 1) !== 0;
-      m.flat = (flags & 4) !== 0;
-      m.twoSided = (flags & 16) !== 0;
-      m.vertexColors = (flags & 2) !== 0;
-      m.vertexAlpha = (flags & 32) !== 0;
-      m.changed();
       const e = entity(handle);
       e.castShadow = (flags & 0x20000) === 0;
       e.receiveShadow = (flags & 0x40000) === 0;
+      look(handle, (m) =>
+      {
+        m.fullbright = (flags & 1) !== 0;
+        m.flat = (flags & 4) !== 0;
+        m.twoSided = (flags & 16) !== 0;
+        m.vertexColors = (flags & 2) !== 0;
+        m.vertexAlpha = (flags & 32) !== 0;
+      });
     },
     entitytexture(handle, tex)
     {
-      const m = material(handle);
-      m.texture = tex === 0 ? null : texture(tex);
-      m.changed();
+      const t = tex === 0 ? null : texture(tex);
+      look(handle, (m) => { m.texture = t; });
     },
     entityorder(handle, order)
     {
@@ -597,9 +606,7 @@ export function createEngineCommands(engine)
     {
       const modes = { 1: 'alpha', 2: 'multiply', 3: 'add' };
       if (!modes[blend]) throw runtimeError(`EntityBlend needs 1 (alpha), 2 (multiply) or 3 (add), not ${blend}`);
-      const m = material(handle);
-      m.blend = modes[blend];
-      m.changed();
+      look(handle, (m) => { m.blend = modes[blend]; });
     },
 
     // -------------------------------------------------------- textures
@@ -628,11 +635,14 @@ export function createEngineCommands(engine)
       if (!t.pixels) throw runtimeError('TexturePixel only works on textures made with CreateTexture');
       t.setPixel(x, y, byte(r), byte(g), byte(b), byte(a));
     },
+    // As Blitz3D (setScale(1/u, 1/v)): the texture is u times larger, so
+    // 0.5 repeats it twice.
     scaletexture(tex, u, v)
     {
       const t = texture(tex);
-      t.scaleU = u;
-      t.scaleV = v;
+      if (u === 0 || v === 0) throw runtimeError(`ScaleTexture needs sizes other than 0, not ${u}, ${v}`);
+      t.scaleU = 1 / u;
+      t.scaleV = 1 / v;
     },
     textureloaded: (tex) => (texture(tex).loaded ? 1 : 0),
     freetexture(tex)
@@ -665,6 +675,26 @@ export function createEngineCommands(engine)
     {
       const e = entity(handle);
       e.pointAt(entity(target).worldPosition(), roll);
+    },
+    // Blitz3D's AlignToVector: turns the entity's axis (1 X, 2 Y, 3 Z)
+    // towards the vector by `rate` of the angle, the shortest way; from
+    // pointing straight away, about its Y, Z or X axis respectively.
+    aligntovector(handle, x, y, z, axis, rate)
+    {
+      if (axis < 1 || axis > 3) throw runtimeError(`AlignToVector axis must be 1 (X), 2 (Y) or 3 (Z), not ${axis}`);
+      const e = entity(handle);
+      const to = new Vec3(x, y, z);
+      const length = to.length();
+      if (length <= 1e-6) return;
+      to.scale(1 / length);
+      const q = e.worldRotation();
+      const unit = (i) => new Vec3(i === 0 ? 1 : 0, i === 1 ? 1 : 0, i === 2 ? 1 : 0).applyQuat(q);
+      const from = unit(axis - 1);
+      const dot = Math.max(-1, Math.min(1, from.dot(to)));
+      if (dot >= 1 - 1e-6) return;
+      const about = dot <= -1 + 1e-6 ? unit(axis % 3) : from.clone().cross(to).normalize();
+      const turn = new Quat().setAxisAngle(about.x, about.y, about.z, Math.acos(dot) * rate * 180 / Math.PI);
+      e.setWorldRotation(q.premultiply(turn));
     },
     scaleentity(handle, x, y, z)
     {

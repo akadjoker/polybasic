@@ -3,7 +3,7 @@
 Const KENNEY$ = "../../examples/assets/kenney/"
 Global guy, cube, sprite
 
-guy = LoadMesh(KENNEY + "character.glb")
+guy = LoadMesh(Asset("character.glb"))
 PositionEntity guy, 5, 2, 0
 TurnEntity guy, 0, 90, 0
 ScaleEntity guy, 2, 2, 2
@@ -17,4 +17,9 @@ Function Update()
   Print "model: " + MeshWidth(guy) + " " + MeshHeight(guy) + " " + MeshDepth(guy)
   Print "a pivot is neither:"
   MeshWidth CreatePivot()
+End Function
+
+; A name made at run time, not in quotes: the model arrives after main.
+Function Asset$(name$)
+  Return KENNEY + name
 End Function

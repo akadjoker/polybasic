@@ -104,6 +104,8 @@ export class World
     e.receiveShadow = src.receiveShadow;
     e.mesh = src.mesh;
     e.materials = src.materials.map((m) => m.clone());
+    e.surfaces = src.surfaces;
+    e.brush = src.brush ? src.brush.clone() : null;
     e.camera = src.camera ? { ...src.camera, clearColor: [...src.camera.clearColor] } : null;
     e.light = src.light ? { ...src.light, color: [...src.light.color] } : null;
     e.sprite = src.sprite ? { ...src.sprite } : null;

@@ -38,6 +38,7 @@ class Generator
     this.pos = null;
     this.helpers = new Set();
     this.commands = new Map();
+    this.files = new Set();
   }
 
   // ---------------------------------------------------------------- output
@@ -141,6 +142,7 @@ class Generator
     // The runner uses this to get ready before main runs: a program that
     // calls a physics command waits for the physics engine to load.
     js += `export const $uses = ${JSON.stringify([...this.commands.keys()].sort())};\n`;
+    js += `export const $files = [${[...this.files].sort().join(', ')}];\n`;
     return js;
   }
 
@@ -536,6 +538,9 @@ class Generator
 
   call(e)
   {
+    // A file named in quotes can be fetched before main runs, so that the
+    // engine can load it at once (LoadTerrain needs the heightmap's size).
+    if (!e.fn && e.args.length && e.args[0].kind === 'string') this.files.add(JSON.stringify([e.cmd.key, e.args[0].value]));
     const args = e.args.map((a) => bare(this.expr(a)));
     if (e.fn) return `${e.fn.js}(${args.join(', ')})`;
     if (e.cmd.inline) return e.cmd.inline.replace(/\$(\d)/g, (m, i) => wrap(args[Number(i)]));

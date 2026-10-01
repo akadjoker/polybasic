@@ -19,6 +19,7 @@ import { Input } from './input/input.js';
 import { createEngineCommands } from './commands.js';
 import { Collisions } from './collide/collisions.js';
 import { Physics } from './physics/physics.js';
+import { decodeImage } from './image/decode.js';
 import { Models } from './model/model.js';
 import { PHYSICS_KEYS } from './physics/commands.js';
 import { Audio } from './audio/audio.js';
@@ -63,6 +64,10 @@ export class Engine
     this.loadFile = options.loadFile || null;
     this.decodeImage = options.decodeImage || null;
     this.pending = new Set();
+    this.terrains = [];
+    // Heightmaps named in quotes in the program, read before main runs:
+    // url -> { image } or { error }.
+    this.heightmaps = new Map();
     this.baseUrl = options.baseUrl || '';
     this.onResize = options.onResize || ((w, h) => this.backend.resize(w, h, 1));
     this.width = DEFAULT_WIDTH;
@@ -178,10 +183,41 @@ export class Engine
 
   // Called before main with the commands the program uses. Returns a
   // promise when something must be loaded first, or null.
-  prepare(uses)
+  prepare(uses, files = [])
   {
-    if (uses.some((name) => PHYSICS_KEYS.has(name))) return this.physics.prepare();
-    return null;
+    const jobs = [];
+    if (uses.some((name) => PHYSICS_KEYS.has(name))) jobs.push(this.physics.prepare());
+    // LoadTerrain must know the heightmap's size at once (programs scale
+    // the terrain by TerrainSize right after loading it).
+    for (const [command, file] of files)
+    {
+      if (command === 'loadmesh' && this.loadFile)
+      {
+        jobs.push(this.models.preload(file, this.resolve(file)));
+        continue;
+      }
+      if (command !== 'loadterrain' || !this.loadFile) continue;
+      const url = resolveUrl(this.baseUrl, file);
+      if (this.heightmaps.has(url)) continue;
+      this.heightmaps.set(url, null);
+      jobs.push(this.loadHeightmap(url).then(
+        (image) => this.heightmaps.set(url, { image }),
+        (error) => this.heightmaps.set(url, { error })
+      ));
+    }
+    const waiting = jobs.filter(Boolean);
+    return waiting.length ? Promise.all(waiting) : null;
+  }
+
+  // A file name as the program wrote it, relative to its .pb file.
+  resolve(file)
+  {
+    return resolveUrl(this.baseUrl, file);
+  }
+
+  async loadHeightmap(url)
+  {
+    return decodeImage(await this.loadFile(url));
   }
 
   // After main: a promise that settles once every file started so far has
@@ -207,6 +243,7 @@ export class Engine
   // placed in the world follow where everything is now.
   endStep()
   {
+    this.updateTerrains();
     this.models.step(STEP_MS / 1000);
     this.physics.step(STEP_MS / 1000);
     this.collisions.update();
@@ -223,8 +260,15 @@ export class Engine
     this.audio.stopAll();
   }
 
+  updateTerrains()
+  {
+    this.terrains = this.terrains.filter((e) => e.alive);
+    for (const e of this.terrains) e.terrain.update();
+  }
+
   renderFrame()
   {
+    this.updateTerrains();
     const frame = this.world.buildFrame(this.width, this.height);
     // Seconds of simulated time, for what moves on its own (grass in the wind).
     frame.time = this.steps * STEP_MS / 1000;

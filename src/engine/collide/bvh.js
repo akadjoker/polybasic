@@ -220,6 +220,8 @@ function slabAxis(lo, hi, origin, inv)
 // The tree of a mesh, built on first use and rebuilt when the mesh changes.
 export function meshBvh(mesh)
 {
+  // A terrain answers from its grid instead (scene/terrain.js).
+  if (mesh.grid) return mesh.grid;
   if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version)
   {
     mesh.bvhCache = { version: mesh.version, bvh: new MeshBvh(mesh.positions, mesh.indices) };

@@ -116,7 +116,7 @@ Function PaintSign(t)
   Next
   ; Three times across and down: tiled, or once with its edge pixels
   ; carried on beyond it.
-  ScaleTexture t, 3, 3
+  ScaleTexture t, 1 / 3.0, 1 / 3.0
 End Function
 
 sign = CreatePlane()

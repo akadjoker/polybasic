@@ -37,7 +37,7 @@ Collisions TYPE_PLAYER, TYPE_WORLD, COLLIDE_POLYGON, RESPONSE_SLIDE_NO_DOWNHILL
 floor = CreatePlane(8)
 ScaleEntity floor, 15, 1, 15
 checker = CreateCheckerTexture(64, 8, 140, 180, 110, 120, 160, 95)
-ScaleTexture checker, 4, 4
+ScaleTexture checker, 0.25, 0.25
 EntityTexture floor, checker
 EntityType floor, TYPE_WORLD
 

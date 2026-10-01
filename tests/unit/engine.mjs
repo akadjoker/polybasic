@@ -281,3 +281,15 @@ test('Graphics3D sets the screen size used by the frame and GraphicsWidth', asyn
 });
 
 export default unit;
+
+test('ScaleTexture as in Blitz3D: 0.5 repeats a texture twice, 4 stretches it four times', async () =>
+{
+  const engine = new Engine();
+  const src = 't = CreateTexture(4, 4)\nScaleTexture t, 0.5, 4\n';
+  await runProgram(await load(src), new CaptureHost(), { engine });
+  const t = [...engine.world.handles.values()].find((h) => h.scaleU !== undefined);
+  near(t.scaleU, 2, 1e-12);
+  near(t.scaleV, 0.25, 1e-12);
+  const result = await runProgram(await load('t = CreateTexture(4, 4)\nScaleTexture t, 0, 1\n'), new CaptureHost(), { engine: new Engine() });
+  assert(result.status === 'error' && /other than 0/.test(result.error.message), JSON.stringify(result));
+});

@@ -29,7 +29,7 @@ AmbientLight 110, 115, 130
 ground = CreatePlane(16)
 ScaleEntity ground, 100, 1, 100
 grid = CreateCheckerTexture(64, 8, 110, 150, 90, 100, 140, 80)
-ScaleTexture grid, 25, 25
+ScaleTexture grid, 0.04, 0.04
 EntityTexture ground, grid
 
 ; Something to fly round: towers of blocks, a ring, a few trees.

@@ -30,7 +30,7 @@ AmbientLight 110, 110, 120
 floor = CreatePlane(8)
 ScaleEntity floor, 12, 1, 12
 checker = CreateCheckerTexture(64, 8, 200, 200, 190, 170, 170, 160)
-ScaleTexture checker, 3, 3
+ScaleTexture checker, 1 / 3.0, 1 / 3.0
 EntityTexture floor, checker
 
 ; The tank: a body with a barrel on the front, so you can tell where it

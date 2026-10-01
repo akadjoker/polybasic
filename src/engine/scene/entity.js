@@ -34,6 +34,8 @@ export class Entity
     this.alive = true;
     this.mesh = null;
     this.materials = [];
+    this.surfaces = null;   // a model part's own materials (see brush.js)
+    this.brush = null;      // a model's entity brush
     this.camera = null;
     this.light = null;
     this.sprite = null;     // a sprite's settings (scene/sprite.js); its mesh is the square

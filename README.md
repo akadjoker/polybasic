@@ -66,7 +66,9 @@ controlling an animation to first-person, free-look and orbit cameras
 ([docs/tutorials.md](docs/tutorials.md) explains each one); those under
 **Visual effects** show each 3D effect on its own, with keys
 to switch it: shadows, texture flags, sprites, building meshes, decals,
-ribbon trails, trees and grass. The full story is in
+ribbon trails, trees, grass and terrain; those under **Blitz3D samples**
+are programs that came with Blitz3D, ported (the first is its driving
+sample). The full story is in
 [docs/playground.md](docs/playground.md).
 
 ![A project in the playground](docs/screenshots/playground-project.png)

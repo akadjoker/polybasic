@@ -11,6 +11,7 @@ what the tests use).
 - [Lights](#lights)
 - [Shapes and pivots](#shapes-and-pivots)
 - [Sprites](#sprites)
+- [Terrain](#terrain)
 - [Trees](#trees)
 - [Grass](#grass)
 - [Ribbon trails](#ribbon-trails)
@@ -127,6 +128,39 @@ which camera a sprite faces, so `PICK_POLYGON` sees its square turned as
 the entity is.
 
 Try it: **Sprites** in the playground's Visual effects (`examples/sprites.pb`).
+
+## Terrain
+
+Hills from a heightmap, as in Blitz3D. A terrain is a grid of `size` x
+`size` heights from 0 to 1 over x and z from 0 to `size`, standing on its
+entity's position; `ScaleEntity` gives it its size in the world. It is
+drawn, picked and collided with like a mesh, grass can be painted onto it,
+and `EntityBody` gives it a static body (made from its heights at that
+moment).
+
+```
+land = LoadTerrain("heightmap.png")
+ScaleEntity land, 4, 100, 4             ; 4 units a cell, 100 high
+EntityTexture land, LoadTexture("grass.jpg")
+TerrainShading land, True
+y# = TerrainY(land, x, 0, z)            ; the ground under x, z
+```
+
+| Command | What it does |
+|---------|--------------|
+| `LoadTerrain%(file$, parent = 0)` | A terrain from a square PNG or BMP image whose side is a power of 2: each pixel's brightest channel (red, green or blue) is its height, the image's top row the far side. A file named in quotes is read before the program starts, so `TerrainSize` is known at once; a name made at run time arrives later (until then `TerrainSize` is 0). |
+| `CreateTerrain%(size, parent = 0)` | A flat terrain, `size` a power of 2 (64, 128, 256...). |
+| `TerrainSize%(terrain)` | The grid's size. |
+| `TerrainHeight#(terrain, x, z)` | The height at grid point x, z, from 0 to 1. The grid wraps: point `size` is point 0. Outside 0..size, 0. |
+| `ModifyTerrain terrain, x, z, height#, realtime = False` | Sets a grid point's height. Heights are kept in steps of 1/255 (rounded down), as in Blitz3D. Changes show from the next step on, however many are made; `realtime` is accepted for Blitz3D programs. |
+| `TerrainY#(terrain, x#, y#, z#)` | The world height of the ground at world x, z (between grid points, the four round it are blended). `TerrainX` and `TerrainZ` give that point's x and z. |
+| `TerrainShading terrain, on` | With shading, slopes are lit by how they face; without (the default, as in Blitz3D), the whole terrain is lit as flat ground. |
+| `TerrainDetail terrain, detail, morph = False` | Accepted for Blitz3D programs: the whole grid is always drawn. |
+
+A texture is laid once over each cell; `ScaleTexture tex, 32, 32` spreads
+it over 32 x 32 cells.
+
+Try it: **Terrain** in the playground's Visual effects (`examples/terrain.pb`).
 
 ## Trees
 
@@ -261,9 +295,9 @@ UpdateNormals m                       ; work out how light falls on it
 | `TriangleVertex%(surface, triangle, corner)` | The vertex at corner 0, 1 or 2 of a triangle. |
 | `ClearSurface surface, vertices = True, triangles = True` | Empties it. |
 | `UpdateNormals mesh` | Smooth lighting: each corner faces the average way of the triangles around it (corners at the same place share it). |
-| `ScaleMesh mesh, x#, y#, z#` `RotateMesh mesh, pitch#, yaw#, roll#` `PositionMesh mesh, x#, y#, z#` | Changes the mesh itself (not the entity): every vertex moves. |
-| `FitMesh mesh, x#, y#, z#, width#, height#, depth#, uniform = False` | Scales and moves the mesh to fill that box; `uniform` keeps its proportions. |
-| `FlipMesh mesh` | Turns every triangle to face the other way. |
+| `ScaleMesh mesh, x#, y#, z#` `RotateMesh mesh, pitch#, yaw#, roll#` `PositionMesh mesh, x#, y#, z#` | Changes the mesh itself (not the entity): every vertex moves. On a loaded model, every part changes, in the model's own space. |
+| `FitMesh mesh, x#, y#, z#, width#, height#, depth#, uniform = False` | Scales and moves the mesh to fill that box; `uniform` keeps its proportions. A model is fitted as a whole. |
+| `FlipMesh mesh` | Turns every triangle to face the other way (on a model, of every part). |
 | `AddMesh source, dest` | Adds copies of `source`'s surfaces to `dest`. |
 | `CopyMesh%(mesh, parent = 0)` | A new entity with a copy of the mesh (and its look). |
 | `MeshWidth#(mesh)` `MeshHeight#(mesh)` `MeshDepth#(mesh)` | The size of the box around it. For a loaded model, the box around all its parts, in the model's own space (0 while it is loading). |
@@ -288,6 +322,14 @@ Try it: **Building meshes** in the playground's Visual effects (`examples/meshes
 Each entity has its own look: `CopyEntity` copies it, and changing the copy
 leaves the original alone.
 
+**On a model** these commands set the model's own look, which is combined
+with each part's material from the file, as Blitz3D combines an entity's
+brush with a mesh's surfaces: colours and alpha multiply (a red
+`EntityColor` reddens the parts and leaves dark ones dark), shininess adds, FX flags add up, and
+a texture or blend given to the model replaces the parts' own. It can be set
+while the model is still loading. To change one part only, give the command
+to the part (`FindChild`).
+
 ## Textures
 
 | Command | What it does |
@@ -297,7 +339,7 @@ leaves the original alone.
 | `CreateTexture%(width, height, r = 255, g = 255, b = 255, flags = TEX_COLOR)` | A texture filled with one colour, to paint on. |
 | `CreateCheckerTexture%(size, cells, r1, g1, b1, r2 = 255, g2 = 255, b2 = 255)` | A square checkerboard of `cells` x `cells` squares. |
 | `TexturePixel texture, x, y, r, g, b, a = 255` | Paints one pixel of a created texture; (0, 0) is the top-left. `a` is how solid it is (0 to 255), for textures with `TEX_ALPHA` or `TEX_MASKED`. |
-| `ScaleTexture texture, u#, v#` | Repeats the texture `u` times across and `v` times down. |
+| `ScaleTexture texture, u#, v#` | Makes the texture `u` times wider and `v` times taller, as in Blitz3D: `ScaleTexture tex, 0.5, 0.5` repeats it twice each way over a surface, `ScaleTexture tex, 4, 4` stretches one copy over four times the area. |
 | `FreeTexture texture` | Releases it. |
 
 **Texture flags** are Blitz3D's, added up:
@@ -325,6 +367,7 @@ Try it: **Texture flags** in the playground's Visual effects (`examples/textures
 | `RotateEntity entity, pitch#, yaw#, roll#, isGlobal = False` | Sets the rotation. |
 | `TurnEntity entity, pitch#, yaw#, roll#, isGlobal = False` | Turns by these angles, about the entity's own axes (or the world axes). |
 | `PointEntity entity, target, roll# = 0` | Turns the entity so it faces another one. |
+| `AlignToVector entity, x#, y#, z#, axis, rate# = 1` | Turns the entity so its X (`axis` 1), Y (2) or Z (3) axis points along the world direction x, y, z, the shortest way round; `rate` below 1 turns only that part of the way, for a smooth follow. `AlignToVector car, 0, 1, 0, 2, 0.1` stands a car up again, a little every step. |
 | `ScaleEntity entity, x#, y#, z#` | Stretches the entity (and its children). Scale is always relative to the parent. |
 | `EntityX#(entity, isGlobal = False)`, `EntityY#`, `EntityZ#` | Position. |
 | `EntityPitch#(entity, isGlobal = False)`, `EntityYaw#`, `EntityRoll#` | Rotation. |
@@ -351,7 +394,7 @@ models come in; Blender, for example, exports it). The Kenney models in
 
 | Command | What it does |
 |---------|--------------|
-| `LoadMesh%(file$, parent = 0)` | Starts loading a model and returns its handle at once: a pivot the model's parts will hang from. Models loaded in the main body are in before the first `Update`. The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
+| `LoadMesh%(file$, parent = 0)` | Loads a model and returns its handle: a pivot the model's parts hang from. A file named in quotes (`LoadMesh("car.glb")`, or a `Const` made of quoted text) is read before the program starts, so the model is there at once, parts and all, as in Blitz3D. A name worked out while the program runs starts loading then, and the model arrives before the first `Update` (or, loaded later, a frame or two after). The path is relative to the program's `.pb` file. A file that cannot be loaded is reported in the console. |
 | `MeshLoaded%(entity)` | 1 once the model is in. |
 | `FindChild%(entity, name$)` | A part of the model (any entity below it) by its name in the file, not case-sensitive; 0 if there is none. `EntityName$` gives a part's name. |
 | `CountAnimations%(entity)` `AnimationName$(entity, index)` | The model's animations, numbered from 1. |
@@ -366,8 +409,8 @@ with the node's name, so the usual commands work on the parts: `EntityColor
 FindChild(robot, "arm-left"), 255, 0, 0`. Move, turn and scale the model
 through its pivot.
 
-**Setting up in the main body.** A model's parts only exist once it has
-arrived: in the main body `CountChildren` is still 0, `FindChild` finds
+**Setting up in the main body.** A model loaded by a name worked out at
+run time has its parts only once it has arrived: in the main body `CountChildren` is still 0, `FindChild` finds
 nothing and `CountAnimations` and the like report that the model is still
 loading; from the first `Update` on, everything is there. The commands that need the parts to do their job wait
 for the model instead, and run as soon as it is in, in the order they were
@@ -392,6 +435,16 @@ a camera that looks at it along +Z.
 
 **Copies.** `CopyEntity` of a model shares its mesh data and file, so a
 hundred coins cost little; each copy has its own parts, looks and animation.
+
+**DirectX .x models** (the format of many Blitz3D samples) can be turned
+into `.glb` files with `node tools/x2gltf.mjs model.x model.glb`: frames,
+meshes, normals, texture coordinates and materials are kept, in the same
+space as the `.x` file, so a Blitz3D program's `ScaleMesh` and `FlipMesh`
+calls on the model still do what they did. Only text `.x` files, and no
+animations or bones.
+
+Try it: **Driver** in the playground's Blitz3D samples (`examples/driver.pb`),
+Blitz3D's driving sample with its car converted this way.
 
 ## Picking
 

@@ -15,6 +15,7 @@
 
 import { readGltf } from './gltf.js';
 import { pose, advance, ANIM_STOP } from './animation.js';
+import { paintModel } from '../scene/brush.js';
 
 export class Models
 {
@@ -23,6 +24,31 @@ export class Models
     this.engine = engine;
     this.chain = Promise.resolve();
     this.animated = new Set();   // model pivots with a playing animation
+    // Files named in quotes, read before main runs: url -> Promise of data.
+    this.preloaded = new Map();
+    this.ready = new Map();      // url -> data, once read
+  }
+
+  io(file)
+  {
+    const engine = this.engine;
+    return {
+      loadFile: engine.loadFile,
+      loadImage: engine.loadImage,
+      decodeImage: engine.decodeImage,
+      track: (p) => engine.track(p),
+      warn: (text) => engine.warn(`LoadMesh "${file}": ${text}`)
+    };
+  }
+
+  // Reads a model before main runs, so LoadMesh of it has its parts at once
+  // (as Blitz3D programs expect: they change a mesh right after loading it).
+  preload(file, url)
+  {
+    if (this.preloaded.has(url) || !this.engine.loadFile) return null;
+    const reading = this.engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
+    this.preloaded.set(url, reading);
+    return reading.then((data) => this.ready.set(url, data), () => {});
   }
 
   load(file, url, parent)
@@ -40,15 +66,14 @@ export class Models
       fail('this platform cannot read files');
       return root;
     }
-    const io = {
-      loadFile: engine.loadFile,
-      loadImage: engine.loadImage,
-      decodeImage: engine.decodeImage,
-      track: (p) => engine.track(p),
-      warn: (text) => engine.warn(`LoadMesh "${file}": ${text}`)
-    };
-    // Reading starts now; building waits its turn.
-    const reading = engine.loadFile(url).then((bytes) => readGltf(bytes, url, io));
+    const known = this.ready.get(url);
+    if (known)
+    {
+      this.build(root, known);
+      return root;
+    }
+    // Reading starts now (or already has); building waits its turn.
+    const reading = this.preloaded.get(url) || engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
     reading.catch(() => {});
     const build = this.chain.then(() => reading).then((data) =>
     {
@@ -94,6 +119,7 @@ export class Models
       {
         const m = data.meshes[n.mesh];
         e = world.createMesh(m.mesh, parent);
+        e.surfaces = m.materials;
         e.materials = m.materials.map((mat) => mat.clone());
       }
       else e = world.createEntity('pivot', parent);
@@ -111,6 +137,7 @@ export class Models
     m.data = data;
     m.nodes = nodes;
     m.loaded = true;
+    paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
     for (const w of waiting) w.fn();
