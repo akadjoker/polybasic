@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>PolyBasic capture</title>
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #screen { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  </style>
+</head>
+<body>
+  <!-- Runs a .pb with a clock that only moves when tools/trailer/trailer.mjs
+       says so, so every frame of a video is the same on every run.
+       ?src= the program, ?size=1280x720 its screen size (the program's own
+       Graphics3D width and height are replaced, in memory only). -->
+  <div id="screen"></div>
+  <script type="module">
+    import { createScreen, compile, loadProgram, runProgram, BrowserHost } from '../../dist/polybasic.js';
+
+    class VirtualHost extends BrowserHost
+    {
+      constructor(options)
+      {
+        super(options);
+        this.time = 0;
+        this.next = null;
+      }
+
+      now()
+      {
+        return this.time;
+      }
+
+      requestFrame(callback)
+      {
+        this.next = callback;
+        return 1;
+      }
+
+      cancelFrame()
+      {
+        this.next = null;
+      }
+    }
+
+    const params = new URLSearchParams(location.search);
+    const src = new URL(params.get('src'), location.href);
+    const [width, height] = (params.get('size') || '1280x720').split('x').map(Number);
+    const screen = createScreen(document.getElementById('screen'));
+    const host = new VirtualHost({ output: (t) => { cap.output += t; }, onError: (t) => { cap.error = t; } });
+    const cap = {
+      ready: false,
+      error: null,
+      output: '',
+      engine: null,
+      host,
+      // Moves the clock on by `ms` and runs the frame that was waiting.
+      advance(ms)
+      {
+        host.time += ms;
+        const frame = host.next;
+        host.next = null;
+        if (frame) frame(host.time);
+      }
+    };
+    window.cap = cap;
+    try
+    {
+      let source = await (await fetch(src)).text();
+      source = source.replace(/^(\s*Graphics3D\s+)\d+\s*,\s*\d+/mi, `$1${width}, ${height}`);
+      const { js } = compile(source, { file: src.pathname.split('/').pop() });
+      const module = await loadProgram(js);
+      const engine = screen.newEngine({ baseUrl: src.href });
+      cap.engine = engine;
+      runProgram(module, host, { engine }).then((r) => { if (r.status === 'error') cap.error = String(r.error && r.error.message); });
+      const wait = () => (host.next || cap.error ? (cap.ready = true) : setTimeout(wait, 20));
+      wait();
+      screen.canvas.focus();
+    }
+    catch (e)
+    {
+      cap.error = String(e.stack || e);
+      cap.ready = true;
+    }
+  </script>
+</body>
+</html>
