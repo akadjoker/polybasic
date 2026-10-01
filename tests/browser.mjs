@@ -1952,23 +1952,19 @@ End Function
     // 2. Space plays the jump once, then the idle loop again.
     page = await openPage(browser, `${base}/web/player.html?src=../examples/t02-animation.pb`, { width: 800, height: 600 });
     await waitRunning(page);
-    const anim = () => page.evaluate(() =>
+    // Layer 0 of the model's animator: which clip (numbered from 1), how
+    // and whether it plays.
+    const layerZero = `(() =>
     {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m ? { index: m.model.state.index, mode: m.model.state.mode, playing: m.model.state.playing } : null;
-    });
+      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const l = m && m.model.animator.layers[0];
+      return l && l.current ? { index: m.model.clips.indexOf(l.current.clip) + 1, mode: l.current.mode, playing: l.playing } : null;
+    })()`;
+    const anim = () => page.evaluate(layerZero);
     await page.keyboard.press('Space');
-    await page.waitForFunction(() =>
-    {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m && m.model.state.index === 4;
-    }, null, { timeout: 20000 });
+    await page.waitForFunction(`(${layerZero} || {}).index === 4`, null, { timeout: 20000 });
     const jumping = await anim();
-    await page.waitForFunction(() =>
-    {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m && m.model.state.index === 2 && m.model.state.playing;
-    }, null, { timeout: 20000 });
+    await page.waitForFunction(`(() => { const l = ${layerZero}; return l && l.index === 2 && l.playing; })()`, null, { timeout: 20000 });
     assert(jumping.mode === 3, `the jump did not play once: ${JSON.stringify(jumping)}`);
     facts.push('jump played once, then idle');
     noConsoleErrors(page);
