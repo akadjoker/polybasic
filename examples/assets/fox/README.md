@@ -10,3 +10,7 @@
 
 It has one skinned mesh with 24 joints and three animations: Survey, Walk
 and Run.
+
+`fox-run.glb` is made from `fox.glb` with only its joints and the Run
+animation left in (no mesh, skin or texture), to show an animation kept in
+a file of its own (LoadAnimSeq).

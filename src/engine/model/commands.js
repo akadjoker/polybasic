@@ -20,7 +20,8 @@ export const MODEL_COMMANDS = [
   'Animating%(entity, layer = 0)',
   'AnimTime#(entity, layer = 0)',
   'SetAnimTime(entity, time#, layer = 0)',
-  'AnimLength#(entity, animation = 1)'
+  'AnimLength#(entity, animation = 1)',
+  'LoadAnimSeq%(entity, file$, name$ = "")'
 ];
 
 // A transition is given in steps (Updates), as in Blitz3D: 12 is 0.2 s.
@@ -151,6 +152,11 @@ export function createModelCommands(engine)
       if (!e.model.clips.length) throw runtimeError(`Model ${handle} has no animations`);
       models.setTime(e, time, layer);
     },
-    animlength: (handle, index) => tidy(animation(model(handle), index).duration)
+    animlength: (handle, index) => tidy(animation(model(handle), index).duration),
+    loadanimseq(handle, file, name)
+    {
+      const e = model(handle);
+      return models.loadSequence(e, file, engine.resolve(file), name);
+    }
   };
 }

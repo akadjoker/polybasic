@@ -7,8 +7,12 @@
 
 import { readGltf } from '../../src/engine/model/gltf.js';
 import { newModel } from '../../src/engine/model/model.js';
+import { MeshData } from '../../src/engine/scene/mesh.js';
+import { EditableMesh } from '../../src/engine/scene/editable.js';
 import { ANIM_LOOP, ANIM_ONCE } from '../../src/engine/model/animation.js';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../../src/index.js';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { assert, near, nearAll } from './assert.mjs';
 
 const unit = [];
@@ -190,6 +194,89 @@ End Function
   assert(out.includes('layer 1 playing 1, yaw 45.0'), out);
   assert(out.includes('layer 1 done 1 at 1.0, layer 0 playing 1'), out);
   assert(r.status === 'error' && /AnimLayerMask: model \d+ has no bone or part named "nose"/.test(r.error.message), `${r.status} ${r.error && r.error.message}`);
+});
+
+test('LoadAnimSeq: an animation from another file, matched by bone name, numbered at once', async () =>
+{
+  const source = `
+Global fox, run, walk, later
+fox = LoadMesh("fox.glb")
+run = LoadAnimSeq(fox, "fox-run.glb")
+walk = LoadAnimSeq(fox, "fox.glb", "walk")
+later = LoadAnimSeq(fox, Later$("fox-run.glb"))
+Print "numbers " + run + " " + walk + " " + later + " of " + CountAnimations(fox) + ": " + AnimationName(fox, run) + ", " + AnimationName(fox, walk)
+Print "none: " + LoadAnimSeq(fox, "fox.glb", "dance")
+Function Update()
+  If FrameCount() = 1
+    Print "later: " + AnimationName(fox, later) + " " + AnimLength(fox, later)
+    End
+  EndIf
+End Function
+Function Later$(name$)
+  Return name
+End Function
+`;
+  const result = compile(source, { file: 'test.pb' });
+  assert(result.js.includes('["loadanimseq","fox-run.glb"]'), 'the quoted file is not read before main');
+  const module = await loadProgram(result.js);
+  const dir = new URL('../../examples/assets/fox/', import.meta.url);
+  const engine = new Engine({ baseUrl: new URL('x.pb', dir).href, loadFile: (u) => readFile(fileURLToPath(u)) });
+  const host = new CaptureHost();
+  const r = await runProgram(module, host, { engine });
+  const out = host.output;
+  assert(r.status === 'ended', `${r.status} ${r.error ? r.error.message : ''}\n${out}`);
+  assert(out.includes('numbers 4 5 6 of 6: Run, Walk'), out);
+  assert(/LoadAnimSeq: "fox.glb" has no animation named "dance"/.test(out) && out.includes('none: 7'), out);
+  assert(out.includes('later: Run 1.15833'), out);
+
+  // The Run read from fox-run.glb poses the fox as fox.glb's own Run.
+  const fox = engine.world.entities.find((e) => e.model);
+  const own = fox.model.clips.findIndex((c) => c.name === 'Run') + 1;
+  const pose = (clip) =>
+  {
+    engine.models.play(fox, clip, ANIM_LOOP, 1);
+    engine.models.setTime(fox, 0.4);
+    return fox.model.nodes.map((n) => (n ? [n.position.x, n.position.y, n.position.z, n.rotation.x, n.rotation.y, n.rotation.z, n.rotation.w] : [])).flat();
+  };
+  nearAll(pose(4), pose(own), 1e-9, 'the same pose');
+});
+
+test('LoadAnimSeq says when a file\'s nodes are not the model\'s', async () =>
+{
+  const source = 'fox = LoadMesh("fox.glb")\nPrint LoadAnimSeq(fox, "anim.gltf")\n';
+  const module = await loadProgram(compile(source, { file: 'test.pb' }).js);
+  const dir = new URL('../../examples/assets/fox/', import.meta.url);
+  const engine = new Engine({ baseUrl: new URL('x.pb', dir).href, loadFile: async (u) => (u.endsWith('anim.gltf') ? file() : readFile(fileURLToPath(u))) });
+  const host = new CaptureHost();
+  await runProgram(module, host, { engine });
+  assert(/LoadAnimSeq: no node of "anim.gltf" that "up" moves has a name the model has/.test(host.output), host.output);
+});
+
+test('a model part made editable keeps its submeshes, their materials and its skin data', () =>
+{
+  const data = new MeshData(
+    [0, 0, 0, 1, 0, 0, 0, 1, 0, 5, 0, 0, 6, 0, 0, 5, 1, 0],
+    new Array(18).fill(0),
+    new Array(12).fill(0),
+    [0, 2, 1, 3, 5, 4]
+  );
+  data.submeshes = [{ start: 0, count: 3, material: 1 }, { start: 3, count: 3, material: 0 }];
+  data.joints = Uint16Array.from([0, 0, 0, 0, 1, 0, 0, 0, 2, 0, 0, 0, 3, 0, 0, 0, 4, 0, 0, 0, 5, 1, 0, 0]);
+  data.weights = Float32Array.from([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0.5, 0.5, 0, 0]);
+  const m = EditableMesh.from(data);
+  assert(m.surfaces.length === 2, `${m.surfaces.length} surfaces`);
+  assert(JSON.stringify(m.submeshes) === JSON.stringify([{ start: 0, count: 3, material: 1 }, { start: 3, count: 3, material: 0 }]), JSON.stringify(m.submeshes));
+  // Vertices are numbered in the order the triangles use them: compare
+  // corner by corner.
+  const corner = (mesh, k, size, arr) => Array.from(arr.subarray(mesh.indices[k] * size, mesh.indices[k] * size + size));
+  for (let k = 0; k < 6; k++)
+  {
+    nearAll(corner(m, k, 3, m.positions), corner(data, k, 3, data.positions), 0, `corner ${k} position`);
+    nearAll(corner(m, k, 4, m.joints), corner(data, k, 4, data.joints), 0, `corner ${k} joints`);
+    nearAll(corner(m, k, 4, m.weights), corner(data, k, 4, data.weights), 0, `corner ${k} weights`);
+  }
+  m.surfaces[1].addVertex(9, 9, 9, 0, 0);
+  assert(m.weights[6 * 4] === 1 && m.joints.length === 7 * 4, 'a new vertex of a skinned part follows joint 0');
 });
 
 export default unit;

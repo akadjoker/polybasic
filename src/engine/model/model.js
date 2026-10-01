@@ -227,6 +227,64 @@ export class Models
     a.seek(layer, time);
   }
 
+  // LoadAnimSeq: one animation of another glTF file (the one named, or the
+  // first) added to the model's own, matched to its nodes by name, as
+  // Radion and Blitz3D let a character take animations kept in files of
+  // their own. Returns its number. It is numbered at once; until the file
+  // has arrived it is an empty animation, filled in place when it does.
+  loadSequence(root, file, url, name)
+  {
+    const m = root.model;
+    const clip = { name: '', duration: 0, channels: [] };
+    m.clips.push(clip);
+    const number = m.clips.length;
+    const fill = (data) =>
+    {
+      const want = name.toLowerCase();
+      const source = name ? data.animations.find((a) => a.name.toLowerCase() === want) : data.animations[0];
+      if (!source)
+      {
+        this.engine.warn(`LoadAnimSeq: "${file}" has ${name ? `no animation named "${name}"` : 'no animations'}`);
+        return;
+      }
+      const byName = new Map();
+      m.data.nodes.forEach((n, i) =>
+      {
+        const key = n.name.toLowerCase();
+        if (n.name && !byName.has(key)) byName.set(key, i);
+      });
+      const channels = [];
+      const missing = new Set();
+      for (const ch of source.channels)
+      {
+        const from = data.nodes[ch.node].name;
+        const to = byName.get(from.toLowerCase());
+        if (to === undefined) missing.add(from || `node ${ch.node}`);
+        else channels.push({ ...ch, node: to });
+      }
+      if (!channels.length) this.engine.warn(`LoadAnimSeq: no node of "${file}" that "${source.name}" moves has a name the model has`);
+      else if (missing.size) this.engine.warn(`LoadAnimSeq: the model has no ${[...missing].slice(0, 5).join(', ')}${missing.size > 5 ? '...' : ''}: "${source.name}" leaves them out`);
+      Object.assign(clip, { name: source.name, duration: source.duration, channels });
+    };
+    const known = this.ready.get(url);
+    if (known)
+    {
+      fill(known);
+      return number;
+    }
+    const engine = this.engine;
+    if (!engine.loadFile)
+    {
+      engine.warn(`LoadAnimSeq: could not load "${file}": this platform cannot read files`);
+      return number;
+    }
+    const reading = this.preloaded.get(url) || engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
+    // Files fill their animations in the order they were asked for.
+    m.sequences = (m.sequences || Promise.resolve()).then(() => reading).then(fill, (err) => engine.warn(`LoadAnimSeq: could not load "${file}": ${err && err.message ? err.message : err}`));
+    engine.track(m.sequences);
+    return number;
+  }
+
   // The state of a layer: { clip, time, playing } or null.
   layerState(root, layer = 0)
   {
