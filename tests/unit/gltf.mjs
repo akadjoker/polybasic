@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readGltf } from '../../src/engine/model/gltf.js';
 import { sample, advance, ANIM_LOOP, ANIM_ONCE, ANIM_PINGPONG } from '../../src/engine/model/animation.js';
 import { newModel } from '../../src/engine/model/model.js';
+import { skinPalette } from '../../src/engine/scene/skin.js';
 import { compile, loadProgram, runProgram, CaptureHost, Engine } from '../../src/index.js';
 import { Mat4 } from '../../src/engine/math/mat4.js';
 import { Vec3 } from '../../src/engine/math/vec3.js';
@@ -17,6 +18,7 @@ import { assert, near, nearAll } from './assert.mjs';
 const unit = [];
 const test = (name, fn) => unit.push({ name, fn });
 const KENNEY = fileURLToPath(new URL('../../examples/assets/kenney/', import.meta.url));
+const FOX = fileURLToPath(new URL('../../examples/assets/fox/', import.meta.url));
 const DRIVER = fileURLToPath(new URL('../../examples/assets/blitz3d/driver/', import.meta.url));
 
 // ------------------------------------------------------------ fixtures
@@ -330,7 +332,7 @@ test('what is not read is said clearly', async () =>
   s.json.nodes.push({ mesh: 0, skin: 0 });
   s.json.scenes[0].nodes.push(0);
   const { warnings } = await read(s.gltf());
-  assert(warnings.some((w) => /skinned/.test(w)) && warnings.some((w) => /morph targets/.test(w)), warnings.join('; '));
+  assert(warnings.some((w) => /uses skin 0, which the file does not have/.test(w)) && warnings.some((w) => /morph targets/.test(w)), warnings.join('; '));
 
   let old = '';
   try
@@ -469,6 +471,71 @@ test('every Kenney model reads like three.js GLTFLoader reads it, mirrored', asy
   }
   if (!hadSelf) delete globalThis.self;
   assert(meshes >= 15, `only ${meshes} meshes compared`);
+});
+
+test('the skinned Fox bends as three.js bends it: every vertex of Walk at 0.37 s, mirrored', async () =>
+{
+  const hadSelf = 'self' in globalThis;
+  if (!hadSelf) globalThis.self = globalThis;
+  const THREE = await import('three');
+  const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+  const bytes = await readFile(join(FOX, 'fox.glb'));
+  const { data, warnings } = await read(bytes, {}, pathToFileURL(join(FOX, 'fox.glb')).href);
+  assert(warnings.length === 0, warnings.join('; '));
+  assert(data.skins.length === 1 && data.skins[0].joints.length === 24, 'one skin of 24 joints');
+  const quiet = [console.error, console.warn];
+  console.error = console.warn = () => {};
+  const gltf = await new Promise((ok, fail) => new GLTFLoader().parse(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength), '', ok, fail));
+  [console.error, console.warn] = quiet;
+  if (!hadSelf) delete globalThis.self;
+  const t = 0.37;
+  const walk = gltf.animations.findIndex((a) => a.name === 'Walk');
+  const mixer = new THREE.AnimationMixer(gltf.scene);
+  mixer.clipAction(gltf.animations[walk]).play();
+  mixer.setTime(t);
+  gltf.scene.updateMatrixWorld(true);
+  let theirs = null;
+  gltf.scene.traverse((o) =>
+  {
+    if (o.isSkinnedMesh) theirs = o;
+  });
+  theirs.skeleton.update();
+
+  const engine = new Engine();
+  const root = engine.world.createEntity('pivot');
+  root.model = newModel();
+  engine.models.build(root, data);
+  engine.models.play(root, walk + 1, ANIM_LOOP, 1);
+  engine.models.setTime(root, t);
+  const part = root.model.nodes.find((n) => n && n.skin);
+  assert(part, 'no skinned part');
+  const palette = skinPalette(part);
+  const mesh = part.mesh;
+  const index = theirs.geometry.index ? theirs.geometry.index.array : null;
+  const v = new THREE.Vector3();
+  const world = part.worldMatrix.e;
+  let worst = 0;
+  let moved = 0;
+  for (let i = 0; i < mesh.vertexCount; i++)
+  {
+    // One vertex per triangle corner (the Fox has no normals, so it is
+    // drawn flat), in three.js's order.
+    theirs.getVertexPosition(index ? index[i] : i, v).applyMatrix4(theirs.matrixWorld);
+    const p = [0, 0, 0];
+    for (let k = 0; k < 4; k++)
+    {
+      const w = mesh.weights[i * 4 + k];
+      if (!w) continue;
+      const m = palette.subarray(mesh.joints[i * 4 + k] * 16);
+      const [x, y, z] = [mesh.positions[i * 3], mesh.positions[i * 3 + 1], mesh.positions[i * 3 + 2]];
+      for (let r = 0; r < 3; r++) p[r] += w * (m[r] * x + m[4 + r] * y + m[8 + r] * z + m[12 + r]);
+    }
+    const q = [0, 1, 2].map((r) => world[r] * p[0] + world[4 + r] * p[1] + world[8 + r] * p[2] + world[12 + r]);
+    worst = Math.max(worst, Math.abs(q[0] + v.x), Math.abs(q[1] - v.y), Math.abs(q[2] - v.z));
+    if (Math.hypot(q[0] + mesh.positions[i * 3], q[1] - mesh.positions[i * 3 + 1], q[2] - mesh.positions[i * 3 + 2]) > 1) moved++;
+  }
+  assert(worst < 1e-3, `a vertex is ${worst} away from three.js's`);
+  assert(moved > mesh.vertexCount / 4, `only ${moved} vertices moved away from the rest pose`);
 });
 
 test('LoadMesh in a program: the pivot at once, the parts before the first Update, animations play', async () =>

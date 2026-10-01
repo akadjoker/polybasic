@@ -37,6 +37,7 @@ export class Entity
     this.surfaces = null;   // a model part's own materials (see brush.js)
     this.brush = null;      // a model's entity brush
     this.md2 = null;        // an MD2 model's player (model/md2.js)
+    this.skin = null;       // a skinned model part's joints and palette (scene/skin.js)
     this.md2Waiting = null; // what waits for an MD2 file still loading
     this.camera = null;
     this.light = null;

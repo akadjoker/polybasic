@@ -38,6 +38,34 @@ function reflection(world)
   return m.multiply(flip).multiply(inverse);
 }
 
+// A skinned model part. Its bones are placeholders: each frame the engine
+// hands over the palette (scene/skin.js), which goes straight into the
+// bone matrices, mirrored into three.js space like every other matrix. The
+// palette is in the part's own space, so the bind matrix is the identity.
+// The part can bend beyond its rest shape's bounds: it is never culled.
+function skinnedMesh(geometry, material, count)
+{
+  const obj = new THREE.SkinnedMesh(geometry, material);
+  const skeleton = new THREE.Skeleton(Array.from({ length: count }, () => new THREE.Bone()));
+  skeleton.update = () =>
+  {
+    const palette = obj.userData.palette;
+    const out = skeleton.boneMatrices;
+    if (!palette) return;
+    for (let j = 0; j < count; j++)
+    {
+      const o = j * 16;
+      for (let i = 0; i < 16; i++) out[o + i] = palette[o + i];
+      for (const i of MIRRORED) out[o + i] = -out[o + i];
+    }
+    if (skeleton.boneTexture) skeleton.boneTexture.needsUpdate = true;
+  };
+  obj.bindMode = THREE.DetachedBindMode;
+  obj.bind(skeleton, new THREE.Matrix4());
+  obj.frustumCulled = false;
+  return obj;
+}
+
 // The RGBA bytes of an image, top row first.
 function imagePixels(image)
 {
@@ -229,13 +257,20 @@ export class ThreeBackend extends RenderBackend
     // submeshes share it (the built-in shapes).
     const materials = item.materials.map((m) => this.material(m));
     const material = materials.length === 1 ? materials[0] : materials;
+    const skinned = !!(item.skin && item.mesh.joints);
+    if (obj && (obj.isSkinnedMesh === true) !== skinned)
+    {
+      this.scene.remove(obj);
+      obj = null;
+    }
     if (!obj)
     {
-      obj = new THREE.Mesh(geometry, material);
+      obj = skinned ? skinnedMesh(geometry, material, item.skin.length / 16) : new THREE.Mesh(geometry, material);
       obj.matrixAutoUpdate = false;
       this.objects.set(item.id, obj);
       this.scene.add(obj);
     }
+    if (skinned) obj.userData.palette = item.skin;
     obj.geometry = geometry;
     obj.material = material;
     obj.visible = true;
@@ -413,6 +448,11 @@ uniform vec4 pbPushers[8];`)
     g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(Float32Array.from(mesh.uvs), 2));
     if (mesh.colors) g.setAttribute('color', new THREE.BufferAttribute(Float32Array.from(mesh.colors), 4));
+    if (mesh.joints)
+    {
+      g.setAttribute('skinIndex', new THREE.BufferAttribute(Uint16Array.from(mesh.joints), 4));
+      g.setAttribute('skinWeight', new THREE.BufferAttribute(Float32Array.from(mesh.weights), 4));
+    }
     g.setIndex(new THREE.BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     // A mesh that changes its pose (MD2) is culled by the box round all

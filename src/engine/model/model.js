@@ -137,6 +137,7 @@ export class Models
     m.data = data;
     m.nodes = nodes;
     m.loaded = true;
+    bindSkins(m);
     paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
@@ -170,6 +171,7 @@ export class Models
       for (const i of path) e = e ? e.children[i] : null;
       return e || null;
     });
+    bindSkins(dst.model);
   }
 
   play(root, index, mode, speed)
@@ -230,6 +232,24 @@ export class Models
       }
     }
   }
+}
+
+// Every skinned part of a model gets its skin: the entities of its joints,
+// their inverse bind matrices and the palette the renderer draws it with
+// (see skinPalette).
+function bindSkins(m)
+{
+  m.data.nodes.forEach((n, i) =>
+  {
+    const e = m.nodes[i];
+    if (!e || n.skin < 0 || !e.mesh || !e.mesh.joints) return;
+    const skin = m.data.skins[n.skin];
+    e.skin = {
+      joints: skin.joints.map((j) => m.nodes[j]),
+      inverseBind: skin.inverseBind,
+      palette: new Float32Array(skin.joints.length * 16)
+    };
+  });
 }
 
 // The record a model pivot keeps (see the top of this file).

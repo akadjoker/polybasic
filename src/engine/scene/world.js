@@ -4,6 +4,7 @@
 
 import { Entity } from './entity.js';
 import { Material } from './material.js';
+import { skinPalette } from './skin.js';
 import { Texture } from './texture.js';
 import { EditableMesh } from './editable.js';
 
@@ -162,7 +163,7 @@ export class World
       else if (e.kind === 'light') lights.push({ id: e.id, world, ...e.light });
       else if (e.kind === 'mirror') mirrors.push({ id: e.id, world });
       else if (e.kind === 'grass' && e.grass.count) items.push(this.grassItem(e, world));
-      else if (e.kind === 'mesh' && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
+      else if (e.kind === 'mesh' && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite, skin: e.skin ? skinPalette(e) : null });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
