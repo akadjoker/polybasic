@@ -228,9 +228,8 @@ export class Models
   }
 
   // LoadAnimSeq: one animation of another glTF file (the one named, or the
-  // first) added to the model's own, matched to its nodes by name, as
-  // Radion and Blitz3D let a character take animations kept in files of
-  // their own. Returns its number. It is numbered at once; until the file
+  // first) added to the model's own, matched to its nodes by name, so
+  // a character can take animations kept in files of their own. Returns its number. It is numbered at once; until the file
   // has arrived it is an empty animation, filled in place when it does.
   loadSequence(root, file, url, name)
   {

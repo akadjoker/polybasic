@@ -7536,7 +7536,7 @@ var Animator = class _Animator {
   }
   // How much each node follows a layer: `weight` for the node named and
   // every node below it. The first mask of a layer starts from 0 for every
-  // other node (Radion's maskFromBone).
+  // other node.
   mask(index, node, weight) {
     const layer = this.layer(index);
     const nodes = this.model.data.nodes;
@@ -11452,9 +11452,8 @@ var Models = class {
     a.seek(layer, time);
   }
   // LoadAnimSeq: one animation of another glTF file (the one named, or the
-  // first) added to the model's own, matched to its nodes by name, as
-  // Radion and Blitz3D let a character take animations kept in files of
-  // their own. Returns its number. It is numbered at once; until the file
+  // first) added to the model's own, matched to its nodes by name, so
+  // a character can take animations kept in files of their own. Returns its number. It is numbered at once; until the file
   // has arrived it is an empty animation, filled in place when it does.
   loadSequence(root, file, url, name) {
     const m = root.model;

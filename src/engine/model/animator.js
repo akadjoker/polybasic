@@ -1,7 +1,5 @@
-// What a model is playing, after Radion's Animator and AnimationLayer
-// (runtime/scene/src/Animation.cpp, runtime/render/src/Skeleton.cpp): one
-// or more layers, each with the animation it plays and the one it is
-// blending away from. Every step the model's nodes start from their rest
+// What a model is playing: one or more layers, each with the animation it
+// plays and the one it is blending away from. Every step the model's nodes start from their rest
 // pose; each layer, in order, moves them towards its animations by its
 // blend and its mask (how much each node follows that layer). Positions
 // and scales blend straight, rotations by normalized lerp.
@@ -88,7 +86,7 @@ export class Animator
 
   // How much each node follows a layer: `weight` for the node named and
   // every node below it. The first mask of a layer starts from 0 for every
-  // other node (Radion's maskFromBone).
+  // other node.
   mask(index, node, weight)
   {
     const layer = this.layer(index);
