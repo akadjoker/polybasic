@@ -66,6 +66,24 @@ function ffmpeg(argv)
   });
 }
 
+// The mix to -14 LUFS / -2 dBTP with ffmpeg's loudnorm in two passes (AAC
+// encoding adds a little on top): the first measures, the second corrects.
+async function normalise(from, to)
+{
+  const target = 'I=-14:TP=-2:LRA=11';
+  const first = await new Promise((ok, fail) =>
+  {
+    const p = spawn(FFMPEG, ['-hide_banner', '-nostats', '-i', from, '-af', `loudnorm=${target}:print_format=json`, '-f', 'null', '-'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    let text = '';
+    p.stderr.on('data', (d) => (text += d));
+    p.on('exit', (code) => (code === 0 ? ok(text) : fail(new Error(`loudnorm failed (${code})`))));
+  });
+  const m = JSON.parse(first.slice(first.lastIndexOf('{'), first.lastIndexOf('}') + 1));
+  const measured = `measured_I=${m.input_i}:measured_TP=${m.input_tp}:measured_LRA=${m.input_lra}:measured_thresh=${m.input_thresh}:offset=${m.target_offset}`;
+  await ffmpeg(['-i', from, '-af', `loudnorm=${target}:${measured}:linear=true`, '-ar', '48000', to]);
+  console.log(`narration ${m.input_i} LUFS, ${m.input_tp} dBTP -> -14 LUFS`);
+}
+
 // How long each scene is: its narration (the longest of the voices) plus
 // the lead and tail, or its minimum.
 async function plan(voices, fps)
@@ -191,9 +209,11 @@ async function main()
   {
     const inputs = scenes.flatMap((s) => ['-i', join(v.dir, `${s.id}.wav`)]);
     const delays = scenes.map((s, i) => `[${i}:a]aresample=48000,adelay=${Math.round((s.start + LEAD) * 1000)}|${Math.round((s.start + LEAD) * 1000)}[a${i}]`);
-    const mix = `${scenes.map((_, i) => `[a${i}]`).join('')}amix=inputs=${scenes.length}:normalize=0,volume=0.8,alimiter=limit=0.9,apad[a]`;
+    const mix = `${scenes.map((_, i) => `[a${i}]`).join('')}amix=inputs=${scenes.length}:normalize=0,apad[a]`;
+    const raw = join(o.work, `narration-${v.name}-raw.wav`);
+    await ffmpeg([...inputs, '-filter_complex', `${delays.join(';')};${mix}`, '-map', '[a]', '-t', total.toFixed(3), raw]);
     const narration = join(o.work, `narration-${v.name}.wav`);
-    await ffmpeg([...inputs, '-filter_complex', `${delays.join(';')};${mix}`, '-map', '[a]', '-t', total.toFixed(3), narration]);
+    await normalise(raw, narration);
     const final = join(o.out, `polybasic-trailer-${v.name}.mp4`);
     await ffmpeg(['-i', silent, '-i', narration, '-map', '0:v', '-map', '1:a', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '160k', '-shortest', final]);
     console.log(`wrote ${final}`);
