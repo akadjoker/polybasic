@@ -50,7 +50,7 @@ export const SCENES = [
   {
     id: 'fox',
     min: 11,
-    say: 'Skeletons are here too. One fox, one skeleton, and animations that blend, layer, and load from other files, the way they do in the Radion engine.',
+    say: 'Skeletons are here too. One fox, one skeleton, and animations that blend, layer, and load from other files.',
     clips: [{ program: 'examples/skinning.pb', keys: [['Digit3', 1.4, 1.5], ['KeyH', 5, 5.1], ['Digit1', 7.4, 7.5], ['Space', 9.4, 9.5]] }]
   },
   {
