@@ -428,8 +428,12 @@ all in its main body.
 characters are) bends with its bones; the bones are parts of the model like
 any other, so `FindChild(fox, "b_Head_05")` finds the head bone, and an
 entity hung from it (`EntityParent sword, hand`) moves with it. The mesh is
-bent on the graphics card. Picks and collisions see a skinned mesh in its
-rest pose.
+bent on the graphics card. Picks (`PICK_POLYGON`), polygon collisions and
+decals see the pose it is in now: the mesh is bent on the CPU the first time
+one of them asks after the bones moved (a few hundred vertices cost next to
+nothing; thousands of skinned characters picked every step would not). What
+is made from the rest pose: physics shapes (`EntityBody`), and
+`MeshWidth`, `MeshHeight`, `MeshDepth` and `FitMesh`.
 
 **Blending.** Every step the model's nodes start from their rest pose and
 each layer, from 0 up, moves them towards its animations (positions and

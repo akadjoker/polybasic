@@ -10,6 +10,7 @@
 import { Vec3 } from '../math/vec3.js';
 import { Quat } from '../math/quat.js';
 import { Mat4 } from '../math/mat4.js';
+import { shapeMesh } from './skin.js';
 
 const DEG = 180 / Math.PI;
 
@@ -243,6 +244,6 @@ export class Entity
   // Collision and picking in phase 3 start here.
   worldBounds()
   {
-    return this.mesh ? this.mesh.bounds.transformed(this.worldMatrix) : null;
+    return this.mesh ? shapeMesh(this).bounds.transformed(this.worldMatrix) : null;
   }
 }

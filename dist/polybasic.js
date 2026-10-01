@@ -3350,331 +3350,6 @@ var Mat4 = class _Mat4 {
   }
 };
 
-// src/engine/scene/entity.js
-var DEG3 = 180 / Math.PI;
-var Entity = class {
-  constructor(id, kind) {
-    this.id = id;
-    this.kind = kind;
-    this.name = "";
-    this.parent = null;
-    this.children = [];
-    this.position = new Vec3();
-    this.rotation = new Quat();
-    this.scale = new Vec3(1, 1, 1);
-    this.visible = true;
-    this.order = 0;
-    this.castShadow = true;
-    this.receiveShadow = true;
-    this.alive = true;
-    this.mesh = null;
-    this.materials = [];
-    this.surfaces = null;
-    this.brush = null;
-    this.md2 = null;
-    this.skin = null;
-    this.md2Waiting = null;
-    this.camera = null;
-    this.light = null;
-    this.sprite = null;
-    this.decal = false;
-    this.trail = null;
-    this.grass = null;
-    this.pickMode = 0;
-    this.obscurer = true;
-    this.collisionType = 0;
-    this.radiusX = 1;
-    this.radiusY = 1;
-    this.box = null;
-    this.collisionFrom = null;
-    this.collisions = [];
-    this.worldMatrixCache = new Mat4();
-    this.worldDirty = true;
-  }
-  get material() {
-    return this.materials.length ? this.materials[0] : null;
-  }
-  set material(m) {
-    this.materials = m ? [m] : [];
-  }
-  // ---------------------------------------------------------- matrices
-  // Marks this entity and everything below it as needing a new world
-  // matrix. Stops early at nodes that are already dirty (their children
-  // were marked then).
-  touch() {
-    if (this.worldDirty) return;
-    this.worldDirty = true;
-    for (const c of this.children) c.touch();
-  }
-  localMatrix(out = new Mat4()) {
-    return out.compose(this.position, this.rotation, this.scale);
-  }
-  get worldMatrix() {
-    if (this.worldDirty) {
-      this.localMatrix(this.worldMatrixCache);
-      if (this.parent) this.worldMatrixCache.premultiply(this.parent.worldMatrix);
-      this.worldDirty = false;
-    }
-    return this.worldMatrixCache;
-  }
-  // World rotation, ignoring scale.
-  worldRotation(out = new Quat()) {
-    out.copy(this.rotation);
-    for (let p = this.parent; p; p = p.parent) out.premultiply(p.rotation);
-    return out;
-  }
-  worldPosition(out = new Vec3()) {
-    const e = this.worldMatrix.e;
-    return out.set(e[12], e[13], e[14]);
-  }
-  // Is it drawn? Hidden parents hide their children.
-  get shown() {
-    for (let e = this; e; e = e.parent) {
-      if (!e.visible) return false;
-    }
-    return true;
-  }
-  // ------------------------------------------------------- transforms
-  setPosition(x, y, z, global) {
-    const p = new Vec3(x, y, z);
-    if (global && this.parent) {
-      const inv = this.parent.worldMatrix.clone();
-      if (inv.invert()) p.applyMat4(inv);
-    }
-    this.position.copy(p);
-    this.touch();
-  }
-  // Moves along the entity's own axes: MoveEntity e, 0, 0, 1 is "forward".
-  move(x, y, z) {
-    this.position.add(new Vec3(x, y, z).applyQuat(this.rotation));
-    this.touch();
-  }
-  // Moves along the parent's axes, or the world axes when global.
-  translate(x, y, z, global) {
-    const d = new Vec3(x, y, z);
-    if (global && this.parent) {
-      const inv = this.parent.worldMatrix.clone();
-      if (inv.invert()) d.applyMat4Direction(inv);
-    }
-    this.position.add(d);
-    this.touch();
-  }
-  // Sets the rotation, relative to the parent or to the world.
-  setRotation(pitch, yaw, roll, global) {
-    const q = new Quat().fromEuler(pitch, yaw, roll);
-    if (global && this.parent) q.premultiply(this.parent.worldRotation().invert());
-    this.rotation.copy(q.normalize());
-    this.touch();
-  }
-  // Sets the rotation from a quaternion in world space.
-  setWorldRotation(q) {
-    const r = q.clone();
-    if (this.parent) r.premultiply(this.parent.worldRotation().invert());
-    this.rotation.copy(r.normalize());
-    this.touch();
-  }
-  // Turns by the given angles: about the entity's own axes, or about the
-  // world axes when global.
-  turn(pitch, yaw, roll, global) {
-    const q = new Quat().fromEuler(pitch, yaw, roll);
-    if (global) {
-      const world = this.worldRotation().premultiply(q);
-      if (this.parent) world.premultiply(this.parent.worldRotation().invert());
-      this.rotation.copy(world);
-    } else this.rotation.multiply(q);
-    this.rotation.normalize();
-    this.touch();
-  }
-  // Turns the entity so its forward axis (+Z) points at a world position.
-  pointAt(target, roll = 0) {
-    const d = target.clone().sub(this.worldPosition());
-    const flat = Math.hypot(d.x, d.z);
-    if (flat === 0 && d.y === 0) return;
-    const yaw = Math.atan2(-d.x, d.z) * DEG3;
-    const pitch = Math.atan2(-d.y, flat) * DEG3;
-    this.setRotation(pitch, yaw, roll, true);
-  }
-  setScale(x, y, z) {
-    this.scale.set(x, y, z);
-    this.touch();
-  }
-  // Position as the user sees it: local (relative to the parent) or world.
-  getPosition(global) {
-    return global ? this.worldPosition() : this.position.clone();
-  }
-  getRotation(global) {
-    return (global ? this.worldRotation() : this.rotation.clone()).toEuler();
-  }
-  // Attaches to a new parent (or none). With keepWorld the entity stays
-  // where it is on screen; otherwise its local values are kept and it moves
-  // with the new parent.
-  setParent(parent, keepWorld) {
-    const world = keepWorld ? this.worldMatrix.clone() : null;
-    if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
-    this.parent = parent;
-    if (parent) parent.children.push(this);
-    if (world) {
-      if (parent) {
-        const inv = parent.worldMatrix.clone();
-        if (inv.invert()) world.premultiply(inv);
-      }
-      world.decompose(this.position, this.rotation, this.scale);
-    }
-    this.worldDirty = false;
-    this.touch();
-  }
-  // The world-space box around the mesh (null for entities without one).
-  // Collision and picking in phase 3 start here.
-  worldBounds() {
-    return this.mesh ? this.mesh.bounds.transformed(this.worldMatrix) : null;
-  }
-};
-
-// src/engine/scene/material.js
-var nextMaterialId = 1;
-var Material = class _Material {
-  constructor() {
-    this.id = nextMaterialId++;
-    this.version = 0;
-    this.color = [1, 1, 1];
-    this.alpha = 1;
-    this.shininess = 0;
-    this.fullbright = false;
-    this.flat = false;
-    this.twoSided = false;
-    this.blend = "alpha";
-    this.texture = null;
-    this.alphaMode = null;
-    this.alphaCutoff = 0.5;
-    this.vertexColors = false;
-    this.vertexAlpha = false;
-    this.decal = false;
-    this.name = "";
-  }
-  changed() {
-    this.version++;
-  }
-  clone() {
-    const m = new _Material();
-    m.color = [...this.color];
-    m.alpha = this.alpha;
-    m.shininess = this.shininess;
-    m.fullbright = this.fullbright;
-    m.flat = this.flat;
-    m.twoSided = this.twoSided;
-    m.blend = this.blend;
-    m.texture = this.texture;
-    m.alphaMode = this.alphaMode;
-    m.alphaCutoff = this.alphaCutoff;
-    m.vertexColors = this.vertexColors;
-    m.vertexAlpha = this.vertexAlpha;
-    m.decal = this.decal;
-    m.name = this.name;
-    return m;
-  }
-};
-
-// src/engine/scene/skin.js
-var partInverse = new Mat4();
-var jointMatrix = new Mat4();
-var bind = new Mat4();
-function skinPalette(e) {
-  const { joints, inverseBind, palette } = e.skin;
-  partInverse.copy(e.worldMatrix);
-  partInverse.invert();
-  for (let j = 0; j < joints.length; j++) {
-    const joint = joints[j];
-    if (!joint || !joint.alive) {
-      palette.fill(0, j * 16, j * 16 + 16);
-      for (const k of [0, 5, 10, 15]) palette[j * 16 + k] = 1;
-      continue;
-    }
-    for (let k = 0; k < 16; k++) bind.e[k] = inverseBind[j * 16 + k];
-    jointMatrix.multiplyMatrices(joint.worldMatrix, bind).premultiply(partInverse);
-    palette.set(jointMatrix.e, j * 16);
-  }
-  return palette;
-}
-
-// src/engine/scene/texture.js
-var nextTextureId = 1;
-var TEX_COLOR = 1;
-var TEX_ALPHA = 2;
-var TEX_MASKED = 4;
-var TEX_MIPMAP = 8;
-var TEX_CLAMPU = 16;
-var TEX_CLAMPV = 32;
-var TEX_SPHEREMAP = 64;
-var TEX_CUBEMAP = 128;
-var Texture = class {
-  constructor(width = 0, height = 0) {
-    this.id = nextTextureId++;
-    this.version = 0;
-    this.width = width;
-    this.height = height;
-    this.pixels = width && height ? new Uint8ClampedArray(width * height * 4) : null;
-    this.url = null;
-    this.image = null;
-    this.loaded = this.pixels !== null;
-    this.failed = false;
-    this.scaleU = 1;
-    this.scaleV = 1;
-    this.wrapU = "repeat";
-    this.wrapV = "repeat";
-    this.nearest = this.pixels !== null;
-    this.flags = TEX_COLOR;
-  }
-  // Sets the Blitz3D texture flags (TEX_* above).
-  setFlags(flags) {
-    this.flags = flags;
-    this.wrapU = flags & TEX_CLAMPU ? "clamp" : "repeat";
-    this.wrapV = flags & TEX_CLAMPV ? "clamp" : "repeat";
-    this.version++;
-    return this;
-  }
-  get alpha() {
-    return (this.flags & TEX_ALPHA) !== 0;
-  }
-  get masked() {
-    return (this.flags & TEX_MASKED) !== 0;
-  }
-  fill(r, g, b, a = 255) {
-    const p = this.pixels;
-    for (let i = 0; i < p.length; i += 4) {
-      p[i] = r;
-      p[i + 1] = g;
-      p[i + 2] = b;
-      p[i + 3] = a;
-    }
-    this.version++;
-    return this;
-  }
-  setPixel(x, y, r, g, b, a = 255) {
-    if (!this.pixels || x < 0 || y < 0 || x >= this.width || y >= this.height) return;
-    const i = (y * this.width + x) * 4;
-    this.pixels[i] = r;
-    this.pixels[i + 1] = g;
-    this.pixels[i + 2] = b;
-    this.pixels[i + 3] = a;
-    this.version++;
-  }
-  checker(cells, c1, c2) {
-    const cell = Math.max(1, Math.floor(this.width / Math.max(1, cells)));
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        const c = Math.floor(x / cell) + Math.floor(y / cell) & 1 ? c2 : c1;
-        const i = (y * this.width + x) * 4;
-        this.pixels[i] = c[0];
-        this.pixels[i + 1] = c[1];
-        this.pixels[i + 2] = c[2];
-        this.pixels[i + 3] = 255;
-      }
-    }
-    this.version++;
-    return this;
-  }
-};
-
 // src/engine/math/aabb.js
 var Aabb = class _Aabb {
   constructor(min = new Vec3(Infinity, Infinity, Infinity), max = new Vec3(-Infinity, -Infinity, -Infinity)) {
@@ -3915,6 +3590,384 @@ function createTorus(segments = 24, thickness = 0.25) {
   });
   return b.build();
 }
+
+// src/engine/scene/skin.js
+var partInverse = new Mat4();
+var jointMatrix = new Mat4();
+var bind = new Mat4();
+function skinPalette(e) {
+  const { joints, inverseBind, palette } = e.skin;
+  partInverse.copy(e.worldMatrix);
+  partInverse.invert();
+  for (let j = 0; j < joints.length; j++) {
+    const joint = joints[j];
+    if (!joint || !joint.alive) {
+      palette.fill(0, j * 16, j * 16 + 16);
+      for (const k of [0, 5, 10, 15]) palette[j * 16 + k] = 1;
+      continue;
+    }
+    for (let k = 0; k < 16; k++) bind.e[k] = inverseBind[j * 16 + k];
+    jointMatrix.multiplyMatrices(joint.worldMatrix, bind).premultiply(partInverse);
+    palette.set(jointMatrix.e, j * 16);
+  }
+  return palette;
+}
+function shapeMesh(e) {
+  const skin = e.skin;
+  if (!skin) return e.mesh;
+  const source = e.mesh;
+  const palette = skinPalette(e);
+  let posed = skin.posed;
+  if (!posed || posed.sourceVersion !== source.version) {
+    posed = new MeshData([], [], [], []);
+    posed.positions = new Float32Array(source.positions.length);
+    posed.normals = source.normals;
+    posed.uvs = source.uvs;
+    posed.indices = source.indices;
+    posed.submeshes = source.submeshes;
+    posed.pose = 0;
+    posed.sourceVersion = source.version;
+    posed.palette = null;
+    skin.posed = posed;
+  }
+  if (posed.palette && sameNumbers(posed.palette, palette)) return posed;
+  posed.palette = Float32Array.from(palette);
+  const from = source.positions;
+  const to = posed.positions;
+  const { joints, weights } = source;
+  const bounds = new Aabb();
+  const p = new Vec3();
+  for (let v = 0; v < from.length / 3; v++) {
+    const x = from[v * 3];
+    const y = from[v * 3 + 1];
+    const z = from[v * 3 + 2];
+    let ox = 0;
+    let oy = 0;
+    let oz = 0;
+    for (let k = 0; k < 4; k++) {
+      const w = weights[v * 4 + k];
+      if (!w) continue;
+      const m = joints[v * 4 + k] * 16;
+      ox += w * (palette[m] * x + palette[m + 4] * y + palette[m + 8] * z + palette[m + 12]);
+      oy += w * (palette[m + 1] * x + palette[m + 5] * y + palette[m + 9] * z + palette[m + 13]);
+      oz += w * (palette[m + 2] * x + palette[m + 6] * y + palette[m + 10] * z + palette[m + 14]);
+    }
+    to[v * 3] = ox;
+    to[v * 3 + 1] = oy;
+    to[v * 3 + 2] = oz;
+    bounds.expandByPoint(p.set(ox, oy, oz));
+  }
+  posed.bounds = bounds;
+  posed.pose++;
+  return posed;
+}
+function sameNumbers(a, b) {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// src/engine/scene/entity.js
+var DEG3 = 180 / Math.PI;
+var Entity = class {
+  constructor(id, kind) {
+    this.id = id;
+    this.kind = kind;
+    this.name = "";
+    this.parent = null;
+    this.children = [];
+    this.position = new Vec3();
+    this.rotation = new Quat();
+    this.scale = new Vec3(1, 1, 1);
+    this.visible = true;
+    this.order = 0;
+    this.castShadow = true;
+    this.receiveShadow = true;
+    this.alive = true;
+    this.mesh = null;
+    this.materials = [];
+    this.surfaces = null;
+    this.brush = null;
+    this.md2 = null;
+    this.skin = null;
+    this.md2Waiting = null;
+    this.camera = null;
+    this.light = null;
+    this.sprite = null;
+    this.decal = false;
+    this.trail = null;
+    this.grass = null;
+    this.pickMode = 0;
+    this.obscurer = true;
+    this.collisionType = 0;
+    this.radiusX = 1;
+    this.radiusY = 1;
+    this.box = null;
+    this.collisionFrom = null;
+    this.collisions = [];
+    this.worldMatrixCache = new Mat4();
+    this.worldDirty = true;
+  }
+  get material() {
+    return this.materials.length ? this.materials[0] : null;
+  }
+  set material(m) {
+    this.materials = m ? [m] : [];
+  }
+  // ---------------------------------------------------------- matrices
+  // Marks this entity and everything below it as needing a new world
+  // matrix. Stops early at nodes that are already dirty (their children
+  // were marked then).
+  touch() {
+    if (this.worldDirty) return;
+    this.worldDirty = true;
+    for (const c of this.children) c.touch();
+  }
+  localMatrix(out = new Mat4()) {
+    return out.compose(this.position, this.rotation, this.scale);
+  }
+  get worldMatrix() {
+    if (this.worldDirty) {
+      this.localMatrix(this.worldMatrixCache);
+      if (this.parent) this.worldMatrixCache.premultiply(this.parent.worldMatrix);
+      this.worldDirty = false;
+    }
+    return this.worldMatrixCache;
+  }
+  // World rotation, ignoring scale.
+  worldRotation(out = new Quat()) {
+    out.copy(this.rotation);
+    for (let p = this.parent; p; p = p.parent) out.premultiply(p.rotation);
+    return out;
+  }
+  worldPosition(out = new Vec3()) {
+    const e = this.worldMatrix.e;
+    return out.set(e[12], e[13], e[14]);
+  }
+  // Is it drawn? Hidden parents hide their children.
+  get shown() {
+    for (let e = this; e; e = e.parent) {
+      if (!e.visible) return false;
+    }
+    return true;
+  }
+  // ------------------------------------------------------- transforms
+  setPosition(x, y, z, global) {
+    const p = new Vec3(x, y, z);
+    if (global && this.parent) {
+      const inv = this.parent.worldMatrix.clone();
+      if (inv.invert()) p.applyMat4(inv);
+    }
+    this.position.copy(p);
+    this.touch();
+  }
+  // Moves along the entity's own axes: MoveEntity e, 0, 0, 1 is "forward".
+  move(x, y, z) {
+    this.position.add(new Vec3(x, y, z).applyQuat(this.rotation));
+    this.touch();
+  }
+  // Moves along the parent's axes, or the world axes when global.
+  translate(x, y, z, global) {
+    const d = new Vec3(x, y, z);
+    if (global && this.parent) {
+      const inv = this.parent.worldMatrix.clone();
+      if (inv.invert()) d.applyMat4Direction(inv);
+    }
+    this.position.add(d);
+    this.touch();
+  }
+  // Sets the rotation, relative to the parent or to the world.
+  setRotation(pitch, yaw, roll, global) {
+    const q = new Quat().fromEuler(pitch, yaw, roll);
+    if (global && this.parent) q.premultiply(this.parent.worldRotation().invert());
+    this.rotation.copy(q.normalize());
+    this.touch();
+  }
+  // Sets the rotation from a quaternion in world space.
+  setWorldRotation(q) {
+    const r = q.clone();
+    if (this.parent) r.premultiply(this.parent.worldRotation().invert());
+    this.rotation.copy(r.normalize());
+    this.touch();
+  }
+  // Turns by the given angles: about the entity's own axes, or about the
+  // world axes when global.
+  turn(pitch, yaw, roll, global) {
+    const q = new Quat().fromEuler(pitch, yaw, roll);
+    if (global) {
+      const world = this.worldRotation().premultiply(q);
+      if (this.parent) world.premultiply(this.parent.worldRotation().invert());
+      this.rotation.copy(world);
+    } else this.rotation.multiply(q);
+    this.rotation.normalize();
+    this.touch();
+  }
+  // Turns the entity so its forward axis (+Z) points at a world position.
+  pointAt(target, roll = 0) {
+    const d = target.clone().sub(this.worldPosition());
+    const flat = Math.hypot(d.x, d.z);
+    if (flat === 0 && d.y === 0) return;
+    const yaw = Math.atan2(-d.x, d.z) * DEG3;
+    const pitch = Math.atan2(-d.y, flat) * DEG3;
+    this.setRotation(pitch, yaw, roll, true);
+  }
+  setScale(x, y, z) {
+    this.scale.set(x, y, z);
+    this.touch();
+  }
+  // Position as the user sees it: local (relative to the parent) or world.
+  getPosition(global) {
+    return global ? this.worldPosition() : this.position.clone();
+  }
+  getRotation(global) {
+    return (global ? this.worldRotation() : this.rotation.clone()).toEuler();
+  }
+  // Attaches to a new parent (or none). With keepWorld the entity stays
+  // where it is on screen; otherwise its local values are kept and it moves
+  // with the new parent.
+  setParent(parent, keepWorld) {
+    const world = keepWorld ? this.worldMatrix.clone() : null;
+    if (this.parent) this.parent.children.splice(this.parent.children.indexOf(this), 1);
+    this.parent = parent;
+    if (parent) parent.children.push(this);
+    if (world) {
+      if (parent) {
+        const inv = parent.worldMatrix.clone();
+        if (inv.invert()) world.premultiply(inv);
+      }
+      world.decompose(this.position, this.rotation, this.scale);
+    }
+    this.worldDirty = false;
+    this.touch();
+  }
+  // The world-space box around the mesh (null for entities without one).
+  // Collision and picking in phase 3 start here.
+  worldBounds() {
+    return this.mesh ? shapeMesh(this).bounds.transformed(this.worldMatrix) : null;
+  }
+};
+
+// src/engine/scene/material.js
+var nextMaterialId = 1;
+var Material = class _Material {
+  constructor() {
+    this.id = nextMaterialId++;
+    this.version = 0;
+    this.color = [1, 1, 1];
+    this.alpha = 1;
+    this.shininess = 0;
+    this.fullbright = false;
+    this.flat = false;
+    this.twoSided = false;
+    this.blend = "alpha";
+    this.texture = null;
+    this.alphaMode = null;
+    this.alphaCutoff = 0.5;
+    this.vertexColors = false;
+    this.vertexAlpha = false;
+    this.decal = false;
+    this.name = "";
+  }
+  changed() {
+    this.version++;
+  }
+  clone() {
+    const m = new _Material();
+    m.color = [...this.color];
+    m.alpha = this.alpha;
+    m.shininess = this.shininess;
+    m.fullbright = this.fullbright;
+    m.flat = this.flat;
+    m.twoSided = this.twoSided;
+    m.blend = this.blend;
+    m.texture = this.texture;
+    m.alphaMode = this.alphaMode;
+    m.alphaCutoff = this.alphaCutoff;
+    m.vertexColors = this.vertexColors;
+    m.vertexAlpha = this.vertexAlpha;
+    m.decal = this.decal;
+    m.name = this.name;
+    return m;
+  }
+};
+
+// src/engine/scene/texture.js
+var nextTextureId = 1;
+var TEX_COLOR = 1;
+var TEX_ALPHA = 2;
+var TEX_MASKED = 4;
+var TEX_MIPMAP = 8;
+var TEX_CLAMPU = 16;
+var TEX_CLAMPV = 32;
+var TEX_SPHEREMAP = 64;
+var TEX_CUBEMAP = 128;
+var Texture = class {
+  constructor(width = 0, height = 0) {
+    this.id = nextTextureId++;
+    this.version = 0;
+    this.width = width;
+    this.height = height;
+    this.pixels = width && height ? new Uint8ClampedArray(width * height * 4) : null;
+    this.url = null;
+    this.image = null;
+    this.loaded = this.pixels !== null;
+    this.failed = false;
+    this.scaleU = 1;
+    this.scaleV = 1;
+    this.wrapU = "repeat";
+    this.wrapV = "repeat";
+    this.nearest = this.pixels !== null;
+    this.flags = TEX_COLOR;
+  }
+  // Sets the Blitz3D texture flags (TEX_* above).
+  setFlags(flags) {
+    this.flags = flags;
+    this.wrapU = flags & TEX_CLAMPU ? "clamp" : "repeat";
+    this.wrapV = flags & TEX_CLAMPV ? "clamp" : "repeat";
+    this.version++;
+    return this;
+  }
+  get alpha() {
+    return (this.flags & TEX_ALPHA) !== 0;
+  }
+  get masked() {
+    return (this.flags & TEX_MASKED) !== 0;
+  }
+  fill(r, g, b, a = 255) {
+    const p = this.pixels;
+    for (let i = 0; i < p.length; i += 4) {
+      p[i] = r;
+      p[i + 1] = g;
+      p[i + 2] = b;
+      p[i + 3] = a;
+    }
+    this.version++;
+    return this;
+  }
+  setPixel(x, y, r, g, b, a = 255) {
+    if (!this.pixels || x < 0 || y < 0 || x >= this.width || y >= this.height) return;
+    const i = (y * this.width + x) * 4;
+    this.pixels[i] = r;
+    this.pixels[i + 1] = g;
+    this.pixels[i + 2] = b;
+    this.pixels[i + 3] = a;
+    this.version++;
+  }
+  checker(cells, c1, c2) {
+    const cell = Math.max(1, Math.floor(this.width / Math.max(1, cells)));
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        const c = Math.floor(x / cell) + Math.floor(y / cell) & 1 ? c2 : c1;
+        const i = (y * this.width + x) * 4;
+        this.pixels[i] = c[0];
+        this.pixels[i + 1] = c[1];
+        this.pixels[i + 2] = c[2];
+        this.pixels[i + 3] = 255;
+      }
+    }
+    this.version++;
+    return this;
+  }
+};
 
 // src/engine/scene/editable.js
 var linear = (c) => {
@@ -6061,8 +6114,8 @@ function localBox(e) {
     const [x, y, z, w, h, d] = e.box;
     return { min: [x, y, z], max: [x + w, y + h, z + d] };
   }
-  if (e.mesh && !e.mesh.bounds.isEmpty()) {
-    const b = e.mesh.bounds;
+  if (e.mesh && !shapeMesh(e).bounds.isEmpty()) {
+    const b = shapeMesh(e).bounds;
     return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
   }
   const parts = e.mesh ? [] : meshParts(e);
@@ -6072,7 +6125,7 @@ function localBox(e) {
     const hi = [-Infinity, -Infinity, -Infinity];
     const p = new Vec3();
     for (const part of parts) {
-      const b = part.mesh.bounds;
+      const b = shapeMesh(part).bounds;
       for (let i = 0; i < 8; i++) {
         p.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMat4(part.worldMatrix).applyMat4(inv);
         lo[0] = Math.min(lo[0], p.x);
@@ -6128,7 +6181,7 @@ function shapeBounds(e, mode) {
     const lo2 = [Infinity, Infinity, Infinity];
     const hi2 = [-Infinity, -Infinity, -Infinity];
     for (const part of meshParts(e)) {
-      if (part.mesh.bounds.isEmpty()) continue;
+      if (shapeMesh(part).bounds.isEmpty()) continue;
       const b = part.worldBounds();
       lo2[0] = Math.min(lo2[0], b.min.x);
       lo2[1] = Math.min(lo2[1], b.min.y);
@@ -6259,7 +6312,7 @@ function rayMesh(e, origin, line, best) {
   if (!inv.invert()) return;
   const o = origin.clone().applyMat4(inv);
   const d = line.clone().applyMat4Direction(inv);
-  const bvh = meshBvh(e.mesh);
+  const bvh = meshBvh(shapeMesh(e));
   const tri = new Float64Array(9);
   const hit = newHit(best.t);
   let got = false;
@@ -6306,7 +6359,7 @@ function meshTrianglesNear(e, origin, line, pad, visit, inv = null) {
     lhi[1] = Math.max(lhi[1], p.y);
     lhi[2] = Math.max(lhi[2], p.z);
   }
-  const bvh = meshBvh(e.mesh);
+  const bvh = meshBvh(shapeMesh(e));
   const m = e.worldMatrix.e;
   const mirrored = e.worldMatrix.determinant() < 0;
   const local = new Float64Array(9);
