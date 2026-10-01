@@ -2241,7 +2241,10 @@ var Generator = class {
     return `${this.expr(e)} !== 0`;
   }
   call(e) {
-    if (!e.fn && e.args.length && e.args[0].kind === "string") this.files.add(JSON.stringify([e.cmd.key, e.args[0].value]));
+    if (!e.fn) {
+      const at = e.cmd.params.findIndex((p) => p.name === "file");
+      if (at >= 0 && e.args[at] && e.args[at].kind === "string") this.files.add(JSON.stringify([e.cmd.key, e.args[at].value]));
+    }
     const args = e.args.map((a) => bare(this.expr(a)));
     if (e.fn) return `${e.fn.js}(${args.join(", ")})`;
     if (e.cmd.inline) return e.cmd.inline.replace(/\$(\d)/g, (m, i) => wrap(args[Number(i)]));
@@ -3369,6 +3372,7 @@ var Entity = class {
     this.surfaces = null;
     this.brush = null;
     this.md2 = null;
+    this.skin = null;
     this.md2Waiting = null;
     this.camera = null;
     this.light = null;
@@ -3570,6 +3574,28 @@ var Material = class _Material {
   }
 };
 
+// src/engine/scene/skin.js
+var partInverse = new Mat4();
+var jointMatrix = new Mat4();
+var bind = new Mat4();
+function skinPalette(e) {
+  const { joints, inverseBind, palette } = e.skin;
+  partInverse.copy(e.worldMatrix);
+  partInverse.invert();
+  for (let j = 0; j < joints.length; j++) {
+    const joint = joints[j];
+    if (!joint || !joint.alive) {
+      palette.fill(0, j * 16, j * 16 + 16);
+      for (const k of [0, 5, 10, 15]) palette[j * 16 + k] = 1;
+      continue;
+    }
+    for (let k = 0; k < 16; k++) bind.e[k] = inverseBind[j * 16 + k];
+    jointMatrix.multiplyMatrices(joint.worldMatrix, bind).premultiply(partInverse);
+    palette.set(jointMatrix.e, j * 16);
+  }
+  return palette;
+}
+
 // src/engine/scene/texture.js
 var nextTextureId = 1;
 var TEX_COLOR = 1;
@@ -3709,6 +3735,8 @@ var MeshData = class {
     this.indices = Uint32Array.from(indices);
     this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
     this.colors = null;
+    this.joints = null;
+    this.weights = null;
     this.bounds = new Aabb().fromPositions(this.positions);
   }
   get vertexCount() {
@@ -3907,6 +3935,9 @@ var Surface = class {
     this.uvs = [];
     this.colors = [];
     this.triangles = [];
+    this.material = 0;
+    this.joints = null;
+    this.weights = null;
   }
   get vertexCount() {
     return this.positions.length / 3;
@@ -3919,6 +3950,10 @@ var Surface = class {
     this.normals.push(0, 0, 0);
     this.uvs.push(u, v);
     this.colors.push(1, 1, 1, 1);
+    if (this.joints) {
+      this.joints.push(0, 0, 0, 0);
+      this.weights.push(1, 0, 0, 0);
+    }
     this.mesh.touch();
     return this.vertexCount - 1;
   }
@@ -3963,6 +3998,10 @@ var Surface = class {
       this.normals.length = 0;
       this.uvs.length = 0;
       this.colors.length = 0;
+      if (this.joints) {
+        this.joints.length = 0;
+        this.weights.length = 0;
+      }
     }
     if (triangles) this.triangles.length = 0;
     this.mesh.touch();
@@ -4017,17 +4056,42 @@ var EditableMesh = class _EditableMesh extends MeshData {
     this.dirty = false;
   }
   // Makes a mesh a program can change from any MeshData (a built-in shape,
-  // a model part): one surface with its vertices and triangles.
+  // a model part): one surface per submesh, with the vertices its
+  // triangles use and its material.
   static from(data) {
     const m = new _EditableMesh();
-    const s = new Surface(m);
-    s.positions = Array.from(data.positions);
-    s.normals = Array.from(data.normals);
-    s.uvs = Array.from(data.uvs);
-    s.colors = data.colors ? Array.from(data.colors) : new Array(data.positions.length / 3 * 4).fill(1);
-    s.triangles = Array.from(data.indices);
+    const indices = data.indices;
+    for (const sub2 of data.submeshes) {
+      const s = new Surface(m);
+      s.material = sub2.material;
+      if (data.joints) {
+        s.joints = [];
+        s.weights = [];
+      }
+      const local = /* @__PURE__ */ new Map();
+      for (let k = sub2.start; k < sub2.start + sub2.count; k++) {
+        const v = indices[k];
+        let i = local.get(v);
+        if (i === void 0) {
+          i = local.size;
+          local.set(v, i);
+          s.positions.push(data.positions[v * 3], data.positions[v * 3 + 1], data.positions[v * 3 + 2]);
+          s.normals.push(data.normals[v * 3], data.normals[v * 3 + 1], data.normals[v * 3 + 2]);
+          s.uvs.push(data.uvs[v * 2], data.uvs[v * 2 + 1]);
+          if (data.colors) for (let c = 0; c < 4; c++) s.colors.push(data.colors[v * 4 + c]);
+          else s.colors.push(1, 1, 1, 1);
+          if (data.joints) {
+            for (let c = 0; c < 4; c++) {
+              s.joints.push(data.joints[v * 4 + c]);
+              s.weights.push(data.weights[v * 4 + c]);
+            }
+          }
+        }
+        s.triangles.push(i);
+      }
+      m.surfaces.push(s);
+    }
     m.colored = !!data.colors;
-    m.surfaces.push(s);
     m.touch();
     return m;
   }
@@ -4050,15 +4114,26 @@ var EditableMesh = class _EditableMesh extends MeshData {
     const normals = new Float32Array(vertices * 3);
     const uvs = new Float32Array(vertices * 2);
     const colors = new Float32Array(vertices * 4);
+    const skinned = this.surfaces.some((s) => s.joints);
+    const joints = skinned ? new Uint16Array(vertices * 4) : null;
+    const weights = skinned ? new Float32Array(vertices * 4) : null;
     const indices = new Uint32Array(corners);
+    const submeshes = [];
     let base = 0;
     let used = 0;
     for (const s of this.surfaces) {
       const n = s.vertexCount;
+      const start = used;
       positions.set(s.positions, base * 3);
       normals.set(s.normals, base * 3);
       uvs.set(s.uvs, base * 2);
       colors.set(s.colors, base * 4);
+      if (skinned) {
+        if (s.joints) {
+          joints.set(s.joints, base * 4);
+          weights.set(s.weights, base * 4);
+        } else for (let i = 0; i < n; i++) weights[(base + i) * 4] = 1;
+      }
       const t = s.triangles;
       for (let k = 0; k < t.length; k += 3) {
         const a = t[k];
@@ -4069,6 +4144,7 @@ var EditableMesh = class _EditableMesh extends MeshData {
         indices[used++] = base + b;
         indices[used++] = base + c;
       }
+      if (used > start) submeshes.push({ start, count: used - start, material: s.material });
       base += n;
     }
     this._positions = positions;
@@ -4076,7 +4152,9 @@ var EditableMesh = class _EditableMesh extends MeshData {
     this._uvs = uvs;
     this._indices = used === corners ? indices : indices.slice(0, used);
     this._colors = this.colored ? colors : null;
-    this._submeshes = [{ start: 0, count: used, material: 0 }];
+    this._joints = joints;
+    this._weights = weights;
+    this._submeshes = submeshes.length ? submeshes : [{ start: 0, count: 0, material: 0 }];
     this._bounds = new Aabb().fromPositions(positions);
     this._version++;
   }
@@ -4114,6 +4192,20 @@ var EditableMesh = class _EditableMesh extends MeshData {
   }
   set colors(v) {
     this._colors = v;
+  }
+  get joints() {
+    this.sync();
+    return this._joints;
+  }
+  set joints(v) {
+    this._joints = v;
+  }
+  get weights() {
+    this.sync();
+    return this._weights;
+  }
+  set weights(v) {
+    this._weights = v;
   }
   get submeshes() {
     this.sync();
@@ -4268,7 +4360,7 @@ var World = class {
       else if (e.kind === "light") lights.push({ id: e.id, world, ...e.light });
       else if (e.kind === "mirror") mirrors.push({ id: e.id, world });
       else if (e.kind === "grass" && e.grass.count) items.push(this.grassItem(e, world));
-      else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite });
+      else if (e.kind === "mesh" && e.mesh && e.mesh.indices.length) items.push({ id: e.id, order: e.order, world, mesh: e.mesh, materials: e.materials, castShadow: e.castShadow, receiveShadow: e.receiveShadow, sprite: e.sprite, skin: e.skin ? skinPalette(e) : null });
     }
     cameras.sort((a, b) => a.order - b.order || a.id - b.id);
     items.sort((a, b) => a.order - b.order || a.id - b.id);
@@ -7296,19 +7388,6 @@ function normalize4(q) {
   for (let i = 0; i < 4; i++) q[i] /= len;
   return q;
 }
-function pose(model, animation, t) {
-  const v = [0, 0, 0, 0];
-  for (const ch of animation.channels) {
-    const e = model.nodes[ch.node];
-    if (!e || !e.alive) continue;
-    sample(ch, t, v);
-    if (ch.path === "translation") e.position.set(v[0], v[1], v[2]);
-    else if (ch.path === "rotation") e.rotation.set(v[0], v[1], v[2], v[3]);
-    else if (ch.path === "scale") e.scale.set(v[0], v[1], v[2]);
-    e.worldDirty = false;
-    e.touch();
-  }
-}
 function advance(state, animation, dt) {
   const length2 = animation.duration;
   if (length2 <= 0) {
@@ -7336,6 +7415,188 @@ function advance(state, animation, dt) {
   return true;
 }
 
+// src/engine/model/animator.js
+var MAX_LAYERS = 8;
+function newLayer() {
+  return {
+    current: null,
+    // { clip, time, speed, mode, direction }
+    previous: null,
+    // the same, for the animation it blends away from
+    blend: 1,
+    // 0..1: how far into `current` the blend is
+    blendSpeed: 0,
+    // blend added per second
+    playing: false,
+    mask: null,
+    // Float32Array, one weight per node; null: all 1
+    returnTo: null
+    // { clip, speed, transition } after an ANIM_ONCE
+  };
+}
+var Animator = class _Animator {
+  constructor(model) {
+    this.model = model;
+    this.layers = [newLayer()];
+    const n = model.data.nodes.length;
+    this.p = new Float64Array(n * 3);
+    this.q = new Float64Array(n * 4);
+    this.s = new Float64Array(n * 3);
+    this.v = [0, 0, 0, 0];
+    this.dirty = false;
+  }
+  layer(index) {
+    while (this.layers.length <= index) this.layers.push(newLayer());
+    return this.layers[index];
+  }
+  // Starts a clip on a layer, blending from what it played over
+  // `transition` seconds. ANIM_ONCE with `returnTo` goes on to that clip
+  // (looping) once it ends.
+  play(index, clip2, mode, speed, transition, returnTo = null) {
+    const layer = this.layer(index);
+    layer.previous = transition > 0 && layer.current ? layer.current : null;
+    layer.current = { clip: clip2, time: speed < 0 ? clip2.duration : 0, speed, mode, direction: 1 };
+    layer.blend = layer.previous ? 0 : 1;
+    layer.blendSpeed = transition > 0 ? 1 / transition : 0;
+    layer.playing = true;
+    layer.returnTo = mode === ANIM_ONCE ? returnTo : null;
+    this.dirty = true;
+    this.evaluate();
+  }
+  stop(index) {
+    const layer = this.layer(index);
+    layer.current = null;
+    layer.previous = null;
+    layer.playing = false;
+    layer.returnTo = null;
+  }
+  // A moment of the layer's animation, shown at once (no blend).
+  seek(index, time) {
+    const layer = this.layer(index);
+    if (!layer.current) return;
+    const d = layer.current.clip.duration;
+    layer.current.time = Math.max(0, Math.min(d, time));
+    layer.previous = null;
+    layer.blend = 1;
+    this.dirty = true;
+    this.evaluate();
+  }
+  // How much each node follows a layer: `weight` for the node named and
+  // every node below it. The first mask of a layer starts from 0 for every
+  // other node (Radion's maskFromBone).
+  mask(index, node, weight) {
+    const layer = this.layer(index);
+    const nodes = this.model.data.nodes;
+    if (!layer.mask) layer.mask = new Float32Array(nodes.length);
+    const w = Math.max(0, Math.min(1, weight));
+    const visit = (i) => {
+      layer.mask[i] = w;
+      for (const c of nodes[i].children) visit(c);
+    };
+    visit(node);
+    this.dirty = true;
+  }
+  clearMask(index) {
+    this.layer(index).mask = null;
+    this.dirty = true;
+  }
+  get active() {
+    return this.dirty || this.layers.some((l) => l.playing || l.previous);
+  }
+  // One step of dt seconds.
+  step(dt) {
+    if (!this.active) return false;
+    for (const layer of this.layers) {
+      if (layer.previous) {
+        advance(layer.previous, layer.previous.clip, dt);
+        layer.blend = Math.min(1, layer.blend + dt * layer.blendSpeed);
+        if (layer.blend >= 1 - 1e-9) {
+          layer.blend = 1;
+          layer.previous = null;
+        }
+      }
+      if (layer.current && layer.playing && !advance(layer.current, layer.current.clip, dt)) {
+        layer.playing = false;
+        const next = layer.returnTo;
+        if (next) {
+          const index = this.layers.indexOf(layer);
+          this.play(index, next.clip, ANIM_LOOP, next.speed, next.transition);
+        }
+      }
+    }
+    this.evaluate();
+    return true;
+  }
+  // The nodes moved to the layers' poses.
+  evaluate() {
+    const { p, q, s } = this;
+    const nodes = this.model.nodes;
+    const rest = this.model.data.nodes;
+    const used = /* @__PURE__ */ new Set();
+    for (const layer of this.layers) {
+      for (const st of [layer.previous, layer.current]) {
+        if (st) for (const ch of st.clip.channels) used.add(ch.node);
+      }
+    }
+    for (const i of used) {
+      const r = rest[i];
+      p.set([r.position.x, r.position.y, r.position.z], i * 3);
+      q.set([r.rotation.x, r.rotation.y, r.rotation.z, r.rotation.w], i * 4);
+      s.set([r.scale.x, r.scale.y, r.scale.z], i * 3);
+    }
+    for (const layer of this.layers) {
+      if (layer.previous) this.apply(layer.previous, 1, layer.mask);
+      if (layer.current) this.apply(layer.current, layer.previous ? layer.blend : 1, layer.mask);
+    }
+    for (const i of used) {
+      const e = nodes[i];
+      if (!e || !e.alive) continue;
+      e.position.set(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]);
+      e.rotation.set(q[i * 4], q[i * 4 + 1], q[i * 4 + 2], q[i * 4 + 3]);
+      e.scale.set(s[i * 3], s[i * 3 + 1], s[i * 3 + 2]);
+      e.worldDirty = false;
+      e.touch();
+    }
+    this.dirty = false;
+  }
+  // Moves the pose towards a clip at its time by `weight` (times the
+  // node's mask).
+  apply(st, weight, mask) {
+    if (weight <= 1e-3) return;
+    const { p, q, s, v } = this;
+    for (const ch of st.clip.channels) {
+      const i = ch.node;
+      const amount = weight * (mask ? mask[i] : 1);
+      if (amount <= 1e-3) continue;
+      sample(ch, st.time, v);
+      if (ch.path === "translation") mix3(p, i * 3, v, amount);
+      else if (ch.path === "scale") mix3(s, i * 3, v, amount);
+      else if (ch.path === "rotation") nlerp(q, i * 4, v, amount);
+    }
+  }
+  // A copy of the model (CopyEntity) plays on its own: nothing playing,
+  // the same masks.
+  copyFor(model) {
+    const a = new _Animator(model);
+    a.layers = this.layers.map((l) => ({ ...newLayer(), mask: l.mask ? l.mask.slice() : null }));
+    return a;
+  }
+};
+function mix3(out, o, v, t) {
+  for (let k = 0; k < 3; k++) out[o + k] += (v[k] - out[o + k]) * t;
+}
+function nlerp(out, o, v, t) {
+  const dot2 = out[o] * v[0] + out[o + 1] * v[1] + out[o + 2] * v[2] + out[o + 3] * v[3];
+  const sign = dot2 < 0 ? -1 : 1;
+  let len = 0;
+  for (let k = 0; k < 4; k++) {
+    out[o + k] = out[o + k] * (1 - t) + v[k] * sign * t;
+    len += out[o + k] * out[o + k];
+  }
+  len = Math.sqrt(len) || 1;
+  for (let k = 0; k < 4; k++) out[o + k] /= len;
+}
+
 // src/engine/model/commands.js
 var MODEL_COMMANDS = [
   "LoadMesh%(file$, parent = 0)",
@@ -7344,12 +7605,17 @@ var MODEL_COMMANDS = [
   "CountAnimations%(entity)",
   "AnimationName$(entity, index)",
   "FindAnimation%(entity, name$)",
-  "Animate(entity, animation = 1, mode = 1, speed# = 1)",
-  "Animating%(entity)",
-  "AnimTime#(entity)",
-  "SetAnimTime(entity, time#)",
-  "AnimLength#(entity, animation = 1)"
+  "Animate(entity, animation = 1, mode = 1, speed# = 1, transition# = 0)",
+  "AnimateLayer(entity, layer, animation, mode = 1, speed# = 1, transition# = 0)",
+  "AnimateOnce(entity, animation, then = 0, speed# = 1, transition# = 0, layer = 0)",
+  "AnimLayerMask(entity, layer, bone$, weight# = 1)",
+  "Animating%(entity, layer = 0)",
+  "AnimTime#(entity, layer = 0)",
+  "SetAnimTime(entity, time#, layer = 0)",
+  "AnimLength#(entity, animation = 1)",
+  'LoadAnimSeq%(entity, file$, name$ = "")'
 ];
+var STEPS = 60;
 var MODEL_CONSTANTS = {
   ANIM_STOP,
   ANIM_LOOP,
@@ -7367,9 +7633,28 @@ function createModelCommands(engine) {
     return e;
   };
   const animation = (e, index) => {
-    const list = e.model.data.animations;
+    const list = e.model.clips;
     if (index < 1 || index > list.length) throw runtimeError(`Model ${e.id} has ${list.length} animation${list.length === 1 ? "" : "s"}, not number ${index}`);
     return list[index - 1];
+  };
+  const checkLayer = (command, layer) => {
+    if (layer < 0 || layer >= MAX_LAYERS) throw runtimeError(`${command}: layers are numbered 0 to ${MAX_LAYERS - 1}, not ${layer}`);
+  };
+  const start = (command, handle, layer, index, mode, speed, transition, then) => {
+    const e = model(handle, true);
+    checkLayer(command, layer);
+    if (mode < ANIM_STOP || mode > ANIM_ONCE) throw runtimeError(`${command} mode must be ANIM_STOP, ANIM_LOOP, ANIM_PINGPONG or ANIM_ONCE (0 to 3), not ${mode}`);
+    if (index < 0) throw runtimeError(`${command} needs an animation number from 1, or 0 to stop, not ${index}`);
+    if (transition < 0) throw runtimeError(`${command}: a transition is a number of steps, 0 or more, not ${transition}`);
+    if (e.model.loaded) {
+      if (index !== 0) animation(e, index);
+      if (then !== 0) animation(e, then);
+    }
+    models.play(e, index, mode, speed, transition / STEPS, layer, then);
+  };
+  const animatorOf2 = (e) => {
+    if (!e.model.animator) e.model.animator = new Animator(e.model);
+    return e.model.animator;
   };
   return {
     loadmesh(file, parent) {
@@ -7393,34 +7678,49 @@ function createModelCommands(engine) {
       const found = search(entity(handle));
       return found ? found.id : 0;
     },
-    countanimations: (handle) => model(handle).model.data.animations.length,
+    countanimations: (handle) => model(handle).model.clips.length,
     animationname: (handle, index) => animation(model(handle), index).name,
     findanimation(handle, name) {
       const want = name.toLowerCase();
-      const i = model(handle).model.data.animations.findIndex((a) => a.name.toLowerCase() === want);
+      const i = model(handle).model.clips.findIndex((a) => a.name.toLowerCase() === want);
       return i + 1;
     },
-    animate(handle, index, mode, speed) {
-      const e = model(handle, true);
-      if (mode < ANIM_STOP || mode > ANIM_ONCE) throw runtimeError(`Animate mode must be ANIM_STOP, ANIM_LOOP, ANIM_PINGPONG or ANIM_ONCE (0 to 3), not ${mode}`);
-      if (index < 0) throw runtimeError(`Animate needs an animation number from 1, or 0 to stop, not ${index}`);
-      if (index !== 0 && e.model.loaded) animation(e, index);
-      models.play(e, index, mode, speed);
+    animate: (handle, index, mode, speed, transition) => start("Animate", handle, 0, index, mode, speed, transition, 0),
+    animatelayer: (handle, layer, index, mode, speed, transition) => start("AnimateLayer", handle, layer, index, mode, speed, transition, 0),
+    animateonce(handle, index, then, speed, transition, layer) {
+      if (index < 1) throw runtimeError(`AnimateOnce needs an animation number from 1, not ${index}`);
+      if (then < 0) throw runtimeError(`AnimateOnce's next animation must be a number from 1, or 0 for none, not ${then}`);
+      start("AnimateOnce", handle, layer, index, ANIM_ONCE, speed, transition, then);
     },
-    animating(handle) {
-      const e = model(handle, true);
-      return e.model.state && e.model.state.playing ? 1 : 0;
-    },
-    animtime(handle) {
-      const e = model(handle, true);
-      return e.model.state ? tidy(e.model.state.time) : 0;
-    },
-    setanimtime(handle, time) {
+    animlayermask(handle, layer, bone, weight) {
       const e = model(handle);
-      if (!e.model.data.animations.length) throw runtimeError(`Model ${handle} has no animations`);
-      models.setTime(e, time);
+      checkLayer("AnimLayerMask", layer);
+      const want = bone.toLowerCase();
+      const node = e.model.data.nodes.findIndex((n) => n.name.toLowerCase() === want);
+      if (node < 0) throw runtimeError(`AnimLayerMask: model ${handle} has no bone or part named "${bone}"`);
+      animatorOf2(e).mask(layer, node, weight);
     },
-    animlength: (handle, index) => tidy(animation(model(handle), index).duration)
+    animating(handle, layer) {
+      const e = model(handle, true);
+      const st = models.layerState(e, layer);
+      return st && st.playing ? 1 : 0;
+    },
+    animtime(handle, layer) {
+      const e = model(handle, true);
+      const st = models.layerState(e, layer);
+      return st ? tidy(st.time) : 0;
+    },
+    setanimtime(handle, time, layer) {
+      const e = model(handle);
+      checkLayer("SetAnimTime", layer);
+      if (!e.model.clips.length) throw runtimeError(`Model ${handle} has no animations`);
+      models.setTime(e, time, layer);
+    },
+    animlength: (handle, index) => tidy(animation(model(handle), index).duration),
+    loadanimseq(handle, file, name) {
+      const e = model(handle);
+      return models.loadSequence(e, file, engine.resolve(file), name);
+    }
   };
 }
 
@@ -10718,6 +11018,9 @@ var Reader = class {
     const normals = [];
     const uvs = [];
     const colors = [];
+    const joints = [];
+    const weights = [];
+    let skinned = false;
     const indices = [];
     const submeshes = [];
     const materials = [];
@@ -10743,6 +11046,9 @@ var Reader = class {
       const col = attr.COLOR_0 !== void 0 ? this.accessor(attr.COLOR_0) : null;
       const colSize = col ? SIZES[this.json.accessors[attr.COLOR_0].type] : 0;
       if (col) hasColors = true;
+      const jnt = attr.JOINTS_0 !== void 0 ? this.accessor(attr.JOINTS_0) : null;
+      const wgt = attr.WEIGHTS_0 !== void 0 ? this.accessor(attr.WEIGHTS_0) : null;
+      if (jnt && wgt) skinned = true;
       const flat = !nor;
       const corners = flat ? tri : null;
       const vertexOf = flat ? (i) => corners[i] : (i) => i;
@@ -10768,6 +11074,16 @@ var Reader = class {
         uvs.push(u, w);
         if (col) colors.push(col[v * colSize], col[v * colSize + 1], col[v * colSize + 2], colSize === 4 ? col[v * colSize + 3] : 1);
         else colors.push(1, 1, 1, 1);
+        if (jnt && wgt) {
+          const sum = wgt[v * 4] + wgt[v * 4 + 1] + wgt[v * 4 + 2] + wgt[v * 4 + 3];
+          for (let k = 0; k < 4; k++) {
+            joints.push(jnt[v * 4 + k]);
+            weights.push(sum > 0 ? wgt[v * 4 + k] / sum : k === 0 ? 1 : 0);
+          }
+        } else {
+          joints.push(0, 0, 0, 0);
+          weights.push(1, 0, 0, 0);
+        }
       }
       const start = indices.length;
       if (flat) {
@@ -10789,6 +11105,10 @@ var Reader = class {
     const data = new MeshData(positions, normals, uvs, indices);
     data.submeshes = submeshes.length ? submeshes : data.submeshes;
     if (hasColors) data.colors = Float32Array.from(colors);
+    if (skinned) {
+      data.joints = Uint16Array.from(joints);
+      data.weights = Float32Array.from(weights);
+    }
     const mats = materials.map((i) => {
       const m = this.material(i).clone();
       m.vertexColors = hasColors;
@@ -10814,13 +11134,13 @@ var Reader = class {
       rotation.set(r[0], -r[1], -r[2], r[3]).normalize();
       scale2.set(s[0], s[1], s[2]);
     }
-    if (n.skin !== void 0) this.warnOnce("skin", "the model is skinned, which PolyBasic does not play yet: it shows in its rest pose");
     return {
       name: n.name || "",
       position,
       rotation,
       scale: scale2,
       mesh: n.mesh !== void 0 ? n.mesh : -1,
+      skin: n.skin !== void 0 ? n.skin : -1,
       children: n.children || [],
       index
     };
@@ -10863,7 +11183,24 @@ var Reader = class {
       roots = nodes.map((_, i) => i).filter((i) => !child.has(i));
     }
     const animations = (json.animations || []).map((a, i) => this.animation(a, i));
-    return { nodes, roots, meshes, animations };
+    const skins = (json.skins || []).map((k) => this.skin(k));
+    for (const n of nodes) {
+      if (n.skin >= skins.length) {
+        this.warnOnce("skin", `node "${n.name}" uses skin ${n.skin}, which the file does not have: it shows in its rest pose`);
+        n.skin = -1;
+      }
+    }
+    return { nodes, roots, meshes, skins, animations };
+  }
+  // A skin's joints and their inverse bind matrices, mirrored as the nodes
+  // are (S M S).
+  skin(k) {
+    const n = k.joints.length;
+    const inverseBind = new Float32Array(n * 16);
+    if (k.inverseBindMatrices !== void 0) inverseBind.set(this.accessor(k.inverseBindMatrices).subarray(0, n * 16));
+    else for (let j = 0; j < n; j++) for (const i of [0, 5, 10, 15]) inverseBind[j * 16 + i] = 1;
+    for (let j = 0; j < n; j++) for (const i of [1, 2, 3, 4, 8, 12]) inverseBind[j * 16 + i] = -inverseBind[j * 16 + i];
+    return { joints: k.joints.slice(), inverseBind };
   }
 };
 function toTriangles(idx, mode) {
@@ -10986,8 +11323,10 @@ var Models = class {
     for (const r of data.roots) make(r, root);
     const m = root.model;
     m.data = data;
+    m.clips = data.animations.slice();
     m.nodes = nodes;
     m.loaded = true;
+    bindSkins(m);
     paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
@@ -11007,6 +11346,7 @@ var Models = class {
       return;
     }
     dst.model.data = m.data;
+    dst.model.clips = m.clips.slice();
     dst.model.loaded = true;
     dst.model.nodes = m.nodes.map((node) => {
       if (!node) return null;
@@ -11016,56 +11356,131 @@ var Models = class {
       for (const i of path) e = e ? e.children[i] : null;
       return e || null;
     });
+    bindSkins(dst.model);
+    if (m.animator) dst.model.animator = m.animator.copyFor(dst.model);
   }
-  play(root, index, mode, speed) {
+  // Plays clip `index` (1-based; 0 stops) on a layer of the model, blending
+  // from what that layer played over `transition` seconds; an ANIM_ONCE
+  // clip can go on to clip `then` when it ends. A model still loading
+  // starts it when it arrives.
+  play(root, index, mode, speed, transition = 0, layer = 0, then = 0) {
     const m = root.model;
     if (!m.loaded) {
       this.whenLoaded(root, () => {
-        if (index > m.data.animations.length) {
-          this.engine.warn(`Animate: the model has ${m.data.animations.length} animations, not number ${index}`);
+        const count = m.clips.length;
+        if (index > count || then > count) {
+          this.engine.warn(`Animate: the model has ${count} animations, not number ${Math.max(index, then)}`);
           return;
         }
-        this.play(root, index, mode, speed);
+        this.play(root, index, mode, speed, transition, layer, then);
       });
       return;
     }
+    const a = animatorOf(m);
     if (mode === ANIM_STOP || index === 0) {
-      m.state = null;
-      this.animated.delete(root);
+      a.stop(layer);
       return;
     }
-    m.state = { index, mode, speed, time: speed < 0 ? m.data.animations[index - 1].duration : 0, direction: 1, playing: true };
+    const returnTo = then ? { clip: m.clips[then - 1], speed, transition } : null;
+    a.play(layer, m.clips[index - 1], mode, speed, transition, returnTo);
     this.animated.add(root);
-    pose(m, m.data.animations[index - 1], m.state.time);
   }
-  setTime(root, time) {
+  // Shows a moment of what a layer plays (of the first clip, held, when it
+  // plays nothing).
+  setTime(root, time, layer = 0) {
     const m = root.model;
-    const anim = m.data.animations[(m.state ? m.state.index : 1) - 1];
-    if (!anim) return;
-    const t = Math.max(0, Math.min(anim.duration, time));
-    if (m.state) m.state.time = t;
-    pose(m, anim, t);
+    const a = animatorOf(m);
+    const l = a.layer(layer);
+    if (!l.current) {
+      if (!m.clips.length) return;
+      a.play(layer, m.clips[0], ANIM_ONCE, 1, 0);
+      l.playing = false;
+    }
+    a.seek(layer, time);
   }
-  // One step of dt seconds for every playing animation.
+  // LoadAnimSeq: one animation of another glTF file (the one named, or the
+  // first) added to the model's own, matched to its nodes by name, as
+  // Radion and Blitz3D let a character take animations kept in files of
+  // their own. Returns its number. It is numbered at once; until the file
+  // has arrived it is an empty animation, filled in place when it does.
+  loadSequence(root, file, url, name) {
+    const m = root.model;
+    const clip2 = { name: "", duration: 0, channels: [] };
+    m.clips.push(clip2);
+    const number = m.clips.length;
+    const fill = (data) => {
+      const want = name.toLowerCase();
+      const source = name ? data.animations.find((a) => a.name.toLowerCase() === want) : data.animations[0];
+      if (!source) {
+        this.engine.warn(`LoadAnimSeq: "${file}" has ${name ? `no animation named "${name}"` : "no animations"}`);
+        return;
+      }
+      const byName = /* @__PURE__ */ new Map();
+      m.data.nodes.forEach((n, i) => {
+        const key = n.name.toLowerCase();
+        if (n.name && !byName.has(key)) byName.set(key, i);
+      });
+      const channels = [];
+      const missing = /* @__PURE__ */ new Set();
+      for (const ch of source.channels) {
+        const from = data.nodes[ch.node].name;
+        const to = byName.get(from.toLowerCase());
+        if (to === void 0) missing.add(from || `node ${ch.node}`);
+        else channels.push({ ...ch, node: to });
+      }
+      if (!channels.length) this.engine.warn(`LoadAnimSeq: no node of "${file}" that "${source.name}" moves has a name the model has`);
+      else if (missing.size) this.engine.warn(`LoadAnimSeq: the model has no ${[...missing].slice(0, 5).join(", ")}${missing.size > 5 ? "..." : ""}: "${source.name}" leaves them out`);
+      Object.assign(clip2, { name: source.name, duration: source.duration, channels });
+    };
+    const known = this.ready.get(url);
+    if (known) {
+      fill(known);
+      return number;
+    }
+    const engine = this.engine;
+    if (!engine.loadFile) {
+      engine.warn(`LoadAnimSeq: could not load "${file}": this platform cannot read files`);
+      return number;
+    }
+    const reading = this.preloaded.get(url) || engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
+    m.sequences = (m.sequences || Promise.resolve()).then(() => reading).then(fill, (err) => engine.warn(`LoadAnimSeq: could not load "${file}": ${err && err.message ? err.message : err}`));
+    engine.track(m.sequences);
+    return number;
+  }
+  // The state of a layer: { clip, time, playing } or null.
+  layerState(root, layer = 0) {
+    const a = root.model.animator;
+    if (!a || layer >= a.layers.length) return null;
+    const l = a.layers[layer];
+    return l.current ? { clip: l.current.clip, time: l.current.time, playing: l.playing, mode: l.current.mode, blending: !!l.previous } : null;
+  }
+  // One step of dt seconds for every model that plays or blends.
   step(dt) {
     for (const root of this.animated) {
-      const m = root.model;
-      if (!root.alive || !m.state) {
-        this.animated.delete(root);
-        continue;
-      }
-      const anim = m.data.animations[m.state.index - 1];
-      const going = advance(m.state, anim, dt);
-      pose(m, anim, m.state.time);
-      if (!going) {
-        m.state.playing = false;
-        this.animated.delete(root);
-      }
+      const a = root.alive ? root.model.animator : null;
+      if (!a || !a.step(dt)) this.animated.delete(root);
+      else if (!a.active) this.animated.delete(root);
     }
   }
 };
+function animatorOf(m) {
+  if (!m.animator) m.animator = new Animator(m);
+  return m.animator;
+}
+function bindSkins(m) {
+  m.data.nodes.forEach((n, i) => {
+    const e = m.nodes[i];
+    if (!e || n.skin < 0 || !e.mesh || !e.mesh.joints) return;
+    const skin = m.data.skins[n.skin];
+    e.skin = {
+      joints: skin.joints.map((j) => m.nodes[j]),
+      inverseBind: skin.inverseBind,
+      palette: new Float32Array(skin.joints.length * 16)
+    };
+  });
+}
 function newModel() {
-  return { data: null, nodes: [], state: null, loaded: false, failed: false, waiting: [] };
+  return { data: null, nodes: [], clips: [], animator: null, loaded: false, failed: false, waiting: [] };
 }
 
 // src/engine/audio/backend.js
@@ -11389,7 +11804,7 @@ var Engine = class {
     const jobs = [];
     if (uses.some((name) => PHYSICS_KEYS.has(name))) jobs.push(this.physics.prepare());
     for (const [command, file] of files) {
-      if (command === "loadmesh" && this.loadFile) {
+      if ((command === "loadmesh" || command === "loadanimseq") && this.loadFile) {
         jobs.push(this.models.preload(file, this.resolve(file)));
         continue;
       }
@@ -11613,6 +12028,8 @@ var ACESFilmicToneMapping = 4;
 var CustomToneMapping = 5;
 var AgXToneMapping = 6;
 var NeutralToneMapping = 7;
+var AttachedBindMode = "attached";
+var DetachedBindMode = "detached";
 var UVMapping = 300;
 var CubeReflectionMapping = 301;
 var CubeRefractionMapping = 302;
@@ -23795,6 +24212,195 @@ function checkGeometryIntersection(object, material, raycaster, ray, uv, uv1, no
   }
   return intersection;
 }
+var _baseVector = /* @__PURE__ */ new Vector4();
+var _skinIndex = /* @__PURE__ */ new Vector4();
+var _skinWeight = /* @__PURE__ */ new Vector4();
+var _vector4 = /* @__PURE__ */ new Vector4();
+var _matrix4 = /* @__PURE__ */ new Matrix4();
+var _vertex = /* @__PURE__ */ new Vector3();
+var _sphere$5 = /* @__PURE__ */ new Sphere();
+var _inverseMatrix$2 = /* @__PURE__ */ new Matrix4();
+var _ray$2 = /* @__PURE__ */ new Ray2();
+var SkinnedMesh = class extends Mesh {
+  /**
+   * Constructs a new skinned mesh.
+   *
+   * @param {BufferGeometry} [geometry] - The mesh geometry.
+   * @param {Material|Array<Material>} [material] - The mesh material.
+   */
+  constructor(geometry, material) {
+    super(geometry, material);
+    this.isSkinnedMesh = true;
+    this.type = "SkinnedMesh";
+    this.bindMode = AttachedBindMode;
+    this.bindMatrix = new Matrix4();
+    this.bindMatrixInverse = new Matrix4();
+    this.boundingBox = null;
+    this.boundingSphere = null;
+  }
+  /**
+   * Computes the bounding box of the skinned mesh, and updates {@link SkinnedMesh#boundingBox}.
+   * The bounding box is not automatically computed by the engine; this method must be called by your app.
+   * If the skinned mesh is animated, the bounding box should be recomputed per frame in order to reflect
+   * the current animation state.
+   */
+  computeBoundingBox() {
+    const geometry = this.geometry;
+    if (this.boundingBox === null) {
+      this.boundingBox = new Box3();
+    }
+    this.boundingBox.makeEmpty();
+    const positionAttribute = geometry.getAttribute("position");
+    for (let i = 0; i < positionAttribute.count; i++) {
+      this.getVertexPosition(i, _vertex);
+      this.boundingBox.expandByPoint(_vertex);
+    }
+  }
+  /**
+   * Computes the bounding sphere of the skinned mesh, and updates {@link SkinnedMesh#boundingSphere}.
+   * The bounding sphere is automatically computed by the engine once when it is needed, e.g., for ray casting
+   * and view frustum culling. If the skinned mesh is animated, the bounding sphere should be recomputed
+   * per frame in order to reflect the current animation state.
+   */
+  computeBoundingSphere() {
+    const geometry = this.geometry;
+    if (this.boundingSphere === null) {
+      this.boundingSphere = new Sphere();
+    }
+    this.boundingSphere.makeEmpty();
+    const positionAttribute = geometry.getAttribute("position");
+    for (let i = 0; i < positionAttribute.count; i++) {
+      this.getVertexPosition(i, _vertex);
+      this.boundingSphere.expandByPoint(_vertex);
+    }
+  }
+  copy(source, recursive) {
+    super.copy(source, recursive);
+    this.bindMode = source.bindMode;
+    this.bindMatrix.copy(source.bindMatrix);
+    this.bindMatrixInverse.copy(source.bindMatrixInverse);
+    this.skeleton = source.skeleton;
+    if (source.boundingBox !== null) this.boundingBox = source.boundingBox.clone();
+    if (source.boundingSphere !== null) this.boundingSphere = source.boundingSphere.clone();
+    return this;
+  }
+  raycast(raycaster, intersects) {
+    const material = this.material;
+    const matrixWorld = this.matrixWorld;
+    if (material === void 0) return;
+    if (this.boundingSphere === null) this.computeBoundingSphere();
+    _sphere$5.copy(this.boundingSphere);
+    _sphere$5.applyMatrix4(matrixWorld);
+    if (raycaster.ray.intersectsSphere(_sphere$5) === false) return;
+    _inverseMatrix$2.copy(matrixWorld).invert();
+    _ray$2.copy(raycaster.ray).applyMatrix4(_inverseMatrix$2);
+    if (this.boundingBox !== null) {
+      if (_ray$2.intersectsBox(this.boundingBox) === false) return;
+    }
+    this._computeIntersections(raycaster, intersects, _ray$2);
+  }
+  getVertexPosition(index, target) {
+    super.getVertexPosition(index, target);
+    this.applyBoneTransform(index, target);
+    return target;
+  }
+  /**
+   * Binds the given skeleton to the skinned mesh.
+   *
+   * @param {Skeleton} skeleton - The skeleton to bind.
+   * @param {Matrix4} [bindMatrix] - The bind matrix. If no bind matrix is provided,
+   * the skinned mesh's world matrix will be used instead.
+   */
+  bind(skeleton, bindMatrix) {
+    this.skeleton = skeleton;
+    if (bindMatrix === void 0) {
+      this.updateMatrixWorld(true);
+      this.skeleton.calculateInverses();
+      bindMatrix = this.matrixWorld;
+    }
+    this.bindMatrix.copy(bindMatrix);
+    this.bindMatrixInverse.copy(bindMatrix).invert();
+  }
+  /**
+   * This method sets the skinned mesh in the rest pose).
+   */
+  pose() {
+    this.skeleton.pose();
+  }
+  /**
+   * Normalizes the skin weights which are defined as a buffer attribute
+   * in the skinned mesh's geometry.
+   */
+  normalizeSkinWeights() {
+    const vector = new Vector4();
+    const skinWeight = this.geometry.attributes.skinWeight;
+    for (let i = 0, l = skinWeight.count; i < l; i++) {
+      vector.fromBufferAttribute(skinWeight, i);
+      const scale2 = 1 / vector.manhattanLength();
+      if (scale2 !== Infinity) {
+        vector.multiplyScalar(scale2);
+      } else {
+        vector.set(1, 0, 0, 0);
+      }
+      skinWeight.setXYZW(i, vector.x, vector.y, vector.z, vector.w);
+    }
+  }
+  updateMatrixWorld(force) {
+    super.updateMatrixWorld(force);
+    if (this.bindMode === AttachedBindMode) {
+      this.bindMatrixInverse.copy(this.matrixWorld).invert();
+    } else if (this.bindMode === DetachedBindMode) {
+      this.bindMatrixInverse.copy(this.bindMatrix).invert();
+    } else {
+      warn("SkinnedMesh: Unrecognized bindMode: " + this.bindMode);
+    }
+  }
+  /**
+   * Applies the bone transform associated with the given index to the given
+   * vector. Can be used to transform positions or direction vectors by providing
+   * a Vector4 with 1 or 0 in the w component respectively. Returns the updated vector.
+   *
+   * @param {number} index - The vertex index.
+   * @param {Vector3|Vector4} target - The target object that is used to store the method's result.
+   * @return {Vector3|Vector4} The updated vertex attribute data.
+   */
+  applyBoneTransform(index, target) {
+    const skeleton = this.skeleton;
+    const geometry = this.geometry;
+    _skinIndex.fromBufferAttribute(geometry.attributes.skinIndex, index);
+    _skinWeight.fromBufferAttribute(geometry.attributes.skinWeight, index);
+    if (target.isVector4) {
+      _baseVector.copy(target);
+      target.set(0, 0, 0, 0);
+    } else {
+      _baseVector.set(...target, 1);
+      target.set(0, 0, 0);
+    }
+    _baseVector.applyMatrix4(this.bindMatrix);
+    for (let i = 0; i < 4; i++) {
+      const weight = _skinWeight.getComponent(i);
+      if (weight !== 0) {
+        const boneIndex = _skinIndex.getComponent(i);
+        _matrix4.multiplyMatrices(skeleton.bones[boneIndex].matrixWorld, skeleton.boneInverses[boneIndex]);
+        target.addScaledVector(_vector4.copy(_baseVector).applyMatrix4(_matrix4), weight);
+      }
+    }
+    if (target.isVector4) {
+      target.w = _baseVector.w;
+    }
+    return target.applyMatrix4(this.bindMatrixInverse);
+  }
+};
+var Bone = class extends Object3D {
+  /**
+   * Constructs a new bone.
+   */
+  constructor() {
+    super();
+    this.isBone = true;
+    this.type = "Bone";
+  }
+};
 var DataTexture = class extends Texture2 {
   /**
    * Constructs a new data texture.
@@ -23819,6 +24425,200 @@ var DataTexture = class extends Texture2 {
     this.generateMipmaps = false;
     this.flipY = false;
     this.unpackAlignment = 1;
+  }
+};
+var _offsetMatrix = /* @__PURE__ */ new Matrix4();
+var _identityMatrix = /* @__PURE__ */ new Matrix4();
+var Skeleton = class _Skeleton {
+  /**
+   * Constructs a new skeleton.
+   *
+   * @param {Array<Bone>} [bones] - An array of bones.
+   * @param {Array<Matrix4>} [boneInverses] - An array of bone inverse matrices.
+   * If not provided, these matrices will be computed automatically via {@link Skeleton#calculateInverses}.
+   */
+  constructor(bones = [], boneInverses = []) {
+    this.uuid = generateUUID();
+    this.bones = bones.slice(0);
+    this.boneInverses = boneInverses;
+    this.boneMatrices = null;
+    this.boneTexture = null;
+    this.init();
+  }
+  /**
+   * Initializes the skeleton. This method gets automatically called by the constructor
+   * but depending on how the skeleton is created it might be necessary to call this method
+   * manually.
+   */
+  init() {
+    const bones = this.bones;
+    const boneInverses = this.boneInverses;
+    this.boneMatrices = new Float32Array(bones.length * 16);
+    if (boneInverses.length === 0) {
+      this.calculateInverses();
+    } else {
+      if (bones.length !== boneInverses.length) {
+        warn("Skeleton: Number of inverse bone matrices does not match amount of bones.");
+        this.boneInverses = [];
+        for (let i = 0, il = this.bones.length; i < il; i++) {
+          this.boneInverses.push(new Matrix4());
+        }
+      }
+    }
+  }
+  /**
+   * Computes the bone inverse matrices. This method resets {@link Skeleton#boneInverses}
+   * and fills it with new matrices.
+   */
+  calculateInverses() {
+    this.boneInverses.length = 0;
+    for (let i = 0, il = this.bones.length; i < il; i++) {
+      const inverse = new Matrix4();
+      if (this.bones[i]) {
+        inverse.copy(this.bones[i].matrixWorld).invert();
+      }
+      this.boneInverses.push(inverse);
+    }
+  }
+  /**
+   * Resets the skeleton to the base pose.
+   */
+  pose() {
+    for (let i = 0, il = this.bones.length; i < il; i++) {
+      const bone = this.bones[i];
+      if (bone) {
+        bone.matrixWorld.copy(this.boneInverses[i]).invert();
+      }
+    }
+    for (let i = 0, il = this.bones.length; i < il; i++) {
+      const bone = this.bones[i];
+      if (bone) {
+        if (bone.parent && bone.parent.isBone) {
+          bone.matrix.copy(bone.parent.matrixWorld).invert();
+          bone.matrix.multiply(bone.matrixWorld);
+        } else {
+          bone.matrix.copy(bone.matrixWorld);
+        }
+        bone.matrix.decompose(bone.position, bone.quaternion, bone.scale);
+      }
+    }
+  }
+  /**
+   * Resets the skeleton to the base pose.
+   */
+  update() {
+    const bones = this.bones;
+    const boneInverses = this.boneInverses;
+    const boneMatrices = this.boneMatrices;
+    const boneTexture = this.boneTexture;
+    for (let i = 0, il = bones.length; i < il; i++) {
+      const matrix = bones[i] ? bones[i].matrixWorld : _identityMatrix;
+      _offsetMatrix.multiplyMatrices(matrix, boneInverses[i]);
+      _offsetMatrix.toArray(boneMatrices, i * 16);
+    }
+    if (boneTexture !== null) {
+      boneTexture.needsUpdate = true;
+    }
+  }
+  /**
+   * Returns a new skeleton with copied values from this instance.
+   *
+   * @return {Skeleton} A clone of this instance.
+   */
+  clone() {
+    return new _Skeleton(this.bones, this.boneInverses);
+  }
+  /**
+   * Computes a data texture for passing bone data to the vertex shader.
+   *
+   * @return {Skeleton} A reference of this instance.
+   */
+  computeBoneTexture() {
+    let size = Math.sqrt(this.bones.length * 4);
+    size = Math.ceil(size / 4) * 4;
+    size = Math.max(size, 4);
+    const boneMatrices = new Float32Array(size * size * 4);
+    boneMatrices.set(this.boneMatrices);
+    const boneTexture = new DataTexture(boneMatrices, size, size, RGBAFormat, FloatType);
+    boneTexture.needsUpdate = true;
+    this.boneMatrices = boneMatrices;
+    this.boneTexture = boneTexture;
+    return this;
+  }
+  /**
+   * Searches through the skeleton's bone array and returns the first with a
+   * matching name.
+   *
+   * @param {string} name - The name of the bone.
+   * @return {Bone|undefined} The found bone. `undefined` if no bone has been found.
+   */
+  getBoneByName(name) {
+    for (let i = 0, il = this.bones.length; i < il; i++) {
+      const bone = this.bones[i];
+      if (bone.name === name) {
+        return bone;
+      }
+    }
+    return void 0;
+  }
+  /**
+   * Frees the GPU-related resources allocated by this instance. Call this
+   * method whenever this instance is no longer used in your app.
+   */
+  dispose() {
+    if (this.boneTexture !== null) {
+      this.boneTexture.dispose();
+      this.boneTexture = null;
+    }
+  }
+  /**
+   * Setups the skeleton by the given JSON and bones.
+   *
+   * @param {Object} json - The skeleton as serialized JSON.
+   * @param {Object<string, Bone>} bones - An array of bones.
+   * @return {Skeleton} A reference of this instance.
+   */
+  fromJSON(json, bones) {
+    this.uuid = json.uuid;
+    for (let i = 0, l = json.bones.length; i < l; i++) {
+      const uuid = json.bones[i];
+      let bone = bones[uuid];
+      if (bone === void 0) {
+        warn("Skeleton: No bone found with UUID:", uuid);
+        bone = new Bone();
+      }
+      this.bones.push(bone);
+      this.boneInverses.push(new Matrix4().fromArray(json.boneInverses[i]));
+    }
+    this.init();
+    return this;
+  }
+  /**
+   * Serializes the skeleton into JSON.
+   *
+   * @return {Object} A JSON object representing the serialized skeleton.
+   * @see {@link ObjectLoader#parse}
+   */
+  toJSON() {
+    const data = {
+      metadata: {
+        version: 4.7,
+        type: "Skeleton",
+        generator: "Skeleton.toJSON"
+      },
+      bones: [],
+      boneInverses: []
+    };
+    data.uuid = this.uuid;
+    const bones = this.bones;
+    const boneInverses = this.boneInverses;
+    for (let i = 0, l = bones.length; i < l; i++) {
+      const bone = bones[i];
+      data.bones.push(bone.uuid);
+      const boneInverse = boneInverses[i];
+      data.boneInverses.push(boneInverse.toArray());
+    }
+    return data;
   }
 };
 var InstancedBufferAttribute = class extends BufferAttribute {
@@ -35756,7 +36556,7 @@ var WebXRManager = class extends EventDispatcher {
     let referenceSpaceType = "local-floor";
     let foveation = 1;
     let customReferenceSpace = null;
-    let pose2 = null;
+    let pose = null;
     let glBinding = null;
     let glProjLayer = null;
     let glBaseLayer = null;
@@ -36149,10 +36949,10 @@ var WebXRManager = class extends EventDispatcher {
     };
     let onAnimationFrameCallback = null;
     function onAnimationFrame(time, frame) {
-      pose2 = frame.getViewerPose(customReferenceSpace || referenceSpace);
+      pose = frame.getViewerPose(customReferenceSpace || referenceSpace);
       xrFrame = frame;
-      if (pose2 !== null) {
-        const views = pose2.views;
+      if (pose !== null) {
+        const views = pose.views;
         if (glBaseLayer !== null) {
           renderer.setRenderTargetFramebuffer(newRenderTarget, glBaseLayer.framebuffer);
           renderer.setRenderTarget(newRenderTarget);
@@ -36570,7 +37370,7 @@ function WebGLUniformsGroups(gl, info, capabilities, state) {
   let updateList = {};
   let allocatedBindingPoints = [];
   const maxBindingPoints = gl.getParameter(gl.MAX_UNIFORM_BUFFER_BINDINGS);
-  function bind(uniformsGroup, program) {
+  function bind2(uniformsGroup, program) {
     const webglProgram = program.program;
     state.uniformBlockBinding(uniformsGroup, webglProgram);
   }
@@ -36785,7 +37585,7 @@ function WebGLUniformsGroups(gl, info, capabilities, state) {
     updateList = {};
   }
   return {
-    bind,
+    bind: bind2,
     update,
     dispose
   };
@@ -37432,7 +38232,7 @@ var WebGLRenderer = class {
     let _localClippingEnabled = false;
     const _projScreenMatrix3 = new Matrix4();
     const _vector3 = new Vector3();
-    const _vector4 = new Vector4();
+    const _vector42 = new Vector4();
     const _emptyScene = { background: null, fog: null, environment: null, overrideMaterial: null, isScene: true };
     let _renderBackground = false;
     function getTargetPixelRatio() {
@@ -38081,12 +38881,12 @@ var WebGLRenderer = class {
         } else if (object.isSprite) {
           if (!object.frustumCulled || object.intersectsFrustum(_frustum)) {
             if (sortObjects) {
-              _vector4.setFromMatrixPosition(object.matrixWorld).applyMatrix4(_projScreenMatrix3);
+              _vector42.setFromMatrixPosition(object.matrixWorld).applyMatrix4(_projScreenMatrix3);
             }
             const geometry = objects.update(object);
             const material = object.material;
             if (material.visible) {
-              currentRenderList.push(object, geometry, material, groupOrder, _vector4.z, null, camera);
+              currentRenderList.push(object, geometry, material, groupOrder, _vector42.z, null, camera);
             }
           }
         } else if (object.isMesh || object.isLine || object.isPoints) {
@@ -38096,12 +38896,12 @@ var WebGLRenderer = class {
             if (sortObjects) {
               if (object.boundingSphere !== void 0) {
                 if (object.boundingSphere === null) object.computeBoundingSphere();
-                _vector4.copy(object.boundingSphere.center);
+                _vector42.copy(object.boundingSphere.center);
               } else {
                 if (geometry.boundingSphere === null) geometry.computeBoundingSphere();
-                _vector4.copy(geometry.boundingSphere.center);
+                _vector42.copy(geometry.boundingSphere.center);
               }
-              _vector4.applyMatrix4(object.matrixWorld).applyMatrix4(_projScreenMatrix3);
+              _vector42.applyMatrix4(object.matrixWorld).applyMatrix4(_projScreenMatrix3);
             }
             if (Array.isArray(material)) {
               const groups = geometry.groups;
@@ -38109,11 +38909,11 @@ var WebGLRenderer = class {
                 const group = groups[i];
                 const groupMaterial = material[group.materialIndex];
                 if (groupMaterial && groupMaterial.visible) {
-                  currentRenderList.push(object, geometry, groupMaterial, groupOrder, _vector4.z, group, camera);
+                  currentRenderList.push(object, geometry, groupMaterial, groupOrder, _vector42.z, group, camera);
                 }
               }
             } else if (material.visible) {
-              currentRenderList.push(object, geometry, material, groupOrder, _vector4.z, null, camera);
+              currentRenderList.push(object, geometry, material, groupOrder, _vector42.z, null, camera);
             }
           }
         }
@@ -39001,6 +39801,25 @@ function reflection(world) {
   flip.e[5] = -1;
   return m.multiply(flip).multiply(inverse);
 }
+function skinnedMesh(geometry, material, count) {
+  const obj = new SkinnedMesh(geometry, material);
+  const skeleton = new Skeleton(Array.from({ length: count }, () => new Bone()));
+  skeleton.update = () => {
+    const palette = obj.userData.palette;
+    const out = skeleton.boneMatrices;
+    if (!palette) return;
+    for (let j = 0; j < count; j++) {
+      const o = j * 16;
+      for (let i = 0; i < 16; i++) out[o + i] = palette[o + i];
+      for (const i of MIRRORED) out[o + i] = -out[o + i];
+    }
+    if (skeleton.boneTexture) skeleton.boneTexture.needsUpdate = true;
+  };
+  obj.bindMode = DetachedBindMode;
+  obj.bind(skeleton, new Matrix4());
+  obj.frustumCulled = false;
+  return obj;
+}
 function imagePixels(image) {
   if (!image) return null;
   const canvas = document.createElement("canvas");
@@ -39143,12 +39962,18 @@ var ThreeBackend = class extends RenderBackend {
     const geometry = this.geometry(item.mesh);
     const materials = item.materials.map((m) => this.material(m));
     const material = materials.length === 1 ? materials[0] : materials;
+    const skinned = !!(item.skin && item.mesh.joints);
+    if (obj && obj.isSkinnedMesh === true !== skinned) {
+      this.scene.remove(obj);
+      obj = null;
+    }
     if (!obj) {
-      obj = new Mesh(geometry, material);
+      obj = skinned ? skinnedMesh(geometry, material, item.skin.length / 16) : new Mesh(geometry, material);
       obj.matrixAutoUpdate = false;
       this.objects.set(item.id, obj);
       this.scene.add(obj);
     }
+    if (skinned) obj.userData.palette = item.skin;
     obj.geometry = geometry;
     obj.material = material;
     obj.visible = true;
@@ -39302,6 +40127,10 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
     g.setAttribute("normal", new BufferAttribute(normals, 3));
     g.setAttribute("uv", new BufferAttribute(Float32Array.from(mesh.uvs), 2));
     if (mesh.colors) g.setAttribute("color", new BufferAttribute(Float32Array.from(mesh.colors), 4));
+    if (mesh.joints) {
+      g.setAttribute("skinIndex", new BufferAttribute(Uint16Array.from(mesh.joints), 4));
+      g.setAttribute("skinWeight", new BufferAttribute(Float32Array.from(mesh.weights), 4));
+    }
     g.setIndex(new BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
     if (mesh.pose === void 0) g.computeBoundingSphere();

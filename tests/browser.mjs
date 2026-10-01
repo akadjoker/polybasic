@@ -2244,6 +2244,58 @@ End Function
     console.log(`      frame ${a.time.toFixed(1)} of 32-46; z ${a.z.toFixed(0)} -> ${b.z.toFixed(0)}`);
   });
 
+  await check('skinning.pb: the fox bends on its skeleton, blends into Run from another file, a head layer and a one-shot', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/skinning.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const fox = () => page.evaluate(() =>
+    {
+      const fox = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const part = fox.model.nodes.find((n) => n && n.skin);
+      const layers = fox.model.animator.layers.map((l) => ({
+        clip: l.current ? l.current.clip.name : null,
+        playing: l.playing,
+        blending: !!l.previous,
+        masked: l.mask ? Array.from(l.mask).filter((w) => w > 0).length : -1
+      }));
+      return { palette: Array.from(part.skin.palette.slice(16 * 5, 16 * 5 + 16)), layers, clips: fox.model.clips.length };
+    });
+    await page.waitForTimeout(400);
+    const a = await fox();
+    await page.waitForTimeout(300);
+    const b = await fox();
+    await page.keyboard.press('Digit3');
+    await page.waitForTimeout(80);
+    const blending = await fox();
+    await page.waitForTimeout(600);
+    const running = await fox();
+    await page.keyboard.press('KeyH');
+    await page.waitForTimeout(200);
+    const head = await fox();
+    await page.screenshot({ path: join(SHOTS, 'skinning.png') });
+    const colours = await playerStats(page);
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(100);
+    const once = await fox();
+    await page.waitForFunction(() =>
+    {
+      const fox = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const l = fox.model.animator.layers[0];
+      return l.current && l.current.clip.name === 'Run' && l.playing;
+    }, null, { timeout: 20000 });
+    assert(a.clips === 4, `${a.clips} animations: Run was not added`);
+    assert(a.palette.some((v, i) => Math.abs(v - b.palette[i]) > 1e-4), 'the skeleton does not move');
+    assert(blending.layers[0].clip === 'Run' && blending.layers[0].blending, `pressing 3: ${JSON.stringify(blending.layers[0])}`);
+    assert(running.layers[0].clip === 'Run' && !running.layers[0].blending, `after the blend: ${JSON.stringify(running.layers[0])}`);
+    // b_Neck_04 and the one node below it, b_Head_05.
+    assert(head.layers[1] && head.layers[1].clip === 'Survey' && head.layers[1].masked === 2, `head layer: ${JSON.stringify(head.layers[1])}`);
+    assert(once.layers[0].clip === 'Survey' && once.layers[0].playing, `space: ${JSON.stringify(once.layers[0])}`);
+    assert(colours.colours > 50, `${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      Run blended in and out of a one-shot; the head layer moves ${head.layers[1].masked} nodes; ${colours.colours} colours`);
+  });
+
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/meadow.pb`, { width: 800, height: 600 });

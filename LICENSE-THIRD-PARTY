@@ -125,6 +125,17 @@ The playground's page layout and scripts follow the DivJS playground
 (https://github.com/akadjoker/divjs-playground), by the same author, MIT.
 
 
+Fox model
+---------
+
+examples/assets/fox/fox.glb is the Fox of the Khronos glTF Sample Assets
+(https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox):
+model by PixelMannen (CC0 1.0); rigging and animation by tomkranis
+(CC BY 4.0, https://creativecommons.org/licenses/by/4.0/); glTF conversion
+by @AsoboStudio and @scurest (CC BY 4.0). fox-run.glb is made from it, with
+only its joints and its Run animation.
+
+
 Apache License 2.0 (Rapier)
 ---------------------------
 

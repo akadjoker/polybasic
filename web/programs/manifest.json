@@ -182,6 +182,18 @@
       ]
     },
     {
+      "id": "skinning",
+      "title": "Skinned fox",
+      "category": "3d",
+      "file": "../examples/skinning.pb",
+      "description": "One mesh on a skeleton with several animations: blend between them (Animate's transition), play one once and go back (AnimateOnce), play another on the head only (AnimateLayer, AnimLayerMask), and take one from a file of its own (LoadAnimSeq). Fox by PixelMannen (CC0), rigged and animated by tomkranis (CC BY 4.0).",
+      "controls": "1 Survey, 2 Walk, 3 Run, T blend, Space look round once, H head layer",
+      "assets": [
+        "assets/fox/fox.glb",
+        "assets/fox/fox-run.glb"
+      ]
+    },
+    {
       "id": "shadows",
       "title": "Shadows",
       "category": "effects",
