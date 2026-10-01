@@ -36,6 +36,9 @@ export class Surface
     this.uvs = [];
     this.colors = [];      // RGBA, linear
     this.triangles = [];
+    this.material = 0;     // which of the entity's materials it is drawn with
+    this.joints = null;    // four joints and weights a vertex, for a skinned
+    this.weights = null;   // model's part
   }
 
   get vertexCount()
@@ -54,6 +57,11 @@ export class Surface
     this.normals.push(0, 0, 0);
     this.uvs.push(u, v);
     this.colors.push(1, 1, 1, 1);
+    if (this.joints)
+    {
+      this.joints.push(0, 0, 0, 0);
+      this.weights.push(1, 0, 0, 0);
+    }
     this.mesh.touch();
     return this.vertexCount - 1;
   }
@@ -113,6 +121,11 @@ export class Surface
       this.normals.length = 0;
       this.uvs.length = 0;
       this.colors.length = 0;
+      if (this.joints)
+      {
+        this.joints.length = 0;
+        this.weights.length = 0;
+      }
     }
     if (triangles) this.triangles.length = 0;
     this.mesh.touch();
@@ -176,18 +189,49 @@ export class EditableMesh extends MeshData
   }
 
   // Makes a mesh a program can change from any MeshData (a built-in shape,
-  // a model part): one surface with its vertices and triangles.
+  // a model part): one surface per submesh, with the vertices its
+  // triangles use and its material.
   static from(data)
   {
     const m = new EditableMesh();
-    const s = new Surface(m);
-    s.positions = Array.from(data.positions);
-    s.normals = Array.from(data.normals);
-    s.uvs = Array.from(data.uvs);
-    s.colors = data.colors ? Array.from(data.colors) : new Array(data.positions.length / 3 * 4).fill(1);
-    s.triangles = Array.from(data.indices);
+    const indices = data.indices;
+    for (const sub of data.submeshes)
+    {
+      const s = new Surface(m);
+      s.material = sub.material;
+      if (data.joints)
+      {
+        s.joints = [];
+        s.weights = [];
+      }
+      const local = new Map();
+      for (let k = sub.start; k < sub.start + sub.count; k++)
+      {
+        const v = indices[k];
+        let i = local.get(v);
+        if (i === undefined)
+        {
+          i = local.size;
+          local.set(v, i);
+          s.positions.push(data.positions[v * 3], data.positions[v * 3 + 1], data.positions[v * 3 + 2]);
+          s.normals.push(data.normals[v * 3], data.normals[v * 3 + 1], data.normals[v * 3 + 2]);
+          s.uvs.push(data.uvs[v * 2], data.uvs[v * 2 + 1]);
+          if (data.colors) for (let c = 0; c < 4; c++) s.colors.push(data.colors[v * 4 + c]);
+          else s.colors.push(1, 1, 1, 1);
+          if (data.joints)
+          {
+            for (let c = 0; c < 4; c++)
+            {
+              s.joints.push(data.joints[v * 4 + c]);
+              s.weights.push(data.weights[v * 4 + c]);
+            }
+          }
+        }
+        s.triangles.push(i);
+      }
+      m.surfaces.push(s);
+    }
     m.colored = !!data.colors;
-    m.surfaces.push(s);
     m.touch();
     return m;
   }
@@ -215,16 +259,30 @@ export class EditableMesh extends MeshData
     const normals = new Float32Array(vertices * 3);
     const uvs = new Float32Array(vertices * 2);
     const colors = new Float32Array(vertices * 4);
+    const skinned = this.surfaces.some((s) => s.joints);
+    const joints = skinned ? new Uint16Array(vertices * 4) : null;
+    const weights = skinned ? new Float32Array(vertices * 4) : null;
     const indices = new Uint32Array(corners);
+    const submeshes = [];
     let base = 0;
     let used = 0;
     for (const s of this.surfaces)
     {
       const n = s.vertexCount;
+      const start = used;
       positions.set(s.positions, base * 3);
       normals.set(s.normals, base * 3);
       uvs.set(s.uvs, base * 2);
       colors.set(s.colors, base * 4);
+      if (skinned)
+      {
+        if (s.joints)
+        {
+          joints.set(s.joints, base * 4);
+          weights.set(s.weights, base * 4);
+        }
+        else for (let i = 0; i < n; i++) weights[(base + i) * 4] = 1;
+      }
       const t = s.triangles;
       for (let k = 0; k < t.length; k += 3)
       {
@@ -236,6 +294,7 @@ export class EditableMesh extends MeshData
         indices[used++] = base + b;
         indices[used++] = base + c;
       }
+      if (used > start) submeshes.push({ start, count: used - start, material: s.material });
       base += n;
     }
     this._positions = positions;
@@ -243,7 +302,9 @@ export class EditableMesh extends MeshData
     this._uvs = uvs;
     this._indices = used === corners ? indices : indices.slice(0, used);
     this._colors = this.colored ? colors : null;
-    this._submeshes = [{ start: 0, count: used, material: 0 }];
+    this._joints = joints;
+    this._weights = weights;
+    this._submeshes = submeshes.length ? submeshes : [{ start: 0, count: 0, material: 0 }];
     this._bounds = new Aabb().fromPositions(positions);
     this._version++;
   }
@@ -258,6 +319,10 @@ export class EditableMesh extends MeshData
   set indices(v) { this._indices = v; }
   get colors() { this.sync(); return this._colors; }
   set colors(v) { this._colors = v; }
+  get joints() { this.sync(); return this._joints; }
+  set joints(v) { this._joints = v; }
+  get weights() { this.sync(); return this._weights; }
+  set weights(v) { this._weights = v; }
   get submeshes() { this.sync(); return this._submeshes; }
   set submeshes(v) { this._submeshes = v; }
   get bounds() { this.sync(); return this._bounds; }
