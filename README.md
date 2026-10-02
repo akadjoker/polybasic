@@ -8,6 +8,8 @@ their animations, picking with the mouse, collisions, physics and sound
 (files, effects and songs made by the engine, and sound placed in the 3D
 world) are built in ([docs/commands-3d.md](docs/commands-3d.md)).
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/akadjoker)
+
 ![The spinning cube example in the playground](docs/screenshots/playground-spin.png)
 
 ```
@@ -177,6 +179,8 @@ tests/                   golden programs, unit tests, browser tests, benchmark
 4. **The full playground**: projects with files, kept in the browser,
    .zip import and export, export to a single page. Done.
 5. **Games**: more original example games written in PolyBasic.
+
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/akadjoker)
 
 ## Licence
 
