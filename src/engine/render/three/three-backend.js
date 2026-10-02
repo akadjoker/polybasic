@@ -25,6 +25,47 @@ function mirrorInto(target, world)
   return target;
 }
 
+// The reflection through a mirror's XZ plane, in PolyBasic space:
+// M * diag(1, -1, 1) * M^-1. three.js turns the triangles of whatever it
+// draws with a mirrored matrix round by itself.
+function reflection(world)
+{
+  const m = new Mat4().fromArray(world);
+  const inverse = m.clone();
+  inverse.invert();
+  const flip = new Mat4();
+  flip.e[5] = -1;
+  return m.multiply(flip).multiply(inverse);
+}
+
+// A skinned model part. Its bones are placeholders: each frame the engine
+// hands over the palette (scene/skin.js), which goes straight into the
+// bone matrices, mirrored into three.js space like every other matrix. The
+// palette is in the part's own space, so the bind matrix is the identity.
+// The part can bend beyond its rest shape's bounds: it is never culled.
+function skinnedMesh(geometry, material, count)
+{
+  const obj = new THREE.SkinnedMesh(geometry, material);
+  const skeleton = new THREE.Skeleton(Array.from({ length: count }, () => new THREE.Bone()));
+  skeleton.update = () =>
+  {
+    const palette = obj.userData.palette;
+    const out = skeleton.boneMatrices;
+    if (!palette) return;
+    for (let j = 0; j < count; j++)
+    {
+      const o = j * 16;
+      for (let i = 0; i < 16; i++) out[o + i] = palette[o + i];
+      for (const i of MIRRORED) out[o + i] = -out[o + i];
+    }
+    if (skeleton.boneTexture) skeleton.boneTexture.needsUpdate = true;
+  };
+  obj.bindMode = THREE.DetachedBindMode;
+  obj.bind(skeleton, new THREE.Matrix4());
+  obj.frustumCulled = false;
+  return obj;
+}
+
 // The RGBA bytes of an image, top row first.
 function imagePixels(image)
 {
@@ -179,8 +220,24 @@ export class ThreeBackend extends RenderBackend
       r.setClearColor(srgb(new THREE.Color(), cam.clearColor), 1);
       r.clear(true, true, true);
       const camera = this.syncCamera(cam, w / h);
-      this.faceSprites(cam.world);
       this.fitShadows(camera);
+      const mirrors = frame.mirrors || [];
+      for (const m of mirrors)
+      {
+        const reflect = reflection(m.world);
+        // Sprites face the camera as seen in the mirror.
+        this.faceSprites(new Mat4().multiplyMatrices(reflect, new Mat4().fromArray(cam.world)).e);
+        mirrorInto(this.scene.matrix, reflect.e);
+        this.scene.matrixAutoUpdate = false;
+        this.scene.updateMatrixWorld(true);
+        r.render(this.scene, camera);
+      }
+      if (mirrors.length)
+      {
+        this.scene.matrix.identity();
+        this.scene.updateMatrixWorld(true);
+      }
+      this.faceSprites(cam.world);
       r.render(this.scene, camera);
     }
   }
@@ -200,13 +257,20 @@ export class ThreeBackend extends RenderBackend
     // submeshes share it (the built-in shapes).
     const materials = item.materials.map((m) => this.material(m));
     const material = materials.length === 1 ? materials[0] : materials;
+    const skinned = !!(item.skin && item.mesh.joints);
+    if (obj && (obj.isSkinnedMesh === true) !== skinned)
+    {
+      this.scene.remove(obj);
+      obj = null;
+    }
     if (!obj)
     {
-      obj = new THREE.Mesh(geometry, material);
+      obj = skinned ? skinnedMesh(geometry, material, item.skin.length / 16) : new THREE.Mesh(geometry, material);
       obj.matrixAutoUpdate = false;
       this.objects.set(item.id, obj);
       this.scene.add(obj);
     }
+    if (skinned) obj.userData.palette = item.skin;
     obj.geometry = geometry;
     obj.material = material;
     obj.visible = true;
@@ -358,7 +422,11 @@ uniform vec4 pbPushers[8];`)
   geometry(mesh)
   {
     const known = this.geometries.get(mesh.id);
-    if (known && known.version === mesh.version) return known.geometry;
+    if (known && known.version === mesh.version)
+    {
+      if (known.pose !== mesh.pose) this.pose(known, mesh);
+      return known.geometry;
+    }
     if (known) known.geometry.dispose();
 
     const positions = Float32Array.from(mesh.positions);
@@ -380,11 +448,44 @@ uniform vec4 pbPushers[8];`)
     g.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
     g.setAttribute('uv', new THREE.BufferAttribute(Float32Array.from(mesh.uvs), 2));
     if (mesh.colors) g.setAttribute('color', new THREE.BufferAttribute(Float32Array.from(mesh.colors), 4));
+    if (mesh.joints)
+    {
+      g.setAttribute('skinIndex', new THREE.BufferAttribute(Uint16Array.from(mesh.joints), 4));
+      g.setAttribute('skinWeight', new THREE.BufferAttribute(Float32Array.from(mesh.weights), 4));
+    }
     g.setIndex(new THREE.BufferAttribute(indices, 1));
     for (const s of mesh.submeshes) g.addGroup(s.start, s.count, s.material);
-    g.computeBoundingSphere();
-    this.geometries.set(mesh.id, { geometry: g, version: mesh.version });
+    // A mesh that changes its pose (MD2) is culled by the box round all
+    // its frames, not by the one it was first drawn in.
+    if (mesh.pose === undefined) g.computeBoundingSphere();
+    else
+    {
+      const b = mesh.bounds;
+      const c = new THREE.Vector3((b.min.x + b.max.x) / 2, (b.min.y + b.max.y) / 2, -(b.min.z + b.max.z) / 2);
+      g.boundingSphere = new THREE.Sphere(c, Math.hypot(b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z) / 2);
+    }
+    this.geometries.set(mesh.id, { geometry: g, version: mesh.version, pose: mesh.pose });
     return g;
+  }
+
+  // New positions and normals into the same buffers: nothing else of the
+  // mesh changed.
+  pose(known, mesh)
+  {
+    const position = known.geometry.getAttribute('position');
+    const normal = known.geometry.getAttribute('normal');
+    const p = position.array;
+    const n = normal.array;
+    p.set(mesh.positions);
+    n.set(mesh.normals);
+    for (let i = 2; i < p.length; i += 3)
+    {
+      p[i] = -p[i];
+      n[i] = -n[i];
+    }
+    position.needsUpdate = true;
+    normal.needsUpdate = true;
+    known.pose = mesh.pose;
   }
 
   material(m)

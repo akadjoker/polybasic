@@ -4,6 +4,7 @@
 // are those of all its parts, and its box is the box around them.
 
 import { Vec3 } from '../math/vec3.js';
+import { shapeMesh } from '../scene/skin.js';
 
 // The entities whose triangles make up e: e itself when it has a mesh, the
 // shown parts of a model, or none.
@@ -35,9 +36,9 @@ export function localBox(e)
     const [x, y, z, w, h, d] = e.box;
     return { min: [x, y, z], max: [x + w, y + h, z + d] };
   }
-  if (e.mesh && !e.mesh.bounds.isEmpty())
+  if (e.mesh && !shapeMesh(e).bounds.isEmpty())
   {
-    const b = e.mesh.bounds;
+    const b = shapeMesh(e).bounds;
     return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
   }
   const parts = e.mesh ? [] : meshParts(e);
@@ -49,7 +50,7 @@ export function localBox(e)
     const p = new Vec3();
     for (const part of parts)
     {
-      const b = part.mesh.bounds;
+      const b = shapeMesh(part).bounds;
       for (let i = 0; i < 8; i++)
       {
         p.set(i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z).applyMat4(part.worldMatrix).applyMat4(inv);
@@ -125,7 +126,7 @@ export function shapeBounds(e, mode)
     const hi = [-Infinity, -Infinity, -Infinity];
     for (const part of meshParts(e))
     {
-      if (part.mesh.bounds.isEmpty()) continue;
+      if (shapeMesh(part).bounds.isEmpty()) continue;
       const b = part.worldBounds();
       lo[0] = Math.min(lo[0], b.min.x);
       lo[1] = Math.min(lo[1], b.min.y);

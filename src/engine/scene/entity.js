@@ -10,6 +10,7 @@
 import { Vec3 } from '../math/vec3.js';
 import { Quat } from '../math/quat.js';
 import { Mat4 } from '../math/mat4.js';
+import { shapeMesh } from './skin.js';
 
 const DEG = 180 / Math.PI;
 
@@ -18,7 +19,7 @@ export class Entity
   constructor(id, kind)
   {
     this.id = id;
-    this.kind = kind;       // 'pivot' | 'mesh' | 'camera' | 'light'
+    this.kind = kind;       // 'pivot' | 'mesh' | 'camera' | 'light' | 'mirror' | 'grass'
     this.name = '';
     this.parent = null;
     this.children = [];
@@ -36,6 +37,9 @@ export class Entity
     this.materials = [];
     this.surfaces = null;   // a model part's own materials (see brush.js)
     this.brush = null;      // a model's entity brush
+    this.md2 = null;        // an MD2 model's player (model/md2.js)
+    this.skin = null;       // a skinned model part's joints and palette (scene/skin.js)
+    this.md2Waiting = null; // what waits for an MD2 file still loading
     this.camera = null;
     this.light = null;
     this.sprite = null;     // a sprite's settings (scene/sprite.js); its mesh is the square
@@ -240,6 +244,6 @@ export class Entity
   // Collision and picking in phase 3 start here.
   worldBounds()
   {
-    return this.mesh ? this.mesh.bounds.transformed(this.worldMatrix) : null;
+    return this.mesh ? shapeMesh(this).bounds.transformed(this.worldMatrix) : null;
   }
 }

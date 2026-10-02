@@ -56,6 +56,7 @@ const MIME = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.bmp': 'image/bmp',
+  '.md2': 'application/octet-stream',
   '.wav': 'audio/wav'
 };
 
@@ -254,7 +255,11 @@ const canvasStats = (canvas) =>
     colours.add((d[i] << 16) | (d[i + 1] << 8) | d[i + 2]);
     hash = (Math.imul(hash, 31) + d[i] + d[i + 1] * 7 + d[i + 2] * 13) | 0;
   }
-  return { colours: colours.size, hash, width: copy.width, height: copy.height, corner: Array.from(d.slice(0, 3)) };
+  // Pixels not of the corner's colour: a small thing drawn on a plain
+  // background shows here when the sampled colours miss it.
+  let drawn = 0;
+  for (let i = 0; i < d.length; i += 4) if (d[i] !== d[0] || d[i + 1] !== d[1] || d[i + 2] !== d[2]) drawn++;
+  return { colours: colours.size, drawn, hash, width: copy.width, height: copy.height, corner: Array.from(d.slice(0, 3)) };
 };
 
 // All the pixels of a canvas (RGBA bytes), found by a selector or the
@@ -1123,7 +1128,7 @@ End Function
       else
       {
         const s = await pgStats();
-        assert(s.colours > 20, `${entry.id}: blank canvas (${s.colours} colours)`);
+        assert(s.colours > 20 || s.drawn > 1000, `${entry.id}: blank canvas (${s.colours} colours, ${s.drawn} pixels drawn)`);
       }
       if (entry.id === 'spin' || entry.id === 'orbits') await playground.screenshot({ path: join(SHOTS, `playground-${entry.id}.png`) });
     }
@@ -1947,24 +1952,20 @@ End Function
     // 2. Space plays the jump once, then the idle loop again.
     page = await openPage(browser, `${base}/web/player.html?src=../examples/t02-animation.pb`, { width: 800, height: 600 });
     await waitRunning(page);
-    const anim = () => page.evaluate(() =>
+    // Layer 0 of the model's animator: which clip (numbered from 1), how
+    // and whether it plays.
+    const layerZero = `(() =>
     {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m ? { index: m.model.state.index, mode: m.model.state.mode, playing: m.model.state.playing } : null;
-    });
+      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const l = m && m.model.animator.layers[0];
+      return l && l.current ? { index: m.model.clips.indexOf(l.current.clip) + 1, mode: l.current.mode, playing: l.playing } : null;
+    })()`;
+    const anim = () => page.evaluate(layerZero);
     await page.keyboard.press('Space');
-    await page.waitForFunction(() =>
-    {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m && m.model.state.index === 4;
-    }, null, { timeout: 20000 });
+    await page.waitForFunction(`(${layerZero} || {}).index === 4`, null, { timeout: 20000 });
     const jumping = await anim();
-    await page.waitForFunction(() =>
-    {
-      const m = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.state);
-      return m && m.model.state.index === 2 && m.model.state.playing;
-    }, null, { timeout: 20000 });
-    assert(jumping.mode === 2, `the jump did not play once: ${JSON.stringify(jumping)}`);
+    await page.waitForFunction(`(() => { const l = ${layerZero}; return l && l.index === 2 && l.playing; })()`, null, { timeout: 20000 });
+    assert(jumping.mode === 3, `the jump did not play once: ${JSON.stringify(jumping)}`);
     facts.push('jump played once, then idle');
     noConsoleErrors(page);
     await page.close();
@@ -2100,6 +2101,199 @@ End Function
     noConsoleErrors(page);
     await page.close();
     console.log(`      landed at ${landed.y.toFixed(2)} over ${landed.ground.toFixed(2)}; drove ${travelled.toFixed(1)} units; ${landed.parts} parts; ${colours.colours} colours`);
+  });
+
+  await check('md2.pb: a hundred MD2 flags wave, each posed in place in its own buffers; ping-pong, once and stop', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/md2.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const flags = () => page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const shown = engine.world.entities.filter((e) => e.md2 && e.visible);
+      const backend = engine.backend;
+      const first = shown[0];
+      const known = backend.geometries.get(first.mesh.id);
+      return {
+        count: shown.length,
+        playing: shown.filter((e) => e.md2.animating).length,
+        meshes: new Set(shown.map((e) => e.mesh.id)).size,
+        pose: first.mesh.pose,
+        drawnPose: known ? known.pose : -1,
+        buffer: known ? known.geometry.getAttribute('position').array.length : 0,
+        y: first.mesh.positions[3 * 60 + 2],
+        time: first.md2.time,
+        mode: first.md2.mode
+      };
+    });
+    await page.waitForTimeout(600);
+    const a = await flags();
+    const geometryA = await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const e = engine.world.entities.find((x) => x.md2 && x.visible);
+      window.__flagGeometry = engine.backend.geometries.get(e.mesh.id).geometry;
+      return true;
+    });
+    await page.waitForTimeout(400);
+    const b = await flags();
+    const same = await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      const e = engine.world.entities.find((x) => x.md2 && x.visible);
+      return engine.backend.geometries.get(e.mesh.id).geometry === window.__flagGeometry;
+    });
+    await page.screenshot({ path: join(SHOTS, 'md2.png') });
+    const colours = await playerStats(page);
+    await page.keyboard.press('Digit2');
+    await page.waitForTimeout(300);
+    const pingpong = await flags();
+    await page.keyboard.press('Digit3');
+    await page.waitForFunction(() => window.polybasicPlayer.state.engine.world.entities.filter((e) => e.md2 && e.visible && e.md2.animating).length === 0, null, { timeout: 20000 });
+    const once = await flags();
+    // Stopping with the blend on first blends back to the first frame.
+    // (12 steps, 0.2 s).
+    await page.keyboard.press('Digit0');
+    await page.waitForTimeout(700);
+    const stopped = await flags();
+    await page.waitForTimeout(300);
+    const still = await flags();
+    assert(geometryA && a.count === 99 && a.playing === 99, `${a.count} flags, ${a.playing} playing`);
+    assert(a.meshes === 99, `the flags share ${a.meshes} meshes: each needs its own pose`);
+    assert(b.pose > a.pose && b.drawnPose === b.pose, `pose ${a.pose} -> ${b.pose}, drawn ${b.drawnPose}`);
+    assert(same, 'the geometry was built again instead of posed in place');
+    assert(b.y !== a.y, 'the flag did not move');
+    assert(pingpong.mode === 2, `mode after 2: ${pingpong.mode}`);
+    assert(once.time === 20, `once stopped at frame ${once.time}`);
+    assert(stopped.playing === 0 && stopped.mode === 0 && still.pose === stopped.pose, `stopped yet posed again: ${stopped.pose} -> ${still.pose}`);
+    assert(stopped.time === 0, `stop did not go back to the first frame: ${stopped.time}`);
+    assert(colours.colours > 200, `the flags are not textured: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${a.count} flags, ${a.buffer / 3} vertices each; pose ${a.pose} -> ${b.pose} in the same buffers; once ended at frame ${once.time}; ${colours.colours} colours`);
+  });
+
+  await check('dragon.pb: the MD2 dragon idles, textured, and shows in the mirror floor', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/dragon.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const dragon = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.md2);
+      return { time: e.md2.time, animating: e.md2.animating, frames: e.md2.frameCount, textured: !!(e.material.texture && e.material.texture.loaded) };
+    });
+    await page.waitForTimeout(700);
+    const a = await dragon();
+    await page.waitForTimeout(500);
+    const b = await dragon();
+    await page.screenshot({ path: join(SHOTS, 'dragon.png') });
+    // The mirror: a column of pixels under the dragon's feet, seen with the
+    // mirror and without it.
+    const column = () => page.evaluate(() =>
+    {
+      const canvas = document.querySelector('canvas');
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const x = Math.round(canvas.width / 2);
+      return Array.from(ctx.getImageData(x, Math.round(canvas.height * 0.55), 1, Math.round(canvas.height * 0.4)).data);
+    });
+    const withMirror = await column();
+    await page.evaluate(() =>
+    {
+      const engine = window.polybasicPlayer.state.engine;
+      for (const e of engine.world.entities) if (e.kind === 'mirror') e.visible = false;
+    });
+    await page.waitForTimeout(300);
+    const without = await column();
+    let differ = 0;
+    for (let i = 0; i < withMirror.length; i += 4)
+    {
+      if (Math.abs(withMirror[i] - without[i]) + Math.abs(withMirror[i + 1] - without[i + 1]) + Math.abs(withMirror[i + 2] - without[i + 2]) > 30) differ++;
+    }
+    assert(a.frames === 200 && a.animating && b.time !== a.time && b.time >= 0 && b.time < 40, `dragon ${JSON.stringify(a)} -> ${JSON.stringify(b)}`);
+    assert(a.textured, 'the dragon has no texture');
+    assert(differ > 20, `the mirror changes only ${differ} pixels under the dragon`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      frame ${a.time.toFixed(2)} -> ${b.time.toFixed(2)} of ${a.frames}; the reflection changes ${differ} pixels under the dragon`);
+  });
+
+  await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const man = () => page.evaluate(() =>
+    {
+      const e = window.polybasicPlayer.state.engine.world.entities.find((x) => x.md2);
+      return { time: e.md2.time, first: e.md2.first, last: e.md2.last, z: e.worldPosition().z };
+    });
+    await page.waitForTimeout(500);
+    const a = await man();
+    await page.waitForTimeout(1500);
+    const b = await man();
+    await page.screenshot({ path: join(SHOTS, 'gcuk-animation.png') });
+    const colours = await playerStats(page);
+    assert(a.first === 32 && a.last === 46 && a.time >= 32 && a.time < 46, `walking frames ${JSON.stringify(a)}`);
+    assert(b.z < a.z - 20, `it did not come closer: z ${a.z} -> ${b.z}`);
+    assert(colours.colours > 20, `nothing drawn: ${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      frame ${a.time.toFixed(1)} of 32-46; z ${a.z.toFixed(0)} -> ${b.z.toFixed(0)}`);
+  });
+
+  await check('skinning.pb: the fox bends on its skeleton, blends into Run from another file, a head layer and a one-shot', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/skinning.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const fox = () => page.evaluate(() =>
+    {
+      const fox = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const part = fox.model.nodes.find((n) => n && n.skin);
+      const layers = fox.model.animator.layers.map((l) => ({
+        clip: l.current ? l.current.clip.name : null,
+        playing: l.playing,
+        blending: !!l.previous,
+        masked: l.mask ? Array.from(l.mask).filter((w) => w > 0).length : -1
+      }));
+      return { palette: Array.from(part.skin.palette.slice(16 * 5, 16 * 5 + 16)), layers, clips: fox.model.clips.length };
+    });
+    await page.waitForTimeout(400);
+    const a = await fox();
+    await page.waitForTimeout(300);
+    const b = await fox();
+    await page.keyboard.press('Digit3');
+    await page.waitForTimeout(80);
+    const blending = await fox();
+    await page.waitForTimeout(600);
+    const running = await fox();
+    await page.keyboard.press('KeyH');
+    await page.waitForTimeout(200);
+    const head = await fox();
+    await page.screenshot({ path: join(SHOTS, 'skinning.png') });
+    const colours = await playerStats(page);
+    await page.keyboard.press('Space');
+    await page.waitForTimeout(100);
+    const once = await fox();
+    await page.waitForFunction(() =>
+    {
+      const fox = window.polybasicPlayer.state.engine.world.entities.find((e) => e.model && e.model.animator);
+      const l = fox.model.animator.layers[0];
+      return l.current && l.current.clip.name === 'Run' && l.playing;
+    }, null, { timeout: 20000 });
+    assert(a.clips === 4, `${a.clips} animations: Run was not added`);
+    assert(a.palette.some((v, i) => Math.abs(v - b.palette[i]) > 1e-4), 'the skeleton does not move');
+    assert(blending.layers[0].clip === 'Run' && blending.layers[0].blending, `pressing 3: ${JSON.stringify(blending.layers[0])}`);
+    assert(running.layers[0].clip === 'Run' && !running.layers[0].blending, `after the blend: ${JSON.stringify(running.layers[0])}`);
+    // b_Neck_04 and the one node below it, b_Head_05.
+    assert(head.layers[1] && head.layers[1].clip === 'Survey' && head.layers[1].masked === 2, `head layer: ${JSON.stringify(head.layers[1])}`);
+    assert(once.layers[0].clip === 'Survey' && once.layers[0].playing, `space: ${JSON.stringify(once.layers[0])}`);
+    assert(colours.colours > 50, `${colours.colours} colours`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      Run blended in and out of a one-shot; the head layer moves ${head.layers[1].masked} nodes; ${colours.colours} colours`);
   });
 
   await check('meadow.pb: the walker goes through the grass, a click plants a flower, fireflies leave trails', async () =>

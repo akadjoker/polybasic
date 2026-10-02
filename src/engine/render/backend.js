@@ -19,6 +19,10 @@
 //     lights:  [{ id, world, type, color, range, shadows }],  type 1 directional, 2 point;
 //              shadows 0: none, otherwise the width of the square around the
 //              camera a directional light's shadows cover
+//     mirrors: [{ id, world }]: for each camera, the world is first drawn
+//              reflected through each mirror's XZ plane (triangles turned
+//              round), then drawn as it is over that, without clearing
+//              the depth, as Blitz3D does (world.cpp)
 //     items:   [{ id, world, mesh, materials, castShadow, receiveShadow, sprite }],
 //              mesh: MeshData, materials: [Material]; sprite: null, or a
 //              sprite's settings: draw it with scene/sprite.js's
@@ -34,7 +38,9 @@
 // `world` is a column-major 4x4 matrix (Float64Array) in PolyBasic space:
 // left-handed, X right, Y up, Z forward; cameras look along their +Z.
 // Colours are 0..1. Meshes, materials and textures carry `id` and
-// `version`: re-upload when the version changes. Triangles are clockwise
+// `version`: re-upload when the version changes. A mesh with a `pose`
+// count (MD2 models) changes only its positions and normals when the pose
+// changes, and `bounds` covers every pose. Triangles are clockwise
 // when seen from the front; texture UV (0, 0) is the top-left pixel.
 
 export class RenderBackend

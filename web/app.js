@@ -763,6 +763,7 @@ function showAsset(path)
     use = `sound = LoadSound("${from}")`;
   }
   else if (ext === 'glb' || ext === 'gltf') use = `model = LoadMesh("${from}")`;
+  else if (ext === 'md2') use = `model = LoadMD2("${from}")`;
   if (use)
   {
     const hint = document.createElement('p');

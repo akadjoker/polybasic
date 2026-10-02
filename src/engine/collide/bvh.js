@@ -222,9 +222,10 @@ export function meshBvh(mesh)
 {
   // A terrain answers from its grid instead (scene/terrain.js).
   if (mesh.grid) return mesh.grid;
-  if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version)
+  // A posed mesh (MD2) is built again only when asked after a new pose.
+  if (!mesh.bvhCache || mesh.bvhCache.version !== mesh.version || mesh.bvhCache.pose !== mesh.pose)
   {
-    mesh.bvhCache = { version: mesh.version, bvh: new MeshBvh(mesh.positions, mesh.indices) };
+    mesh.bvhCache = { version: mesh.version, pose: mesh.pose, bvh: new MeshBvh(mesh.positions, mesh.indices) };
   }
   return mesh.bvhCache.bvh;
 }

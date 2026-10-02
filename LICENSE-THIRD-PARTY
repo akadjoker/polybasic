@@ -10,6 +10,11 @@ and src/compiler/semant.js) are derived from the Blitz3D compiler,
 and changed substantially; the tokenising rules, the statement and expression
 parser structure and the typing rules come from it.
 
+The MD2 reader and player (src/engine/model/md2.js) follow Blitz3D's
+md2rep.cpp and md2model.cpp, translated to JavaScript; the table of MD2
+normals (src/engine/model/md2-normals.js) is copied from its md2norms.cpp
+(it is the table of the Quake 2 MD2 format).
+
 The Blitz3D sources carry this licence:
 
   This software is provided 'as-is', without any express or implied
@@ -111,9 +116,24 @@ open source release (https://github.com/blitz-research/blitz3d,
 _release/samples), Copyright (c) 2013 Blitz Research Ltd, under the same
 zlib/libpng licence as the Blitz3D compiler above. Models among them were
 converted to glTF for PolyBasic.
+The dragon (examples/assets/blitz3d/dragon) is credited in its sample as
+"MD2 Dragon model courtesy of Polycount"; the gargoyle
+(examples/assets/blitz3d/gcuk) comes with Paul Gerfen's GCUK tutorials
+(www.gamecoding.co.uk) in the same release.
 
 The playground's page layout and scripts follow the DivJS playground
 (https://github.com/akadjoker/divjs-playground), by the same author, MIT.
+
+
+Fox model
+---------
+
+examples/assets/fox/fox.glb is the Fox of the Khronos glTF Sample Assets
+(https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox):
+model by PixelMannen (CC0 1.0); rigging and animation by tomkranis
+(CC BY 4.0, https://creativecommons.org/licenses/by/4.0/); glTF conversion
+by @AsoboStudio and @scurest (CC BY 4.0). fox-run.glb is made from it, with
+only its joints and its Run animation.
 
 
 Apache License 2.0 (Rapier)

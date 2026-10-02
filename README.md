@@ -67,8 +67,8 @@ controlling an animation to first-person, free-look and orbit cameras
 **Visual effects** show each 3D effect on its own, with keys
 to switch it: shadows, texture flags, sprites, building meshes, decals,
 ribbon trails, trees, grass and terrain; those under **Blitz3D samples**
-are programs that came with Blitz3D, ported (the first is its driving
-sample). The full story is in
+are programs that came with Blitz3D, ported: the driving sample, the
+MD2 dragon over a mirror floor, and the GCUK animation tutorial. The full story is in
 [docs/playground.md](docs/playground.md).
 
 ![A project in the playground](docs/screenshots/playground-project.png)

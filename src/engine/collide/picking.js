@@ -10,6 +10,7 @@
 // ray, so it finds what a ball of that size would hit first.
 
 import { meshBvh } from './bvh.js';
+import { shapeMesh } from '../scene/skin.js';
 import { newHit, sweepTriangle, sweepSphere, rayTriangle, raySphere } from './sweep.js';
 import { boxTriangles, shapeBounds, segmentNearBox, meshParts } from './shapes.js';
 import { Entity } from '../scene/entity.js';
@@ -135,7 +136,7 @@ function rayMesh(e, origin, line, best)
   if (!inv.invert()) return;
   const o = origin.clone().applyMat4(inv);
   const d = line.clone().applyMat4Direction(inv);
-  const bvh = meshBvh(e.mesh);
+  const bvh = meshBvh(shapeMesh(e));
   const tri = new Float64Array(9);
   const hit = newHit(best.t);
   let got = false;
@@ -197,7 +198,7 @@ export function meshTrianglesNear(e, origin, line, pad, visit, inv = null)
     lhi[1] = Math.max(lhi[1], p.y);
     lhi[2] = Math.max(lhi[2], p.z);
   }
-  const bvh = meshBvh(e.mesh);
+  const bvh = meshBvh(shapeMesh(e));
   const m = e.worldMatrix.e;
   // A mirrored entity turns its triangles inside out; they are turned back
   // so one-sided tests keep the right front.

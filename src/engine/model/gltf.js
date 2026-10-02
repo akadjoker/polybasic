@@ -6,6 +6,7 @@
 //   { nodes:      [{ name, position, rotation, scale, mesh, children }],
 //     roots:      [node index],             the scene's top nodes
 //     meshes:     [{ mesh: MeshData, materials: [Material] }],
+//     skins:      [{ joints: [node index], inverseBind: Float32Array (16 per joint) }],
 //     animations: [{ name, duration, channels: [{ node, path, interpolation, times, values }] }] }
 //
 // glTF space is right-handed (+Y up, +Z the front of a model, +X its
@@ -20,8 +21,9 @@
 // UVs, vertex colours, materials (base colour factor and texture, alpha
 // modes, double-sided, KHR_materials_unlit, KHR_texture_transform),
 // samplers, the node tree and node animations (translation, rotation,
-// scale; linear, step and cubic spline).
-// Not read: skins and morph targets (the model shows in its rest pose),
+// scale; linear, step and cubic spline), skins (JOINTS_0, WEIGHTS_0 and
+// each skin's joints and inverse bind matrices).
+// Not read: morph targets (the model shows its base shape),
 // cameras and lights in the file, and compressed data (Draco, meshopt,
 // Basis textures), which is reported as an error when the file needs it.
 
@@ -332,6 +334,9 @@ class Reader
     const normals = [];
     const uvs = [];
     const colors = [];
+    const joints = [];
+    const weights = [];
+    let skinned = false;
     const indices = [];
     const submeshes = [];
     const materials = [];
@@ -359,6 +364,9 @@ class Reader
       const col = attr.COLOR_0 !== undefined ? this.accessor(attr.COLOR_0) : null;
       const colSize = col ? SIZES[this.json.accessors[attr.COLOR_0].type] : 0;
       if (col) hasColors = true;
+      const jnt = attr.JOINTS_0 !== undefined ? this.accessor(attr.JOINTS_0) : null;
+      const wgt = attr.WEIGHTS_0 !== undefined ? this.accessor(attr.WEIGHTS_0) : null;
+      if (jnt && wgt) skinned = true;
 
       // Without normals, glTF asks for flat shading: every triangle gets
       // its own corners.
@@ -389,6 +397,21 @@ class Reader
         uvs.push(u, w);
         if (col) colors.push(col[v * colSize], col[v * colSize + 1], col[v * colSize + 2], colSize === 4 ? col[v * colSize + 3] : 1);
         else colors.push(1, 1, 1, 1);
+        if (jnt && wgt)
+        {
+          // The four weights add up to 1 (exporters round them).
+          const sum = wgt[v * 4] + wgt[v * 4 + 1] + wgt[v * 4 + 2] + wgt[v * 4 + 3];
+          for (let k = 0; k < 4; k++)
+          {
+            joints.push(jnt[v * 4 + k]);
+            weights.push(sum > 0 ? wgt[v * 4 + k] / sum : (k === 0 ? 1 : 0));
+          }
+        }
+        else
+        {
+          joints.push(0, 0, 0, 0);
+          weights.push(1, 0, 0, 0);
+        }
       }
       const start = indices.length;
       if (flat)
@@ -416,6 +439,11 @@ class Reader
     const data = new MeshData(positions, normals, uvs, indices);
     data.submeshes = submeshes.length ? submeshes : data.submeshes;
     if (hasColors) data.colors = Float32Array.from(colors);
+    if (skinned)
+    {
+      data.joints = Uint16Array.from(joints);
+      data.weights = Float32Array.from(weights);
+    }
     const mats = materials.map((i) =>
     {
       const m = this.material(i).clone();
@@ -450,13 +478,13 @@ class Reader
       rotation.set(r[0], -r[1], -r[2], r[3]).normalize();
       scale.set(s[0], s[1], s[2]);
     }
-    if (n.skin !== undefined) this.warnOnce('skin', 'the model is skinned, which PolyBasic does not play yet: it shows in its rest pose');
     return {
       name: n.name || '',
       position,
       rotation,
       scale,
       mesh: n.mesh !== undefined ? n.mesh : -1,
+      skin: n.skin !== undefined ? n.skin : -1,
       children: n.children || [],
       index
     };
@@ -512,7 +540,28 @@ class Reader
       roots = nodes.map((_, i) => i).filter((i) => !child.has(i));
     }
     const animations = (json.animations || []).map((a, i) => this.animation(a, i));
-    return { nodes, roots, meshes, animations };
+    const skins = (json.skins || []).map((k) => this.skin(k));
+    for (const n of nodes)
+    {
+      if (n.skin >= skins.length)
+      {
+        this.warnOnce('skin', `node "${n.name}" uses skin ${n.skin}, which the file does not have: it shows in its rest pose`);
+        n.skin = -1;
+      }
+    }
+    return { nodes, roots, meshes, skins, animations };
+  }
+
+  // A skin's joints and their inverse bind matrices, mirrored as the nodes
+  // are (S M S).
+  skin(k)
+  {
+    const n = k.joints.length;
+    const inverseBind = new Float32Array(n * 16);
+    if (k.inverseBindMatrices !== undefined) inverseBind.set(this.accessor(k.inverseBindMatrices).subarray(0, n * 16));
+    else for (let j = 0; j < n; j++) for (const i of [0, 5, 10, 15]) inverseBind[j * 16 + i] = 1;
+    for (let j = 0; j < n; j++) for (const i of [1, 2, 3, 4, 8, 12]) inverseBind[j * 16 + i] = -inverseBind[j * 16 + i];
+    return { joints: k.joints.slice(), inverseBind };
   }
 }
 

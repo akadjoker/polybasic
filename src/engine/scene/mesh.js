@@ -24,6 +24,8 @@ export class MeshData
     this.indices = Uint32Array.from(indices);
     this.submeshes = [{ start: 0, count: this.indices.length, material: 0 }];
     this.colors = null;       // optional RGBA per vertex (0..1, linear), from models
+    this.joints = null;       // skinned models: four joint numbers a vertex (Uint16Array)
+    this.weights = null;      // and their weights, adding up to 1 (Float32Array)
     this.bounds = new Aabb().fromPositions(this.positions);
   }
 

@@ -538,9 +538,14 @@ class Generator
 
   call(e)
   {
-    // A file named in quotes can be fetched before main runs, so that the
-    // engine can load it at once (LoadTerrain needs the heightmap's size).
-    if (!e.fn && e.args.length && e.args[0].kind === 'string') this.files.add(JSON.stringify([e.cmd.key, e.args[0].value]));
+    // A file named in quotes (the command's `file$` argument) can be
+    // fetched before main runs, so that the engine can load it at once
+    // (LoadTerrain needs the heightmap's size).
+    if (!e.fn)
+    {
+      const at = e.cmd.params.findIndex((p) => p.name === 'file');
+      if (at >= 0 && e.args[at] && e.args[at].kind === 'string') this.files.add(JSON.stringify([e.cmd.key, e.args[at].value]));
+    }
     const args = e.args.map((a) => bare(this.expr(a)));
     if (e.fn) return `${e.fn.js}(${args.join(', ')})`;
     if (e.cmd.inline) return e.cmd.inline.replace(/\$(\d)/g, (m, i) => wrap(args[Number(i)]));

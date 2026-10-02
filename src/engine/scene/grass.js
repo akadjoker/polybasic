@@ -5,9 +5,8 @@
 // simulated per tuft, so a field of fifty thousand costs the program
 // nothing but its memory.
 //
-// Adapted from Radion's grass (Grass.cpp and its shaders), which culls and
-// simulates the blades in compute shaders; WebGL has none, so here the
-// bending is worked out afresh every frame from the wind and the pushers.
+// WebGL has no compute shaders to simulate the blades, so the bending is
+// worked out afresh every frame from the wind and the pushers.
 
 import { MeshData } from './mesh.js';
 

@@ -2,7 +2,8 @@
 // file's nodes become entities below it when it has arrived. The pivot
 // keeps the model (`e.model`) for its animations.
 //
-//   e.model = { data, nodes: [entity per glTF node], state, loaded, failed,
+//   e.model = { data, nodes: [entity per glTF node], clips: [animations],
+//               animator (animator.js), loaded, failed,
 //               waiting: [what to do once it has arrived] }
 //
 // Commands that need the parts (CopyEntity, EntityBody, Animate) on a model
@@ -14,7 +15,8 @@
 // files arrive in, so entity handles come out the same on every run.
 
 import { readGltf } from './gltf.js';
-import { pose, advance, ANIM_STOP } from './animation.js';
+import { ANIM_STOP, ANIM_ONCE } from './animation.js';
+import { Animator } from './animator.js';
 import { paintModel } from '../scene/brush.js';
 
 export class Models
@@ -135,8 +137,10 @@ export class Models
     for (const r of data.roots) make(r, root);
     const m = root.model;
     m.data = data;
+    m.clips = data.animations.slice();
     m.nodes = nodes;
     m.loaded = true;
+    bindSkins(m);
     paintModel(root);
     const waiting = m.waiting;
     m.waiting = [];
@@ -160,6 +164,7 @@ export class Models
       return;
     }
     dst.model.data = m.data;
+    dst.model.clips = m.clips.slice();
     dst.model.loaded = true;
     dst.model.nodes = m.nodes.map((node) =>
     {
@@ -170,70 +175,162 @@ export class Models
       for (const i of path) e = e ? e.children[i] : null;
       return e || null;
     });
+    bindSkins(dst.model);
+    if (m.animator) dst.model.animator = m.animator.copyFor(dst.model);
   }
 
-  play(root, index, mode, speed)
+  // Plays clip `index` (1-based; 0 stops) on a layer of the model, blending
+  // from what that layer played over `transition` seconds; an ANIM_ONCE
+  // clip can go on to clip `then` when it ends. A model still loading
+  // starts it when it arrives.
+  play(root, index, mode, speed, transition = 0, layer = 0, then = 0)
   {
     const m = root.model;
     if (!m.loaded)
     {
       this.whenLoaded(root, () =>
       {
-        if (index > m.data.animations.length)
+        const count = m.clips.length;
+        if (index > count || then > count)
         {
-          this.engine.warn(`Animate: the model has ${m.data.animations.length} animations, not number ${index}`);
+          this.engine.warn(`Animate: the model has ${count} animations, not number ${Math.max(index, then)}`);
           return;
         }
-        this.play(root, index, mode, speed);
+        this.play(root, index, mode, speed, transition, layer, then);
       });
       return;
     }
+    const a = animatorOf(m);
     if (mode === ANIM_STOP || index === 0)
     {
-      m.state = null;
-      this.animated.delete(root);
+      a.stop(layer);
       return;
     }
-    m.state = { index, mode, speed, time: speed < 0 ? m.data.animations[index - 1].duration : 0, direction: 1, playing: true };
+    const returnTo = then ? { clip: m.clips[then - 1], speed, transition } : null;
+    a.play(layer, m.clips[index - 1], mode, speed, transition, returnTo);
     this.animated.add(root);
-    pose(m, m.data.animations[index - 1], m.state.time);
   }
 
-  setTime(root, time)
+  // Shows a moment of what a layer plays (of the first clip, held, when it
+  // plays nothing).
+  setTime(root, time, layer = 0)
   {
     const m = root.model;
-    const anim = m.data.animations[(m.state ? m.state.index : 1) - 1];
-    if (!anim) return;
-    const t = Math.max(0, Math.min(anim.duration, time));
-    if (m.state) m.state.time = t;
-    pose(m, anim, t);
+    const a = animatorOf(m);
+    const l = a.layer(layer);
+    if (!l.current)
+    {
+      if (!m.clips.length) return;
+      a.play(layer, m.clips[0], ANIM_ONCE, 1, 0);
+      l.playing = false;
+    }
+    a.seek(layer, time);
   }
 
-  // One step of dt seconds for every playing animation.
+  // LoadAnimSeq: one animation of another glTF file (the one named, or the
+  // first) added to the model's own, matched to its nodes by name, so
+  // a character can take animations kept in files of their own. Returns its number. It is numbered at once; until the file
+  // has arrived it is an empty animation, filled in place when it does.
+  loadSequence(root, file, url, name)
+  {
+    const m = root.model;
+    const clip = { name: '', duration: 0, channels: [] };
+    m.clips.push(clip);
+    const number = m.clips.length;
+    const fill = (data) =>
+    {
+      const want = name.toLowerCase();
+      const source = name ? data.animations.find((a) => a.name.toLowerCase() === want) : data.animations[0];
+      if (!source)
+      {
+        this.engine.warn(`LoadAnimSeq: "${file}" has ${name ? `no animation named "${name}"` : 'no animations'}`);
+        return;
+      }
+      const byName = new Map();
+      m.data.nodes.forEach((n, i) =>
+      {
+        const key = n.name.toLowerCase();
+        if (n.name && !byName.has(key)) byName.set(key, i);
+      });
+      const channels = [];
+      const missing = new Set();
+      for (const ch of source.channels)
+      {
+        const from = data.nodes[ch.node].name;
+        const to = byName.get(from.toLowerCase());
+        if (to === undefined) missing.add(from || `node ${ch.node}`);
+        else channels.push({ ...ch, node: to });
+      }
+      if (!channels.length) this.engine.warn(`LoadAnimSeq: no node of "${file}" that "${source.name}" moves has a name the model has`);
+      else if (missing.size) this.engine.warn(`LoadAnimSeq: the model has no ${[...missing].slice(0, 5).join(', ')}${missing.size > 5 ? '...' : ''}: "${source.name}" leaves them out`);
+      Object.assign(clip, { name: source.name, duration: source.duration, channels });
+    };
+    const known = this.ready.get(url);
+    if (known)
+    {
+      fill(known);
+      return number;
+    }
+    const engine = this.engine;
+    if (!engine.loadFile)
+    {
+      engine.warn(`LoadAnimSeq: could not load "${file}": this platform cannot read files`);
+      return number;
+    }
+    const reading = this.preloaded.get(url) || engine.loadFile(url).then((bytes) => readGltf(bytes, url, this.io(file)));
+    // Files fill their animations in the order they were asked for.
+    m.sequences = (m.sequences || Promise.resolve()).then(() => reading).then(fill, (err) => engine.warn(`LoadAnimSeq: could not load "${file}": ${err && err.message ? err.message : err}`));
+    engine.track(m.sequences);
+    return number;
+  }
+
+  // The state of a layer: { clip, time, playing } or null.
+  layerState(root, layer = 0)
+  {
+    const a = root.model.animator;
+    if (!a || layer >= a.layers.length) return null;
+    const l = a.layers[layer];
+    return l.current ? { clip: l.current.clip, time: l.current.time, playing: l.playing, mode: l.current.mode, blending: !!l.previous } : null;
+  }
+
+  // One step of dt seconds for every model that plays or blends.
   step(dt)
   {
     for (const root of this.animated)
     {
-      const m = root.model;
-      if (!root.alive || !m.state)
-      {
-        this.animated.delete(root);
-        continue;
-      }
-      const anim = m.data.animations[m.state.index - 1];
-      const going = advance(m.state, anim, dt);
-      pose(m, anim, m.state.time);
-      if (!going)
-      {
-        m.state.playing = false;
-        this.animated.delete(root);
-      }
+      const a = root.alive ? root.model.animator : null;
+      if (!a || !a.step(dt)) this.animated.delete(root);
+      else if (!a.active) this.animated.delete(root);
     }
   }
+}
+
+function animatorOf(m)
+{
+  if (!m.animator) m.animator = new Animator(m);
+  return m.animator;
+}
+
+// Every skinned part of a model gets its skin: the entities of its joints,
+// their inverse bind matrices and the palette the renderer draws it with
+// (see skinPalette).
+function bindSkins(m)
+{
+  m.data.nodes.forEach((n, i) =>
+  {
+    const e = m.nodes[i];
+    if (!e || n.skin < 0 || !e.mesh || !e.mesh.joints) return;
+    const skin = m.data.skins[n.skin];
+    e.skin = {
+      joints: skin.joints.map((j) => m.nodes[j]),
+      inverseBind: skin.inverseBind,
+      palette: new Float32Array(skin.joints.length * 16)
+    };
+  });
 }
 
 // The record a model pivot keeps (see the top of this file).
 export function newModel()
 {
-  return { data: null, nodes: [], state: null, loaded: false, failed: false, waiting: [] };
+  return { data: null, nodes: [], clips: [], animator: null, loaded: false, failed: false, waiting: [] };
 }

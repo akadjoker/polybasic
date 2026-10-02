@@ -182,6 +182,18 @@
       ]
     },
     {
+      "id": "skinning",
+      "title": "Skinned fox",
+      "category": "3d",
+      "file": "../examples/skinning.pb",
+      "description": "One mesh on a skeleton with several animations: blend between them (Animate's transition), play one once and go back (AnimateOnce), play another on the head only (AnimateLayer, AnimLayerMask), and take one from a file of its own (LoadAnimSeq). Fox by PixelMannen (CC0), rigged and animated by tomkranis (CC BY 4.0).",
+      "controls": "1 Survey, 2 Walk, 3 Run, T blend, Space look round once, H head layer",
+      "assets": [
+        "assets/fox/fox.glb",
+        "assets/fox/fox-run.glb"
+      ]
+    },
+    {
       "id": "shadows",
       "title": "Shadows",
       "category": "effects",
@@ -248,6 +260,18 @@
       ]
     },
     {
+      "id": "md2",
+      "title": "MD2 flags",
+      "category": "effects",
+      "file": "../examples/md2.pb",
+      "description": "A hundred flags, each an MD2 model playing its own animation (LoadMD2, AnimateMD2): loop, ping-pong, once, stop, change the speed, and blend into a new animation.",
+      "controls": "1 loop, 2 ping-pong, 3 once, 0 stop, Up/Down speed, T blend, right drag look",
+      "assets": [
+        "assets/flag.md2",
+        "assets/flag.png"
+      ]
+    },
+    {
       "id": "trees",
       "title": "Trees",
       "category": "effects",
@@ -276,6 +300,30 @@
         "assets/blitz3d/driver/heightmap_256.bmp",
         "assets/blitz3d/driver/terrain-1.jpg",
         "assets/blitz3d/driver/car.glb"
+      ]
+    },
+    {
+      "id": "dragon",
+      "title": "Dragon",
+      "category": "blitz3d",
+      "file": "../examples/dragon.pb",
+      "description": "Mark Sibly's Blitz3D dragon sample, ported: an MD2 dragon idling (LoadMD2, AnimateMD2) in a see-through room over a mirror floor (CreateMirror). MD2 Dragon model courtesy of Polycount.",
+      "controls": "Left/Right turn round, Up/Down look higher or lower, A/Z zoom, Q/E roll",
+      "assets": [
+        "assets/blitz3d/dragon/dragon.md2",
+        "assets/blitz3d/dragon/dragon.bmp",
+        "assets/blitz3d/dragon/chorme-2.bmp"
+      ]
+    },
+    {
+      "id": "gcuk-animation",
+      "title": "Object Animation (GCUK tutorial)",
+      "category": "blitz3d",
+      "file": "../examples/gcuk-animation.pb",
+      "description": "Paul Gerfen's Blitz3D tutorial, ported: an MD2 gargoyle walks towards you with one range of its frames, then stands and breathes with another (AnimateMD2).",
+      "controls": "None: watch it walk up",
+      "assets": [
+        "assets/blitz3d/gcuk/gargoyle.md2"
       ]
     },
     {

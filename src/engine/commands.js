@@ -32,6 +32,7 @@ import { MODEL_COMMANDS, MODEL_CONSTANTS, createModelCommands } from './model/co
 import { AUDIO_COMMANDS, AUDIO_CONSTANTS, createAudioCommands } from './audio/commands.js';
 import { MESH_COMMANDS, MESH_CONSTANTS, createMeshCommands } from './scene/mesh-commands.js';
 import { TERRAIN_COMMANDS, createTerrainCommands } from './scene/terrain-commands.js';
+import { MD2_COMMANDS, createMd2Commands } from './model/md2-commands.js';
 import { runtimeError } from '../runtime/errors.js';
 
 export const ENGINE_COMMANDS = [
@@ -56,6 +57,7 @@ export const ENGINE_COMMANDS = [
 
   // Shapes and pivots
   'CreatePivot%(parent = 0)',
+  'CreateMirror%(parent = 0)',
   'CreateCube%(parent = 0)',
   'CreateSphere%(segments = 16, parent = 0)',
   'CreateCylinder%(segments = 16, solid = 1, parent = 0)',
@@ -171,6 +173,7 @@ export const ENGINE_COMMANDS = [
   ...MODEL_COMMANDS,
   ...MESH_COMMANDS,
   ...TERRAIN_COMMANDS,
+  ...MD2_COMMANDS,
   ...AUDIO_COMMANDS
 ];
 
@@ -305,6 +308,7 @@ export function createEngineCommands(engine)
     ...createAudioCommands(engine),
     ...createMeshCommands(engine),
     ...createTerrainCommands(engine),
+    ...createMd2Commands(engine),
 
     // ---------------------------------------------------------- screen
     graphics3d(width, height)
@@ -374,6 +378,11 @@ export function createEngineCommands(engine)
     createpivot(parent)
     {
       return world.createEntity('pivot', parentOf(parent)).id;
+    },
+    createmirror(parent)
+    {
+      engine.autoGraphics();
+      return world.createEntity('mirror', parentOf(parent)).id;
     },
     createcube: (parent) => shape(engine.sharedMesh('cube', () => createCube()), parent),
     createsphere: (segments, parent) =>
@@ -752,6 +761,7 @@ export function createEngineCommands(engine)
       const src = entity(handle);
       const copy = world.copyEntity(src, parentOf(parent));
       if (src.model) engine.models.copy(src, copy);
+      engine.md2Models.copy(src, copy);
       return copy.id;
     },
     entityexists: (handle) => (world.handles.get(handle) instanceof Entity ? 1 : 0),

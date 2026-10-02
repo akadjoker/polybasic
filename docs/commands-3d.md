@@ -101,6 +101,7 @@ the same kind share their geometry, so a thousand cubes cost little.
 | Command | Shape |
 |---------|-------|
 | `CreatePivot%(parent = 0)` | Nothing visible: a point to position, turn and hang other entities from. |
+| `CreateMirror%(parent = 0)` | A mirror: the flat plane through the entity's X and Z axes (the ground, where it starts). Everything is drawn reflected in it first, then as it is over that, as in Blitz3D: the reflection shows through a floor that is see-through (`EntityAlpha floor, 0.4`), or where nothing else is drawn. Move and turn it like any entity. |
 | `CreateCube%(parent = 0)` | A cube. |
 | `CreateSphere%(segments = 16, parent = 0)` | A sphere; more segments look rounder. |
 | `CreateCylinder%(segments = 16, solid = True, parent = 0)` | A cylinder along Y; `solid = False` leaves the ends open. |
@@ -399,10 +400,14 @@ models come in; Blender, for example, exports it). The Kenney models in
 | `FindChild%(entity, name$)` | A part of the model (any entity below it) by its name in the file, not case-sensitive; 0 if there is none. `EntityName$` gives a part's name. |
 | `CountAnimations%(entity)` `AnimationName$(entity, index)` | The model's animations, numbered from 1. |
 | `FindAnimation%(entity, name$)` | An animation's number by its name (not case-sensitive), 0 if there is none. |
-| `Animate entity, animation = 1, mode = ANIM_LOOP, speed# = 1` | Plays an animation: `ANIM_LOOP` over and over, `ANIM_ONCE` to the end and stop there, `ANIM_PINGPONG` forwards and back. A negative speed plays it backwards; `Animate entity, 0` stops. |
-| `Animating%(entity)` | 1 while an animation plays (0 once `ANIM_ONCE` reached the end). |
-| `AnimTime#(entity)` `SetAnimTime entity, time#` | Where the animation is, in seconds; setting it shows that moment. |
+| `Animate entity, animation = 1, mode = ANIM_LOOP, speed# = 1, transition# = 0` | Plays an animation from its start: `ANIM_LOOP` over and over, `ANIM_ONCE` to the end and stop there, `ANIM_PINGPONG` forwards and back. A negative speed plays it backwards; `Animate entity, 0` stops (the model keeps its pose). `transition` blends from what was playing, which goes on playing while it fades out, over that many steps (`Update`s): 12 is a fifth of a second. |
+| `AnimateOnce entity, animation, then = 0, speed# = 1, transition# = 0, layer = 0` | Plays an animation once, then goes on to animation `then`, looping, with the same speed and blend: a jump, a wave, a hit, and back to walking. |
+| `AnimateLayer entity, layer, animation, mode = ANIM_LOOP, speed# = 1, transition# = 0` | Plays an animation on a layer (0 to 7; `Animate` is layer 0). Each layer is laid over the ones below it; `AnimateLayer entity, layer, 0` stops one. |
+| `AnimLayerMask entity, layer, bone$, weight# = 1` | How much a bone, and every bone below it, follows a layer, from 0 to 1. A layer's first mask leaves every other bone out: `AnimLayerMask fox, 1, "b_Neck_04"` plays layer 1 on the neck and head only, the body going on with layer 0. |
+| `Animating%(entity, layer = 0)` | 1 while a layer's animation plays (0 once `ANIM_ONCE` reached the end). |
+| `AnimTime#(entity, layer = 0)` `SetAnimTime entity, time#, layer = 0` | Where a layer's animation is, in seconds; setting it shows that moment (of the first animation, if the layer plays nothing). |
 | `AnimLength#(entity, animation = 1)` | How long an animation is, in seconds. |
+| `LoadAnimSeq%(entity, file$, name$ = "")` | Adds an animation kept in another glTF file (the one called `name`, or the file's first) and returns its number. It moves the model's nodes that have the same names as the file's, so animations made for the same skeleton work across files. A file named in quotes is read before the program starts; another arrives a moment later, with its number given at once. |
 
 **Parts.** Every node of the file becomes an entity below the model's pivot,
 with the node's name, so the usual commands work on the parts: `EntityColor
@@ -419,14 +424,31 @@ given: `CopyEntity` (the copy gets its own parts), `EntityBody` (and the
 `Animate`. So a program can load, copy, give bodies and start animations
 all in its main body.
 
+**Skeletons.** A skinned model (a mesh on bones, as most animated
+characters are) bends with its bones; the bones are parts of the model like
+any other, so `FindChild(fox, "b_Head_05")` finds the head bone, and an
+entity hung from it (`EntityParent sword, hand`) moves with it. The mesh is
+bent on the graphics card. Picks (`PICK_POLYGON`), polygon collisions and
+decals see the pose it is in now: the mesh is bent on the CPU the first time
+one of them asks after the bones moved (a few hundred vertices cost next to
+nothing; thousands of skinned characters picked every step would not). What
+is made from the rest pose: physics shapes (`EntityBody`), and
+`MeshWidth`, `MeshHeight`, `MeshDepth` and `FitMesh`.
+
+**Blending.** Every step the model's nodes start from their rest pose and
+each layer, from 0 up, moves them towards its animations (positions and
+scales in a straight line, turns by the short way round), by how far its
+blend has got and by its mask. A model where nothing plays or blends is left
+as it is: its parts can be moved by hand.
+
 **What is read.** Meshes with their normals, texture coordinates and vertex
 colours; materials (base colour and texture, transparency, double-sided,
 unlit, texture transforms); textures in separate PNG/JPG files or inside the
-`.glb`; the node tree; node animations (moving, turning and scaling parts,
-which is how the Kenney character walks). Not read yet: skinned meshes
-(bones) and morph targets, which show in their rest pose with a note in the
-console, cameras and lights in the file, and compressed files (Draco,
-meshopt, Basis textures), which are reported as errors.
+`.glb`; the node tree; skins (joints, weights, inverse bind matrices); node
+animations (moving, turning and scaling parts and bones). Not read yet:
+morph targets, which show the base shape with a note in the console, cameras
+and lights in the file, and compressed files (Draco, meshopt, Basis
+textures), which are reported as errors.
 
 **Space.** glTF is right-handed, PolyBasic left-handed. Models are mirrored
 across X as they load, so a model's front is along +Z (forward, like any
@@ -434,7 +456,10 @@ entity) and its left side is on your left: turn a model 180 degrees to face
 a camera that looks at it along +Z.
 
 **Copies.** `CopyEntity` of a model shares its mesh data and file, so a
-hundred coins cost little; each copy has its own parts, looks and animation.
+hundred coins cost little; each copy has its own parts, looks and animation
+(with the layer masks and added animations the original had).
+
+Try it: **Skinned fox** in the playground's 3D examples (`examples/skinning.pb`).
 
 **DirectX .x models** (the format of many Blitz3D samples) can be turned
 into `.glb` files with `node tools/x2gltf.mjs model.x model.glb`: frames,
@@ -445,6 +470,28 @@ animations or bones.
 
 Try it: **Driver** in the playground's Blitz3D samples (`examples/driver.pb`),
 Blitz3D's driving sample with its car converted this way.
+
+### MD2 models
+
+MD2 (Quake 2's format) keeps a model's animation as its vertices in every
+frame: playing it is blending two frames, with no bones, so many animated
+models cost little. These are Blitz3D's MD2 commands, with its rules.
+
+| Command | What it does |
+|---------|--------------|
+| `LoadMD2%(file$, parent = 0)` | Loads an MD2 model. A file named in quotes is read before the program starts, so the model is there at once; a bad one is reported and gives 0, as in Blitz3D. A name worked out at run time arrives before the first `Update` (commands given before then wait for it). The skin named in the file is not loaded: give the model its texture with `EntityTexture`. |
+| `AnimateMD2 md2, mode = ANIM_LOOP, speed# = 1, first = 0, last = 9999, transition# = 0` | Plays frames `first` to `last` (kept within the file's frames): `ANIM_LOOP`, `ANIM_PINGPONG`, `ANIM_ONCE`, or `ANIM_STOP` to stop. `speed` is in frames per step (0.25 is 15 frames a second); a negative speed plays backwards. `transition` blends, over that many steps, from the pose the model is in to the new animation's first frame. In a loop, frame `last` stands for frame `first`, so a looping animation's last frame should be the same as its first. |
+| `MD2AnimTime#(md2)` | The frame it is at (between two frames while it blends them). |
+| `MD2AnimLength%(md2)` | How many frames the file has. |
+| `MD2Animating%(md2)` | 1 while it plays (0 once `ANIM_ONCE` reached its end, or after `ANIM_STOP`). |
+
+An MD2 model is one mesh entity: the usual commands move, scale, colour and
+texture it. `CopyEntity` makes a model with its own animation that shares
+the file's frames, standing in frame 0 with nothing playing, as in Blitz3D.
+A model that is not playing costs nothing; one that plays has its vertices
+blended once a step. Picks and polygon collisions see the pose it is in.
+
+Try it: **MD2 flags** in the playground's Visual effects (`examples/md2.pb`).
 
 ## Picking
 
@@ -720,7 +767,7 @@ the top-left; text stays sharp at any page size.
 | `RESPONSE_STOP` `RESPONSE_SLIDE` `RESPONSE_SLIDE_NO_DOWNHILL` | 1 2 3 |
 | `BODY_STATIC` `BODY_DYNAMIC` `BODY_KINEMATIC` | 1 2 3 |
 | `SHAPE_AUTO` `SHAPE_BOX` `SHAPE_SPHERE` `SHAPE_CAPSULE` `SHAPE_CYLINDER` `SHAPE_HULL` `SHAPE_MESH` | 0 to 6 |
-| `ANIM_STOP` `ANIM_LOOP` `ANIM_ONCE` `ANIM_PINGPONG` | 0 1 2 3 |
+| `ANIM_STOP` `ANIM_LOOP` `ANIM_PINGPONG` `ANIM_ONCE` | 0 1 2 3 (Blitz3D's values) |
 | `SFX_COIN` `SFX_LASER` `SFX_EXPLOSION` `SFX_POWERUP` `SFX_HIT` `SFX_JUMP` `SFX_BLIP` `SFX_RANDOM` | 0 to 7 |
 | `WAVE_SQUARE` `WAVE_TRIANGLE` `WAVE_SAW` `WAVE_SINE` `WAVE_NOISE` | 0 to 4 |
 | `INST_SQUARE` `INST_TRIANGLE` `INST_SAW` `INST_SINE` `INST_DRUMS` `INST_PLUCK` `INST_PAD` `INST_BASS` | 0 to 7 |
