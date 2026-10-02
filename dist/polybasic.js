@@ -299,7 +299,19 @@ var Parser = class {
     this.program.files.push(file);
     for (let i = 0; i + 1 < this.tokens.length; i++) {
       if (this.isKw("dim", this.tokens[i]) && this.tokens[i + 1].t === "ident") {
-        this.arrays.add(this.tokens[i + 1].v);
+        let depth = 0;
+        let expectName = true;
+        for (let j = i + 1; j < this.tokens.length; j++) {
+          const t = this.tokens[j];
+          if (t.t === "nl" || depth === 0 && this.isOp(":", t)) break;
+          if (this.isOp("(", t)) depth++;
+          else if (this.isOp(")", t)) depth--;
+          else if (depth === 0 && this.isOp(",", t)) expectName = true;
+          else if (depth === 0 && expectName && t.t === "ident") {
+            this.arrays.add(t.v);
+            expectName = false;
+          }
+        }
       }
     }
   }
