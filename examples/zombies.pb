@@ -307,6 +307,8 @@ LightShadows sun, True, 70
 
 crateTex = LoadTexture("assets/zombies/crate_d.jpg", TEX_COLOR)
 barrelMesh = LoadMesh("assets/zombies/barrel.glb")
+EntityTexture barrelMesh, LoadTexture("assets/zombies/barrel_d.jpg", TEX_COLOR)
+EntityColor barrelMesh, 255, 255, 255
 HideEntity barrelMesh
 BuildRock()
 SeedRnd 7
@@ -357,7 +359,7 @@ PositionEntity gun, 0.26, -0.25, 0.55
 
 ; The muzzle's flash and the light it throws.
 flashSprite = CopyEntity(protoFlash, camera)
-ScaleSprite flashSprite, 0.22, 0.22
+ScaleSprite flashSprite, 0.13, 0.13
 PositionEntity flashSprite, 0.2, -0.17, 0.85
 HideEntity flashSprite
 flashLight = CreateLight(LIGHT_POINT, camera)

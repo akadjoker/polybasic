@@ -14,7 +14,7 @@ published widely.
 | `barrel.glb`, `barrel_d.jpg` | the barrel of an FPS demo on the author's disk | not confirmed |
 | `crate_d.jpg` | the crate of a sample from another engine | not confirmed |
 | `ground_d.jpg`, `rock_d.jpg` | landscape textures from the author's other engine's examples | not confirmed |
-| `fire.jpg`, `explosion.jpg`, `flash.jpg`, `glow.jpg`, `blood.png`, `ring.png`, `smoke.png` | particle textures from the same examples | not confirmed |
+| `explosion.jpg`, `flash.jpg`, `glow.jpg`, `blood.png`, `ring.png`, `smoke.png` | particle textures from the same examples | not confirmed |
 | `*.wav` | sounds from Blitz3D samples and Kinetix2D | not confirmed |
 
 Textures were resized to 1024 or 2048 pixels and saved as JPEG.
