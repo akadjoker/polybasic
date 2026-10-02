@@ -180,10 +180,7 @@ tests/                   golden programs, unit tests, browser tests, benchmark
    .zip import and export, export to a single page. Done.
 5. **Games**: more original example games written in PolyBasic.
 
-## Support
-
-PolyBasic is free. If it made you smile or saved you some work, you can
-[buy me a coffee](https://buymeacoffee.com/akadjoker) - thank you!
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/akadjoker)
 
 ## Licence
 
