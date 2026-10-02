@@ -27,7 +27,9 @@ Type Prop
   Field fuse#                   ; seconds to go off once lit, -1 not lit
 End Type
 
-Dim obX#(300), obZ#(300), obR#(300)
+Dim obX#(300)
+Dim obZ#(300)
+Dim obR#(300)
 
 ; --- The land --------------------------------------------------------------
 
