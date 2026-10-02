@@ -2221,6 +2221,70 @@ End Function
     console.log(`      frame ${a.time.toFixed(2)} -> ${b.time.toFixed(2)} of ${a.frames}; the reflection changes ${differ} pixels under the dragon`);
   });
 
+  await check('bird.pb: two MD2 birds and the camera fly their paths over a canyon from a binary .x file, under a sky box', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/bird.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const look = () => page.evaluate(() =>
+    {
+      const all = window.polybasicPlayer.state.engine.world.entities;
+      const at = (e) => Array.from(e.worldMatrix.e.slice(12, 15));
+      const textured = (list) => list.filter((e) => e.material && e.material.texture && e.material.texture.loaded).length;
+      const birds = all.filter((e) => e.md2);
+      const camera = all.find((e) => e.kind === 'camera');
+      const meshes = all.filter((e) => e.kind === 'mesh' && !e.md2);
+      return {
+        birds: birds.map((e) => ({ time: e.md2.time, animating: e.md2.animating, at: at(e) })),
+        camera: at(camera),
+        yaw: camera.rotation,
+        meshes: meshes.length,
+        birdsSkinned: textured(birds),
+        textured: textured(meshes)
+      };
+    });
+    await page.waitForTimeout(800);
+    const a = await look();
+    await page.waitForTimeout(1500);
+    const b = await look();
+    await page.screenshot({ path: join(SHOTS, 'bird.png') });
+    assert(a.birds.length === 2 && a.birds.every((x) => x.animating), `birds: ${JSON.stringify(a.birds)}`);
+    assert(a.birdsSkinned === 2, 'the birds wear their texture');
+    // The canyon (one mesh of four materials) and the 5 faces of the sky,
+    // all textured.
+    assert(a.meshes >= 6 && a.textured >= 6, `${a.meshes} meshes, ${a.textured} textured: the canyon and the sky box`);
+    const moved = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+    assert(moved(a.camera, b.camera) > 20, `the camera moved ${moved(a.camera, b.camera)}`);
+    a.birds.forEach((x, i) => assert(moved(x.at, b.birds[i].at) > 20, `bird ${i} did not fly`));
+    assert(b.birds[0].time !== a.birds[0].time, 'the wings do not flap');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      camera moved ${moved(a.camera, b.camera).toFixed(0)} units, ${a.meshes} meshes of which ${a.textured} textured`);
+  });
+
+  await check('zombies.pb: the field loads with its models and sounds, Enter starts a game with props, no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/zombies.pb`, { width: 960, height: 600 });
+    await waitRunning(page);
+    const count = () => page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.length);
+    const before = await count();
+    await page.screenshot({ path: join(SHOTS, 'zombies-intro.png') });
+    await page.keyboard.press('Enter');
+    // A new game puts out its barrels and crates (bodies) and the first
+    // wave's zombies start to climb out of the ground.
+    await page.waitForFunction((n) => window.polybasicPlayer.state.engine.world.entities.length > n + 15, before, { timeout: 40000 });
+    await page.waitForTimeout(1500);
+    const info = await page.evaluate(() =>
+    {
+      const world = window.polybasicPlayer.state.engine.world;
+      return { entities: world.entities.length };
+    });
+    await page.screenshot({ path: join(SHOTS, 'zombies.png') });
+    assert(info.entities > before + 15, `${info.entities} entities after the start, ${before} before`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${before} entities in the field, ${info.entities} once the game started`);
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });

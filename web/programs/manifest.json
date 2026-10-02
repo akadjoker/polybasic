@@ -13,6 +13,10 @@
       "title": "Visual effects"
     },
     {
+      "id": "games",
+      "title": "Games"
+    },
+    {
       "id": "blitz3d",
       "title": "Blitz3D samples"
     },
@@ -316,6 +320,26 @@
       ]
     },
     {
+      "id": "bird",
+      "title": "Birds",
+      "category": "blitz3d",
+      "file": "../examples/bird.pb",
+      "description": "Adam Gore's Blitz3D bird sample, ported: two MD2 birds and the camera fly paths made in Lightwave (keyframed Kochanek-Bartels splines worked out in the program), through a canyon converted from a binary DirectX .x file, under a sky box. Files come with the Blitz3D samples (zlib licence).",
+      "controls": "None: watch the flight",
+      "assets": [
+        "assets/blitz3d/bird/Bird.md2",
+        "assets/blitz3d/bird/canyon.glb",
+        "assets/blitz3d/bird/Textures/Bird.bmp",
+        "assets/blitz3d/bird/Textures/Moss.bmp",
+        "assets/blitz3d/bird/Textures/Rock.bmp",
+        "assets/blitz3d/bird/Textures/sky_BK.bmp",
+        "assets/blitz3d/bird/Textures/sky_FR.bmp",
+        "assets/blitz3d/bird/Textures/sky_LF.bmp",
+        "assets/blitz3d/bird/Textures/sky_RT.bmp",
+        "assets/blitz3d/bird/Textures/sky_UP.bmp"
+      ]
+    },
+    {
       "id": "gcuk-animation",
       "title": "Object Animation (GCUK tutorial)",
       "category": "blitz3d",
@@ -343,6 +367,40 @@
       "description": "The Update/Draw frame loop without graphics: balls move in Update, Draw prints a report.",
       "controls": "",
       "assets": []
+    },
+    {
+      "id": "zombies",
+      "title": "Dead Field",
+      "category": "games",
+      "file": "../examples/zombies.pb",
+      "description": "A first-person zombie shooter: waves of Mixamo zombies (skinned, with animations that blend) climb out of a rolling field of grass, trees and rocks. Headshots count more; barrels blow up what stands near them and crates fly (physics). Models and sounds in assets/zombies; the gun and the bonfire are CC BY 4.0.",
+      "controls": "Click to take the mouse. WASD walk, Shift run, Space jump, click or F shoot, Z or right button look down the sights, R starts again",
+      "assets": [
+        "assets/zombies/barrel.glb",
+        "assets/zombies/barrel_d.jpg",
+        "assets/zombies/blood.png",
+        "assets/zombies/bonfire/bonfire.gltf",
+        "assets/zombies/bonfire/lambert1.002_baseColor.jpg",
+        "assets/zombies/bonfire/scene.bin",
+        "assets/zombies/boom.wav",
+        "assets/zombies/crate_d.jpg",
+        "assets/zombies/death.wav",
+        "assets/zombies/explosion.jpg",
+        "assets/zombies/flash.jpg",
+        "assets/zombies/glow.jpg",
+        "assets/zombies/ground_d.jpg",
+        "assets/zombies/gun/blinn1_baseColor.jpg",
+        "assets/zombies/gun/gun.gltf",
+        "assets/zombies/gun/scene.bin",
+        "assets/zombies/hurt.wav",
+        "assets/zombies/ring.png",
+        "assets/zombies/rock_d.jpg",
+        "assets/zombies/shoot.wav",
+        "assets/zombies/smoke.png",
+        "assets/zombies/squish.wav",
+        "assets/zombies/wind.wav",
+        "assets/zombies/zombie.glb"
+      ]
     }
   ]
 }

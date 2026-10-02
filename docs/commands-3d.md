@@ -465,11 +465,12 @@ Try it: **Skinned fox** in the playground's 3D examples (`examples/skinning.pb`)
 into `.glb` files with `node tools/x2gltf.mjs model.x model.glb`: frames,
 meshes, normals, texture coordinates and materials are kept, in the same
 space as the `.x` file, so a Blitz3D program's `ScaleMesh` and `FlipMesh`
-calls on the model still do what they did. Only text `.x` files, and no
-animations or bones.
+calls on the model still do what they did. Both the text and the binary
+`.x` format are read (not the compressed one); no animations or bones.
 
 Try it: **Driver** in the playground's Blitz3D samples (`examples/driver.pb`),
-Blitz3D's driving sample with its car converted this way.
+Blitz3D's driving sample with its car converted this way, and **Birds**
+(`examples/bird.pb`), whose canyon was a binary `.x` file.
 
 ### MD2 models
 
