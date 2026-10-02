@@ -316,6 +316,26 @@
       ]
     },
     {
+      "id": "bird",
+      "title": "Birds",
+      "category": "blitz3d",
+      "file": "../examples/bird.pb",
+      "description": "Adam Gore's Blitz3D bird sample, ported: two MD2 birds and the camera fly paths made in Lightwave (keyframed Kochanek-Bartels splines worked out in the program), through a canyon converted from a binary DirectX .x file, under a sky box. Files come with the Blitz3D samples (zlib licence).",
+      "controls": "None: watch the flight",
+      "assets": [
+        "assets/blitz3d/bird/Bird.md2",
+        "assets/blitz3d/bird/canyon.glb",
+        "assets/blitz3d/bird/Textures/Bird.bmp",
+        "assets/blitz3d/bird/Textures/Moss.bmp",
+        "assets/blitz3d/bird/Textures/Rock.bmp",
+        "assets/blitz3d/bird/Textures/sky_BK.bmp",
+        "assets/blitz3d/bird/Textures/sky_FR.bmp",
+        "assets/blitz3d/bird/Textures/sky_LF.bmp",
+        "assets/blitz3d/bird/Textures/sky_RT.bmp",
+        "assets/blitz3d/bird/Textures/sky_UP.bmp"
+      ]
+    },
+    {
       "id": "gcuk-animation",
       "title": "Object Animation (GCUK tutorial)",
       "category": "blitz3d",
