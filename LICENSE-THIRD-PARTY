@@ -135,6 +135,19 @@ model by PixelMannen (CC0 1.0); rigging and animation by tomkranis
 by @AsoboStudio and @scurest (CC BY 4.0). fox-run.glb is made from it, with
 only its joints and its Run animation.
 
+Dead Field models
+-----------------
+
+examples/assets/zombies/gun/ is "Doom 2016 - Plasma Gun" by Ilia_Tun
+(https://sketchfab.com/3d-models/doom-2016-plasma-gun-d9777005def242cd958cf822f3902a1e),
+CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/); the design belongs
+to id Software. examples/assets/zombies/bonfire/ is "LowPoly bonfire" by
+LEX_GFX
+(https://sketchfab.com/3d-models/lowpoly-bonfire-6c0ca6f74536435ab7d54eb17a1155bb),
+CC BY 4.0. Only their colour textures are kept. The zombie
+is a Mixamo character with Mixamo animations (Adobe Mixamo, free to use in
+projects). See examples/assets/zombies/README.md for the other files.
+
 
 Apache License 2.0 (Rapier)
 ---------------------------
