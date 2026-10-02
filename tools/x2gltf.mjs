@@ -1,12 +1,12 @@
-// Converts a DirectX .x model (text format) to a binary glTF (.glb), for
-// the Blitz3D samples that come as .x files.
+// Converts a DirectX .x model (text or binary format) to a binary glTF
+// (.glb), for the Blitz3D samples that come as .x files.
 //
 //   node tools/x2gltf.mjs model.x model.glb
 //
 // Read: frames with their matrices, meshes (faces of any size, fanned into
 // triangles), MeshNormals, MeshTextureCoords, MeshMaterialList with
 // Material colours and TextureFilename. Not read: animations, skin
-// weights, vertex colours, binary .x files.
+// weights, vertex colours, compressed (mszip) .x files.
 //
 // .x space is left-handed like PolyBasic's; glTF's is right-handed. The
 // file is written so that PolyBasic's glTF reader (which mirrors x) gives
@@ -15,10 +15,11 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ------------------------------------------------------------------ parse
 
-function tokenize(text)
+export function tokenize(text)
 {
   const tokens = [];
   const re = /\/\/[^\n]*|#[^\n]*|"([^"]*)"|([{}])|([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)|([A-Za-z_][\w.-]*)|([;,])|\s+/g;
@@ -33,8 +34,89 @@ function tokenize(text)
   return tokens;
 }
 
+// The binary format ("xof 0302bin 0032") is the same stream of names,
+// braces, strings and numbers, written as 16-bit tokens: a list of integers
+// or floats is one token, and templates (which only describe the data) are
+// skipped. The tokens made are the text format's, so one parser does both.
+// Floats are 32 or 64 bits as the header says.
+export function tokenizeBinary(bytes)
+{
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const text = (from, to) => String.fromCharCode(...bytes.subarray(from, to));
+  const wide = text(12, 16) === '0064';
+  const tokens = [];
+  let i = 16;
+  let skipping = false;
+  let depth = 0;
+  const number = (n) =>
+  {
+    if (!skipping) tokens.push({ n });
+  };
+  while (i < bytes.length)
+  {
+    const id = view.getUint16(i, true);
+    i += 2;
+    switch (id)
+    {
+      case 1: // name
+      case 2: // string, then the token that ended it
+      {
+        const length = view.getUint32(i, true);
+        const s = text(i + 4, i + 4 + length);
+        i += 4 + length;
+        if (id === 2) i += 2;
+        if (!skipping) tokens.push(id === 1 ? { w: s } : { s });
+        break;
+      }
+      case 3:
+        number(view.getInt32(i, true));
+        i += 4;
+        break;
+      case 5: // GUID
+        i += 16;
+        break;
+      case 6:
+      {
+        const count = view.getUint32(i, true);
+        i += 4;
+        for (let k = 0; k < count; k++, i += 4) number(view.getInt32(i, true));
+        break;
+      }
+      case 7:
+      {
+        const count = view.getUint32(i, true);
+        i += 4;
+        for (let k = 0; k < count; k++)
+        {
+          number(wide ? view.getFloat64(i, true) : view.getFloat32(i, true));
+          i += wide ? 8 : 4;
+        }
+        break;
+      }
+      case 10:
+        if (skipping) depth++;
+        else tokens.push({ p: '{' });
+        break;
+      case 11:
+        if (!skipping) tokens.push({ p: '}' });
+        else if (--depth === 0) skipping = false;
+        break;
+      case 31: // template: skipped up to its closing brace
+        skipping = true;
+        depth = 0;
+        break;
+      case 12: case 13: case 14: case 15: case 16: case 17: case 18: case 19: case 20:
+      case 40: case 41: case 42: case 43: case 44: case 45: case 46: case 47: case 48: case 49: case 50: case 51: case 52:
+        break;
+      default:
+        throw new Error(`unknown token ${id} at byte ${i - 2} of the binary .x file`);
+    }
+  }
+  return tokens;
+}
+
 // { type, name, values: [numbers and strings in order], children }
-function parse(tokens)
+export function parse(tokens)
 {
   let i = 0;
   const block = () =>
@@ -139,7 +221,7 @@ function readMesh(node)
   return { name: node.name, positions, faces, normals, normalFaces, uvs, materials, faceMaterial };
 }
 
-function convert(roots, name)
+export function convert(roots, name)
 {
   const gltf = {
     asset: { version: '2.0', generator: 'PolyBasic tools/x2gltf.mjs' },
@@ -187,7 +269,7 @@ function convert(roots, name)
     if (a < 1) out.alphaMode = 'BLEND';
     if (m.texture)
     {
-      images.push({ uri: m.texture });
+      images.push({ uri: m.texture.replace(/\\+/g, '/') });
       if (!gltf.textures) gltf.textures = [];
       gltf.textures.push({ source: images.length - 1 });
       out.pbrMetallicRoughness.baseColorTexture = { index: gltf.textures.length - 1 };
@@ -311,13 +393,25 @@ function glb(json, bin)
   return out;
 }
 
-const [input, output] = process.argv.slice(2);
-if (!input || !output)
+// The .glb made from the bytes of a .x file.
+export function xToGlb(bytes, name)
 {
-  console.error('usage: node tools/x2gltf.mjs model.x model.glb');
-  process.exit(1);
+  const head = String.fromCharCode(...bytes.subarray(0, 16));
+  if (!head.startsWith('xof ')) throw new Error(`${name} is not a .x file`);
+  const format = head.slice(8, 12);
+  if (format === 'txt ') return convert(parse(tokenize(Buffer.from(bytes).toString('latin1').slice(16))), name);
+  if (format === 'bin ') return convert(parse(tokenizeBinary(bytes)), name);
+  throw new Error(`${name} is a ${format.trim()} .x file: only txt and bin are read`);
 }
-const text = readFileSync(input, 'latin1');
-if (!text.startsWith('xof ') || text.slice(8, 11) !== 'txt') throw new Error(`${input} is not a text .x file`);
-writeFileSync(output, convert(parse(tokenize(text.slice(16))), basename(input)));
-console.log(`${input} -> ${output}`);
+
+if (process.argv[1] === fileURLToPath(import.meta.url))
+{
+  const [input, output] = process.argv.slice(2);
+  if (!input || !output)
+  {
+    console.error('usage: node tools/x2gltf.mjs model.x model.glb');
+    process.exit(1);
+  }
+  writeFileSync(output, xToGlb(new Uint8Array(readFileSync(input)), basename(input)));
+  console.log(`${input} -> ${output}`);
+}
