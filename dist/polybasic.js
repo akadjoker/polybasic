@@ -299,7 +299,19 @@ var Parser = class {
     this.program.files.push(file);
     for (let i = 0; i + 1 < this.tokens.length; i++) {
       if (this.isKw("dim", this.tokens[i]) && this.tokens[i + 1].t === "ident") {
-        this.arrays.add(this.tokens[i + 1].v);
+        let depth = 0;
+        let expectName = true;
+        for (let j = i + 1; j < this.tokens.length; j++) {
+          const t = this.tokens[j];
+          if (t.t === "nl" || depth === 0 && this.isOp(":", t)) break;
+          if (this.isOp("(", t)) depth++;
+          else if (this.isOp(")", t)) depth--;
+          else if (depth === 0 && this.isOp(",", t)) expectName = true;
+          else if (depth === 0 && expectName && t.t === "ident") {
+            this.arrays.add(t.v);
+            expectName = false;
+          }
+        }
       }
     }
   }
@@ -40316,11 +40328,12 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
         light.distance = l.range;
         light.decay = 0;
         if (light.castShadow) {
+          const far = l.range > 0 ? l.range : 100;
           light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
-          light.shadow.camera.near = 0.05;
-          light.shadow.camera.far = l.range > 0 ? l.range : 100;
-          light.shadow.bias = -2e-3;
-          light.shadow.normalBias = 0.02;
+          light.shadow.camera.near = 0.1;
+          light.shadow.camera.far = far;
+          light.shadow.bias = 0;
+          light.shadow.normalBias = Math.max(0.03, far * 4e-3);
         }
       } else {
         light.userData.direction = new Vector3(w[8], w[9], -w[10]).normalize();

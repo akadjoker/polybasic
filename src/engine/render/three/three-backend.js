@@ -624,11 +624,19 @@ uniform vec4 pbPushers[8];`)
         light.decay = 0;
         if (light.castShadow)
         {
+          // A point light's depth map is not linear in distance (it is a
+          // perspective depth), so a bias in depth is worth a distance that
+          // grows with the square of the distance from the light: a bias of
+          // -0.002 hid a shadow altogether at a range of 60 and moved it a
+          // whole unit off its object at 5. The offset along the surface
+          // normal is in world units: it alone keeps the surface from
+          // shadowing itself.
+          const far = l.range > 0 ? l.range : 100;
           light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
-          light.shadow.camera.near = 0.05;
-          light.shadow.camera.far = l.range > 0 ? l.range : 100;
-          light.shadow.bias = -0.002;
-          light.shadow.normalBias = 0.02;
+          light.shadow.camera.near = 0.1;
+          light.shadow.camera.far = far;
+          light.shadow.bias = 0;
+          light.shadow.normalBias = Math.max(0.03, far * 0.004);
         }
       }
       else

@@ -307,6 +307,7 @@ Spawn(30, 40)
 ```
 Dim map(19, 14)          ; indices 0..19 and 0..14
 Dim names$(n)            ; the size can be any expression
+Dim xs#(9), ys#(9)       ; several arrays in one Dim
 map(3, 4) = 1
 Dim map(39, 29)          ; resize: the contents are cleared
 ```

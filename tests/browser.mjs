@@ -1777,6 +1777,77 @@ End Function
     console.log(`      ${text}`);
   });
 
+  await check('shadows: a lamp\'s shadow starts at its object (not a unit away) and reaches far lamps', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A cube on the ground seen from above, a lamp to the right of it: its
+    // shadow runs left from the cube's far side. The ground half a unit beyond that
+    // side must be in it: a bias in the lamp's (perspective) depth moved the
+    // shadow a unit off the cube, or lost it at a long range.
+    const scene = (range, height, lampX, shadows) => `Graphics3D 640, 480
+Global cam
+cam = CreateCamera()
+PositionEntity cam, 0, 30, 0
+RotateEntity cam, 90, 0, 0
+CameraRange cam, 0.5, 200
+lamp = CreateLight(LIGHT_POINT)
+PositionEntity lamp, ${lampX}, ${height}, 0
+LightRange lamp, ${range}
+${shadows ? 'LightShadows lamp, True' : ''}
+AmbientLight 30, 30, 30
+ground = CreatePlane(1)
+ScaleEntity ground, 50, 1, 50
+EntityColor ground, 200, 200, 200
+cube = CreateCube()
+PositionEntity cube, 0, 1, 0
+EntityColor cube, 255, 0, 0
+Function Update()
+  If FrameCount() = 1
+    CameraProject cam, -1.5, 0, 0
+    Print "near " + ProjectedX() + " " + ProjectedY()
+    CameraProject cam, -2.5, 0, 0
+    Print "far " + ProjectedX() + " " + ProjectedY()
+  EndIf
+End Function
+`;
+    const level = async (text) =>
+    {
+      await project(page, (x) => window.polybasicPlayground.setText(x), text);
+      await project(page, () => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('far'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      const log = await consoleText(page);
+      const point = (name) => /(-?[\d.]+) (-?[\d.]+)/.exec(log.slice(log.indexOf(name) + name.length)).slice(1).map(Number);
+      return page.evaluate(([a, b]) =>
+      {
+        const canvas = window.polybasicPlayground.getScreen().canvas;
+        const copy = document.createElement('canvas');
+        copy.width = canvas.width;
+        copy.height = canvas.height;
+        const ctx = copy.getContext('2d');
+        ctx.drawImage(canvas, 0, 0);
+        const at = ([x, y]) =>
+        {
+          const px = ctx.getImageData(Math.round(x * canvas.width / 640), Math.round(y * canvas.height / 480), 1, 1).data;
+          return (px[0] + px[1] + px[2]) / 3;
+        };
+        return [at(a), at(b)];
+      }, [point('near'), point('far')]);
+    };
+    const facts = [];
+    for (const [range, height, lampX] of [[9, 4, 3], [20, 5, 6], [60, 8, 6]])
+    {
+      const open = await level(scene(range, height, lampX, false));
+      const shaded = await level(scene(range, height, lampX, true));
+      facts.push(`range ${range}: ${shaded.map((v, i) => `${(v / open[i]).toFixed(2)}`).join(' ')}`);
+      assert(shaded[0] / open[0] < 0.4, `range ${range}: the ground next to the cube is not in its shadow (${shaded[0]} of ${open[0]})`);
+      assert(shaded[1] / open[1] < 0.4, `range ${range}: the ground further along is not in its shadow (${shaded[1]} of ${open[1]})`);
+    }
+    await page.close();
+    console.log(`      shadowed / open brightness at 0.5 and 1.5 beyond the cube: ${facts.join('; ')}`);
+  });
+
   await check('shadows: a box shades the ground where the light says, and the FX flags turn it off', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });

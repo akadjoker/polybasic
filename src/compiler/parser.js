@@ -158,7 +158,23 @@ class Parser
     {
       if (this.isKw('dim', this.tokens[i]) && this.tokens[i + 1].t === 'ident')
       {
-        this.arrays.add(this.tokens[i + 1].v);
+        // `Dim a(3), b(4)`: a name starts the list and follows each comma
+        // that is not inside brackets.
+        let depth = 0;
+        let expectName = true;
+        for (let j = i + 1; j < this.tokens.length; j++)
+        {
+          const t = this.tokens[j];
+          if (t.t === 'nl' || (depth === 0 && this.isOp(':', t))) break;
+          if (this.isOp('(', t)) depth++;
+          else if (this.isOp(')', t)) depth--;
+          else if (depth === 0 && this.isOp(',', t)) expectName = true;
+          else if (depth === 0 && expectName && t.t === 'ident')
+          {
+            this.arrays.add(t.v);
+            expectName = false;
+          }
+        }
       }
     }
   }
