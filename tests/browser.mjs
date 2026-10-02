@@ -2261,6 +2261,30 @@ End Function
     console.log(`      camera moved ${moved(a.camera, b.camera).toFixed(0)} units, ${a.meshes} meshes of which ${a.textured} textured`);
   });
 
+  await check('zombies.pb: the field loads with its models and sounds, Enter starts a game with props, no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/zombies.pb`, { width: 960, height: 600 });
+    await waitRunning(page);
+    const count = () => page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.length);
+    const before = await count();
+    await page.screenshot({ path: join(SHOTS, 'zombies-intro.png') });
+    await page.keyboard.press('Enter');
+    // A new game puts out its barrels and crates (bodies) and the first
+    // wave's zombies start to climb out of the ground.
+    await page.waitForFunction((n) => window.polybasicPlayer.state.engine.world.entities.length > n + 15, before, { timeout: 40000 });
+    await page.waitForTimeout(1500);
+    const info = await page.evaluate(() =>
+    {
+      const world = window.polybasicPlayer.state.engine.world;
+      return { entities: world.entities.length };
+    });
+    await page.screenshot({ path: join(SHOTS, 'zombies.png') });
+    assert(info.entities > before + 15, `${info.entities} entities after the start, ${before} before`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${before} entities in the field, ${info.entities} once the game started`);
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });
