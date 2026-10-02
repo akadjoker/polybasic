@@ -38520,11 +38520,12 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
         light.distance = l.range;
         light.decay = 0;
         if (light.castShadow) {
+          const far = l.range > 0 ? l.range : 100;
           light.shadow.mapSize.set(POINT_MAP, POINT_MAP);
-          light.shadow.camera.near = 0.05;
-          light.shadow.camera.far = l.range > 0 ? l.range : 100;
-          light.shadow.bias = -2e-3;
-          light.shadow.normalBias = 0.02;
+          light.shadow.camera.near = 0.1;
+          light.shadow.camera.far = far;
+          light.shadow.bias = 0;
+          light.shadow.normalBias = Math.max(0.03, far * 4e-3);
         }
       } else {
         light.userData.direction = new Vector3(w[8], w[9], -w[10]).normalize();
