@@ -317,7 +317,7 @@ Try it: **Building meshes** in the playground's Visual effects (`examples/meshes
 | `EntityShininess entity, shininess#` | 0 matte to 1 very shiny. |
 | `EntityFX entity, flags` | Add up `FX_FULLBRIGHT` (ignores lights, glows), `FX_VERTEXCOLOR` (uses the mesh's vertex colours), `FX_FLAT` (faceted shading), `FX_TWOSIDED` (draws the back of faces too), `FX_VERTEXALPHA` (the vertex colours' alpha blends), `FX_NOSHADOWCAST` (casts no shadow), `FX_NOSHADOWRECV` (shadows do not fall on it). |
 | `EntityTexture entity, texture` | Wraps a texture around the shape; `0` removes it. The texture is tinted by the entity colour. |
-| `EntityOrder entity, order` | Lower orders draw first (cameras too). |
+| `EntityOrder entity, order` | As in Blitz3D, 0 is the usual way; an entity with an order ignores depth (is not hidden by what is nearer, and hides nothing), and is drawn before everything else when the order is above 0 (the higher first: `EntityOrder sky, 10` for a sky box) and after it when below 0 (`EntityOrder gun, -1`: a gun that does not sink into the walls). Cameras are drawn lowest order first. |
 | `EntityBlend entity, blend` | How it mixes with what is behind: 1 by its alpha (the default), 2 multiplies (darkens: shade, stains), 3 adds (glows: fire, light). |
 
 Each entity has its own look: `CopyEntity` copies it, and changing the copy

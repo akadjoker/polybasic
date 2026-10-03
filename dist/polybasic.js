@@ -39851,6 +39851,15 @@ var WebGLRenderer = class {
 
 // src/engine/render/three/three-backend.js
 var MIRRORED = [2, 6, 14, 8, 9, 11];
+function ordered(material, on) {
+  if (!!material.userData.ordered === on) return;
+  material.userData.ordered = on;
+  if (on) {
+    material.userData.depthWrite = material.depthWrite;
+    material.depthWrite = false;
+  } else material.depthWrite = material.userData.depthWrite;
+  material.depthTest = !on;
+}
 function mirrorInto(target, world) {
   const e = target.elements;
   for (let i = 0; i < 16; i++) e[i] = world[i];
@@ -40041,7 +40050,8 @@ var ThreeBackend = class extends RenderBackend {
     obj.geometry = geometry;
     obj.material = material;
     obj.visible = true;
-    obj.renderOrder = item.order;
+    obj.renderOrder = -item.order;
+    for (const m of materials) ordered(m, item.order !== 0);
     obj.castShadow = item.castShadow !== false;
     obj.receiveShadow = item.receiveShadow !== false;
     if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });

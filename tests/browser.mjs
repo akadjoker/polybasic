@@ -1535,6 +1535,63 @@ End Function
     await page.close();
   });
 
+  await check('EntityOrder as in Blitz3D: with an order an entity ignores depth, behind everything above 0 and in front below 0', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // A red square and a green one, both filling the view, at different
+    // distances: what is in the middle of the screen is the one drawn last.
+    const scene = (redZ, redOrder, greenZ) => `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+MakeSquare(${redZ}, 255, 0, 0, ${redOrder})
+MakeSquare(${greenZ}, 0, 255, 0, 0)
+Function MakeSquare(z#, r, g, b, order)
+  m = CreateMesh()
+  s = CreateSurface(m)
+  AddVertex s, -z, z, z : AddVertex s, z, z, z : AddVertex s, z, -z, z : AddVertex s, -z, -z, z
+  AddTriangle s, 0, 1, 2 : AddTriangle s, 0, 2, 3
+  EntityColor m, r, g, b
+  EntityFX m, FX_FULLBRIGHT + FX_TWOSIDED
+  EntityOrder m, order
+End Function
+Function Update()
+  If FrameCount() = 1 Then Print "first"
+End Function
+`;
+    const middle = () => page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      return Array.from(ctx.getImageData(Math.round(canvas.width / 2), Math.round(canvas.height / 2), 1, 1).data.slice(0, 3));
+    });
+    const run = async (text) =>
+    {
+      await page.evaluate((x) => window.polybasicPlayground.setText(x), text);
+      await page.evaluate(() => window.polybasicPlayground.run());
+      await page.waitForFunction(() => document.getElementById('console').textContent.includes('first'), null, { timeout: 10000 });
+      await page.waitForTimeout(300);
+      return middle();
+    };
+    const isRed = (c) => c[0] > 200 && c[1] < 60 && c[2] < 60;
+    const isGreen = (c) => c[0] < 60 && c[1] > 200 && c[2] < 60;
+    // The squares are as wide as they are far, so each fills the view
+    // whatever the distance (the view is 60 degrees high: they are big).
+    const plain = await run(scene(5, 0, 20));            // red nearer, no orders: red hides green
+    const behind = await run(scene(5, 10, 20));          // red nearer but order 10: drawn first, green over it
+    const front = await run(scene(20, -10, 5));          // red farther but order -10: drawn last, over green
+    const inFront = await run(scene(20, 0, 5));          // the same without the order: green hides red
+    const text = JSON.stringify({ plain, behind, front, inFront });
+    assert(isRed(plain) && isGreen(behind) && isRed(front) && isGreen(inFront), `EntityOrder: ${text}`);
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('decals: drawn on the surface, near and far, with no flicker', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
