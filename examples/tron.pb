@@ -25,13 +25,14 @@ For i = 0 To 31
   TexturePixel gridTex, 31, i, 0, 0, 255
 Next
 
-; The floor is as big as the camera sees, and follows the bike a cell at a
-; time, so it never ends: a cell is 10 units, the width of the texture.
+; The floor is as big as the camera sees (a plane is 2 units wide until it is
+; scaled), and follows the bike a cell at a time, so it never ends: a cell is
+; 10 units, the width of the texture.
 Const FLOOR_SIZE = 1000
 Const CELL = 10
 grid = CreatePlane()
 ScaleEntity grid, FLOOR_SIZE, 1, FLOOR_SIZE
-ScaleTexture gridTex, Float(CELL) / FLOOR_SIZE, Float(CELL) / FLOOR_SIZE
+ScaleTexture gridTex, Float(CELL) / (2 * FLOOR_SIZE), Float(CELL) / (2 * FLOOR_SIZE)
 EntityTexture grid, gridTex
 EntityBlend grid, 1
 EntityAlpha grid, 0.6

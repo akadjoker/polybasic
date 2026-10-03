@@ -27,7 +27,7 @@ export class Entity
     this.rotation = new Quat();
     this.scale = new Vec3(1, 1, 1);
     this.visible = true;
-    this.order = 0;         // draw order: lower first; cameras render in this order
+    this.order = 0;         // EntityOrder: above 0 drawn first and below 0 last, both without depth; cameras render lowest first
     // Shadows (for lights that cast them): does it cast one, and do the
     // others fall on it? EntityFX FX_NOSHADOWCAST / FX_NOSHADOWRECV.
     this.castShadow = true;

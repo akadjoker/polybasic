@@ -17,6 +17,20 @@ import { Mat4 } from '../../math/mat4.js';
 // exactly one of (row, column) is the Z row/column.
 const MIRRORED = [2, 6, 14, 8, 9, 11];
 
+// Draws a material without looking at depth or writing it (or as it was).
+function ordered(material, on)
+{
+  if (!!material.userData.ordered === on) return;
+  material.userData.ordered = on;
+  if (on)
+  {
+    material.userData.depthWrite = material.depthWrite;
+    material.depthWrite = false;
+  }
+  else material.depthWrite = material.userData.depthWrite;
+  material.depthTest = !on;
+}
+
 function mirrorInto(target, world)
 {
   const e = target.elements;
@@ -274,7 +288,11 @@ export class ThreeBackend extends RenderBackend
     obj.geometry = geometry;
     obj.material = material;
     obj.visible = true;
-    obj.renderOrder = item.order;
+    // Blitz3D's EntityOrder: one with an order is drawn without depth, before
+    // the rest when above 0 (the higher first: a sky box) and after it when
+    // below (a gun that must not sink into walls). Lower renders first here.
+    obj.renderOrder = -item.order;
+    for (const m of materials) ordered(m, item.order !== 0);
     obj.castShadow = item.castShadow !== false;
     obj.receiveShadow = item.receiveShadow !== false;
     if (item.sprite) this.sprites.push({ obj, world: item.world, sprite: item.sprite });
