@@ -449,6 +449,27 @@ try
     await page.close();
   });
 
+  await check('a second mouse button pressed or released while another is held is seen (aiming with the right button and shooting with the left)', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/block-rain.pb`);
+    await waitRunning(page);
+    const held = () => page.evaluate(() => [...window.polybasicPlayer.state.engine.input.buttons].sort().join(','));
+    await page.mouse.move(400, 300);
+    await page.mouse.down({ button: 'right' });
+    assert(await held() === '2', `right alone: ${await held()}`);
+    await page.mouse.down({ button: 'left' });
+    assert(await held() === '1,2', `left pressed with right held: ${await held()}`);
+    await page.mouse.up({ button: 'left' });
+    assert(await held() === '2', `left released, right held: ${await held()}`);
+    await page.mouse.down({ button: 'left' });
+    await page.mouse.up({ button: 'right' });
+    assert(await held() === '1', `right released, left held: ${await held()}`);
+    await page.mouse.up({ button: 'left' });
+    assert(await held() === '', `all released: ${await held()}`);
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('same transforms under three.js in the browser and the null backend in Node', async () =>
   {
     const worst = [];
