@@ -71,7 +71,7 @@ to switch it: shadows, texture flags, sprites, building meshes, decals,
 ribbon trails, trees, grass and terrain; those under **Blitz3D samples**
 are programs that came with Blitz3D, ported: the driving sample, the
 MD2 dragon over a mirror floor, the GCUK animation tutorial, the Birds'
-flight through a canyon, Tron's light bike and a run about the Castle; **Games** has Dead Field, a first-person zombie
+flight through a canyon, Tron's light bike, a run about the Castle and a teapot that mirrors a room; **Games** has Dead Field, a first-person zombie
 shooter. The full story is in
 [docs/playground.md](docs/playground.md).
 
