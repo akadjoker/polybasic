@@ -2394,6 +2394,38 @@ End Function
     await page.close();
   });
 
+  await check('tron.pb: the bike runs, steering grows a wall of light behind it, the cubes turn, no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/tron.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const look = () => page.evaluate(() =>
+    {
+      const all = window.polybasicPlayer.state.engine.world.entities;
+      const meshes = all.filter((e) => e.kind === 'mesh');
+      // the only mesh the program builds by hand: the others are shapes
+      const wall = meshes.find((e) => e.mesh && e.mesh.surfaces && e.mesh.surfaces.length);
+      return {
+        meshes: meshes.length,
+        corners: wall ? wall.mesh.surfaces[0].vertexCount : -1
+      };
+    });
+    await page.waitForTimeout(500);
+    const a = await look();
+    await page.screenshot({ path: join(SHOTS, 'tron-start.png') });
+    await page.keyboard.down('ArrowLeft');
+    await page.waitForTimeout(2500);
+    await page.keyboard.up('ArrowLeft');
+    await page.waitForTimeout(500);
+    const b = await look();
+    await page.screenshot({ path: join(SHOTS, 'tron.png') });
+    assert(a.meshes >= 83, `${a.meshes} meshes: expected the grid, 81 cubes and the wall at least`);
+    assert(a.corners === 4, `the wall starts with ${a.corners} corners, not 4`);
+    assert(b.corners > a.corners, `steering did not grow the wall (${a.corners} -> ${b.corners} corners)`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${a.meshes} meshes, the wall went from ${a.corners} to ${b.corners} corners while steering`);
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });

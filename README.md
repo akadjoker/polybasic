@@ -70,8 +70,8 @@ controlling an animation to first-person, free-look and orbit cameras
 to switch it: shadows, texture flags, sprites, building meshes, decals,
 ribbon trails, trees, grass and terrain; those under **Blitz3D samples**
 are programs that came with Blitz3D, ported: the driving sample, the
-MD2 dragon over a mirror floor, the GCUK animation tutorial and the Birds'
-flight through a canyon; **Games** has Dead Field, a first-person zombie
+MD2 dragon over a mirror floor, the GCUK animation tutorial, the Birds'
+flight through a canyon and Tron's light bike; **Games** has Dead Field, a first-person zombie
 shooter. The full story is in
 [docs/playground.md](docs/playground.md).
 
