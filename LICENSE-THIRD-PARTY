@@ -117,6 +117,10 @@ _release/samples), Copyright (c) 2013 Blitz Research Ltd, under the same
 zlib/libpng licence as the Blitz3D compiler above. Models among them were
 converted to glTF for PolyBasic. examples/tron.pb is a port of the Tron
 sample, which has no files of its own: its grid texture is drawn in code.
+The castle demo's files (examples/assets/blitz3d/castle: the castle and the
+runner as .glb made from their .x files with tools/x2gltf.mjs, the textures,
+sky box, sprites and sounds) are the ones its sample comes with; the terrain
+heightmap and ground texture are the driving sample's (the same files).
 The dragon (examples/assets/blitz3d/dragon) is credited in its sample as
 "MD2 Dragon model courtesy of Polycount"; the gargoyle
 (examples/assets/blitz3d/gcuk) comes with Paul Gerfen's GCUK tutorials
