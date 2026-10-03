@@ -131,4 +131,27 @@ test('a crate is pushed along by the player walking into it (props have physics)
   assert(Number(m[1]) > 1.5, `the crate stayed at z ${m[1]}`);
 });
 
+// No rock corner may face the rock's middle, or the rock is drawn inside
+// out (the corner at the very bottom, where a ring shrinks to a point, has
+// no normal at all).
+test('the rocks face outwards (their corners point away from the centre)', async () =>
+{
+  let source = readFileSync(FILE, 'utf8');
+  const check = `
+Function Update()
+  s = GetSurface(rockMesh, 1)
+  bad = 0
+  For i = 0 To CountVertices(s) - 1
+    If VertexNX(s, i) * VertexX(s, i) + VertexNY(s, i) * VertexY(s, i) + VertexNZ(s, i) * VertexZ(s, i) < -0.001 Then bad = bad + 1
+  Next
+  Print "inward " + bad + " of " + CountVertices(s)
+  End
+End Function
+`;
+  const at = source.indexOf('Function Update()');
+  source = source.slice(0, at) + check + '\n' + source.slice(at).replace('Function Update()', 'Function GameUpdate()');
+  const out = await play(source, 2);
+  assert(/inward 0 of \d+/.test(out), `rock corners facing inwards: ${out}`);
+});
+
 export default unit;

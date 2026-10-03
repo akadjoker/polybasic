@@ -173,8 +173,8 @@ Function BuildRock()
       b = a + 1
       c = a + slices + 1
       d = c + 1
-      AddTriangle s, a, c, b
-      AddTriangle s, b, c, d
+      AddTriangle s, a, b, c
+      AddTriangle s, b, d, c
     Next
   Next
   UpdateNormals rockMesh
