@@ -351,7 +351,9 @@ export function convert(roots, name, options = {})
   {
     const key = JSON.stringify(m);
     if (materialIndex.has(key)) return materialIndex.get(key);
-    const [r, g, b, a] = m.colour;
+    // A material that names a texture is white: the picture gives the colour
+    // (as Blitz3D's loader does).
+    const [r, g, b, a] = m.texture ? [1, 1, 1, m.colour[3]] : m.colour;
     const out = {
       pbrMetallicRoughness: {
         baseColorFactor: [srgbToLinear(r), srgbToLinear(g), srgbToLinear(b), a],

@@ -269,11 +269,40 @@ Frame Body {
   const json = jsonOf(glb);
   assert(json.materials.length === 1, `${json.materials.length} materials: only the one the triangle uses`);
   assert(json.images.length === 1 && json.images[0].uri === 'face.bmp', `images ${JSON.stringify(json.images)}: the name as the disk has it`);
+  // The list's second material (Red, which names a texture) is the face's,
+  // and a material with a texture is white: the picture is its colour.
   const colour = json.materials[0].pbrMetallicRoughness.baseColorFactor;
-  assert(colour[0] > 0.99 && colour[1] === 0, `the colour is ${colour}: the list's second material (Red) is the face's`);
+  assert(colour.slice(0, 3).every((v) => v === 1), `the colour is ${colour}, not white`);
   const again = [];
   xToGlb(new TextEncoder().encode(text), 'tri.x', { resolveTexture: () => null, missing: again });
   assert(again.join() === 'FACE.BMP', `missing ${again}: the one the face uses (the other material is not used)`);
+});
+
+test('a material without a texture keeps its colour (as the converted linear colour)', () =>
+{
+  const text = `xof 0303txt 0032
+Mesh Tri {
+  3;
+  0;0;0;, 1;0;0;, 0;1;0;;
+  1;
+  3;0,1,2;;
+  MeshMaterialList {
+    1;
+    1;
+    0;;
+    Material {
+      0;1;0;0.5;;
+      8;
+      0;0;0;;
+      0;0;0;;
+    }
+  }
+}
+`;
+  const json = jsonOf(xToGlb(new TextEncoder().encode(text), 'tri.x'));
+  const factor = json.materials[0].pbrMetallicRoughness.baseColorFactor;
+  assert(factor[0] === 0 && factor[1] === 1 && factor[2] === 0 && factor[3] === 0.5, `colour ${factor}`);
+  assert(!json.materials[0].pbrMetallicRoughness.baseColorTexture, 'no texture');
 });
 
 export default unit;
