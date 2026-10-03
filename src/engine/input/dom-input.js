@@ -41,9 +41,22 @@ export function attachDomInput(input, element, toLogical)
   on(window, 'blur', () => input.releaseAll());
 
   element.style.touchAction = 'none';
+  // A second button pressed or released while another is held sends no
+  // pointerdown or pointerup, only a pointermove whose `buttons` changed:
+  // so the buttons held are read from `buttons` on every pointer event
+  // (bit 1 left, 2 right, 4 middle).
+  const syncButtons = (e) =>
+  {
+    for (const [bit, button] of [[1, 1], [2, 2], [4, 3]])
+    {
+      if (e.buttons & bit) input.buttonDown(button);
+      else if (input.buttons.has(button)) input.buttonUp(button);
+    }
+  };
   const move = (e) =>
   {
     if (e.pointerType === 'touch' && e.pointerId !== touchId) return;
+    syncButtons(e);
     const [x, y] = toLogical(e.clientX, e.clientY);
     if (locked()) input.pointerMove(input.mouseX, input.mouseY, e.movementX, e.movementY);
     else input.pointerMove(x, y);
@@ -71,6 +84,7 @@ export function attachDomInput(input, element, toLogical)
     // Jumping to the new spot is not movement: a finger landing somewhere
     // should not look like a fast swipe.
     input.pointerMove(x, y, 0, 0);
+    syncButtons(e);
     input.buttonDown(e.button === 2 ? 2 : e.button === 1 ? 3 : 1);
     if (input.pointerLockWanted && !locked() && element.requestPointerLock) element.requestPointerLock();
     e.preventDefault();
@@ -83,6 +97,7 @@ export function attachDomInput(input, element, toLogical)
       touchId = null;
     }
     input.buttonUp(e.button === 2 ? 2 : e.button === 1 ? 3 : 1);
+    syncButtons(e);
   };
   on(element, 'pointerup', up);
   on(element, 'pointercancel', up);

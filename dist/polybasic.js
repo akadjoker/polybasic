@@ -40462,8 +40462,15 @@ function attachDomInput(input, element, toLogical) {
   });
   on(window, "blur", () => input.releaseAll());
   element.style.touchAction = "none";
+  const syncButtons = (e) => {
+    for (const [bit, button] of [[1, 1], [2, 2], [4, 3]]) {
+      if (e.buttons & bit) input.buttonDown(button);
+      else if (input.buttons.has(button)) input.buttonUp(button);
+    }
+  };
   const move = (e) => {
     if (e.pointerType === "touch" && e.pointerId !== touchId) return;
+    syncButtons(e);
     const [x, y] = toLogical(e.clientX, e.clientY);
     if (locked()) input.pointerMove(input.mouseX, input.mouseY, e.movementX, e.movementY);
     else input.pointerMove(x, y);
@@ -40480,6 +40487,7 @@ function attachDomInput(input, element, toLogical) {
     }
     const [x, y] = toLogical(e.clientX, e.clientY);
     input.pointerMove(x, y, 0, 0);
+    syncButtons(e);
     input.buttonDown(e.button === 2 ? 2 : e.button === 1 ? 3 : 1);
     if (input.pointerLockWanted && !locked() && element.requestPointerLock) element.requestPointerLock();
     e.preventDefault();
@@ -40490,6 +40498,7 @@ function attachDomInput(input, element, toLogical) {
       touchId = null;
     }
     input.buttonUp(e.button === 2 ? 2 : e.button === 1 ? 3 : 1);
+    syncButtons(e);
   };
   on(element, "pointerup", up);
   on(element, "pointercancel", up);

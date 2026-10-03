@@ -920,8 +920,10 @@ Function Update()
   EndIf
 
   ; Looking down the sights, which slows the turning.
-  If KeyHit(KEY_Z) Then scoped = Not scoped
-  sighting = (state <> GAME_OVER) And (scoped Or MouseDown(MOUSE_RIGHT))
+  ; It needs the mouse taken: without it there is no way to aim.
+  If Not PointerLocked() Then scoped = False
+  If KeyHit(KEY_Z) And PointerLocked() Then scoped = Not scoped
+  sighting = (state <> GAME_OVER) And PointerLocked() And (scoped Or MouseDown(MOUSE_RIGHT))
   If sighting Then goal# = 1 Else goal# = 0
   scope = scope + (goal - scope) * 0.22
   zoom# = 1 + 3 * Smooth(0, 1, scope)
