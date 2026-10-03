@@ -2586,6 +2586,26 @@ End Function
     console.log(`      ${a.colours} colours sampled, ${a.drawn} pixels drawn`);
   });
 
+  await check('head.pb: the head comes into view and moves in front of the turning room, no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/head.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const look = () => page.evaluate(`(${canvasStats})(window.polybasicPlayer.screen.canvas)`);
+    const room = await look();
+    // The head starts out of sight and comes up from below.
+    await page.waitForTimeout(7000);
+    const first = await look();
+    await page.screenshot({ path: join(SHOTS, 'head.png') });
+    await page.waitForTimeout(1500);
+    const second = await look();
+    assert(room.colours > 20, `the room is a flat colour (${room.colours} colours)`);
+    assert(first.hash !== second.hash, 'the picture does not change');
+    assert(first.colours > 40, `${first.colours} colours sampled once the head is in`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${room.colours} colours in the room, ${first.colours} with the head`);
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });

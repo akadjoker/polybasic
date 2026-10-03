@@ -397,6 +397,22 @@
       ]
     },
     {
+      "id": "head",
+      "title": "The Head",
+      "category": "blitz3d",
+      "file": "../examples/head.pb",
+      "description": "Adam Gore's Blitz3D head sample, ported: a head turns and looks about on paths made in Lightwave (keyframed Kochanek-Bartels splines worked out in the program, one of them where the eyes look), lit by a white and a red light in front of a turning room; late in the film it is given a sphere map and turns to chrome. Head and eyes were .x files, converted to glTF. Files come with the Blitz3D samples (zlib licence).",
+      "controls": "None: watch the film",
+      "assets": [
+        "assets/blitz3d/head/head.glb",
+        "assets/blitz3d/head/eye.glb",
+        "assets/blitz3d/head/eye.jpg",
+        "assets/blitz3d/head/face.jpg",
+        "assets/blitz3d/head/reflection.jpg",
+        "assets/blitz3d/head/bkgd.jpg"
+      ]
+    },
+    {
       "id": "gcuk-animation",
       "title": "Object Animation (GCUK tutorial)",
       "category": "blitz3d",
