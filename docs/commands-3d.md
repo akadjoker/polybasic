@@ -352,9 +352,10 @@ to the part (`FindChild`).
 | `TEX_MASKED` | 4 | Black pixels, and pixels less than half solid, are not drawn at all: leaves, fences, cut-out shapes. Their shadows are cut out too. |
 | `TEX_MIPMAP` | 8 | Accepted; textures are always mipmapped here. |
 | `TEX_CLAMPU` `TEX_CLAMPV` | 16 32 | The texture does not repeat across (U) or down (V): its edge pixels carry on. |
+| `TEX_SPHEREMAP` | 64 | A reflection: the picture is a mirror ball (a photograph of one, or a painting of the sky round a bright light), and each point of a shape shows the part of it that the eye's ray lands on after the shape's surface reflects it. It moves as the shape turns: a shiny teapot, chrome, an eye. The texture coordinates of the shape are not used. |
 
 Flags 256 and 512 (video memory, high colour) are accepted and mean
-nothing here; sphere and cube maps (64, 128) are not supported.
+nothing here; cube maps (128) are not supported.
 
 Try it: **Texture flags** in the playground's Visual effects (`examples/textures.pb`).
 

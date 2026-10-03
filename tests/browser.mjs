@@ -1592,6 +1592,59 @@ End Function
     await page.close();
   });
 
+  await check('TEX_SPHEREMAP: a ball seen head-on shows the middle of the picture in its middle and the rest of it towards the edge', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
+    await page.waitForFunction(() => window.polybasicPlayground && window.polybasicPlayground.getProgramId() === 'spin', null, { timeout: 20000 });
+    // The picture: blue with a red square in the middle. The eye's ray
+    // reflected by the ball's middle goes straight back and lands in the
+    // middle of the picture; 45 degrees from the middle it lands well
+    // outside the red (0.85 across).
+    const text = `Graphics3D 640, 480
+cam = CreateCamera()
+CameraClsColor cam, 0, 0, 0
+PositionEntity cam, 0, 0, -4
+tex = CreateTexture(64, 64, 0, 0, 255, TEX_COLOR + TEX_SPHEREMAP)
+For x = 27 To 36
+  For y = 27 To 36
+    TexturePixel tex, x, y, 255, 0, 0
+  Next
+Next
+ball = CreateSphere(32)
+EntityTexture ball, tex
+EntityFX ball, FX_FULLBRIGHT
+Function Update()
+  If FrameCount() = 1 Then Print "first"
+End Function
+`;
+    await page.evaluate((x) => window.polybasicPlayground.setText(x), text);
+    await page.evaluate(() => window.polybasicPlayground.run());
+    await page.waitForFunction(() => document.getElementById('console').textContent.includes('first'), null, { timeout: 10000 });
+    await page.waitForTimeout(400);
+    const pixels = await page.evaluate(() =>
+    {
+      const canvas = window.polybasicPlayground.getScreen().canvas;
+      const copy = document.createElement('canvas');
+      copy.width = canvas.width;
+      copy.height = canvas.height;
+      const ctx = copy.getContext('2d');
+      ctx.drawImage(canvas, 0, 0);
+      const at = (dx, dy) => Array.from(ctx.getImageData(Math.round(canvas.width / 2 + dx * canvas.height), Math.round(canvas.height / 2 + dy * canvas.height), 1, 1).data.slice(0, 3));
+      // The ball's radius on screen is 0.22 of the height: a point a
+      // third of the way out, one on each side and one above.
+      return { middle: at(0, 0), right: at(0.075, 0), left: at(-0.075, 0), above: at(0, -0.075) };
+    });
+    const isRed = (c) => c[0] > 200 && c[1] < 60 && c[2] < 60;
+    const isBlue = (c) => c[2] > 200 && c[0] < 60 && c[1] < 60;
+    const found = JSON.stringify(pixels);
+    assert(isRed(pixels.middle), `the middle is not the picture's red middle: ${found}`);
+    assert(isBlue(pixels.right) && isBlue(pixels.left) && isBlue(pixels.above), `away from the middle it is not the blue: ${found}`);
+    await page.locator('.polybasic-screen').screenshot({ path: join(SHOTS, 'spheremap.png') });
+    await page.click('#stopBtn');
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('decals: drawn on the surface, near and far, with no flicker', async () =>
   {
     const page = await openPage(browser, `${base}/web/#p=spin`, { width: 1400, height: 850 });
@@ -2514,6 +2567,23 @@ End Function
     noConsoleErrors(page);
     await page.close();
     console.log(`      ${a.entities} entities, ${a.trees} sprites; a shot made it ${b.entities}`);
+  });
+
+  await check('teapot.pb: the teapot turns and shows its sphere map (not one flat colour), no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/teapot.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    await page.waitForTimeout(500);
+    const look = () => page.evaluate(`(${canvasStats})(window.polybasicPlayer.screen.canvas)`);
+    const a = await look();
+    await page.screenshot({ path: join(SHOTS, 'teapot.png') });
+    await page.waitForTimeout(1500);
+    const b = await look();
+    assert(a.colours > 20, `the teapot is a flat colour (${a.colours} colours sampled)`);
+    assert(a.hash !== b.hash, 'the picture does not change: the teapot is not turning');
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${a.colours} colours sampled, ${a.drawn} pixels drawn`);
   });
 
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>

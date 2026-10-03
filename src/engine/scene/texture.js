@@ -57,6 +57,12 @@ export class Texture
     return (this.flags & TEX_MASKED) !== 0;
   }
 
+  // TEX_SPHEREMAP: the picture is a mirror ball the surface reflects.
+  get sphere()
+  {
+    return (this.flags & TEX_SPHEREMAP) !== 0;
+  }
+
   fill(r, g, b, a = 255)
   {
     const p = this.pixels;

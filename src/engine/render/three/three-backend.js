@@ -17,6 +17,28 @@ import { Mat4 } from '../../math/mat4.js';
 // exactly one of (row, column) is the Z row/column.
 const MIRRORED = [2, 6, 14, 8, 9, 11];
 
+// TEX_SPHEREMAP: the texture coordinates are where the eye's ray, reflected
+// by the surface, lands on a mirror ball seen from the front (the fixed
+// pipeline's sphere map), made at each corner. The picture's rows start at
+// the top.
+function sphereMapped(material)
+{
+  material.onBeforeCompile = (shader) =>
+  {
+    shader.vertexShader = shader.vertexShader.replace('#include <uv_vertex>', `#include <uv_vertex>
+#ifdef USE_MAP
+  {
+    vec3 sphereEye = normalize((modelViewMatrix * vec4(position, 1.0)).xyz);
+    vec3 sphereNormal = normalize(normalMatrix * normal);
+    vec3 sphereReflection = reflect(sphereEye, sphereNormal);
+    float sphereScale = 2.0 * length(vec3(sphereReflection.xy, sphereReflection.z + 1.0));
+    vMapUv = vec2(sphereReflection.x / sphereScale + 0.5, 0.5 - sphereReflection.y / sphereScale);
+  }
+#endif`);
+  };
+  material.customProgramCacheKey = () => 'spheremap';
+}
+
 // Draws a material without looking at depth or writing it (or as it was).
 function ordered(material, on)
 {
@@ -559,6 +581,7 @@ uniform vec4 pbPushers[8];`)
         specular: new THREE.Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    if (tex && m.texture.sphere) sphereMapped(material);
     // Fully faded out (EntityAlpha 0) is not drawn at all, as in Blitz3D:
     // it hides nothing behind it and casts no shadow, and is still picked.
     material.visible = m.alphaMode === 'opaque' || m.alpha > 0;

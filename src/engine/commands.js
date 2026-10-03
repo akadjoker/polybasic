@@ -202,6 +202,7 @@ export const ENGINE_CONSTANTS = {
   TEX_MIPMAP,
   TEX_CLAMPU,
   TEX_CLAMPV,
+  TEX_SPHEREMAP,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
@@ -211,11 +212,11 @@ export const ENGINE_CONSTANTS = {
 
 
 // Blitz3D texture flags a program may pass: colour, alpha, masked,
-// mipmapped, clamped; 256 and 512 (video memory, high colour) mean nothing
-// here and are ignored. Sphere and cube maps are not supported.
+// mipmapped, clamped, sphere map; 256 and 512 (video memory, high colour)
+// mean nothing here and are ignored. Cube maps are not supported.
 function textureFlags(flags, command)
 {
-  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  if (flags & TEX_CUBEMAP) throw runtimeError(`${command}: cube maps (flag 128) are not supported`);
   return flags;
 }
 

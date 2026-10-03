@@ -1,3 +1,4 @@
 flags 1 2 4 8 16 32
 ok so far
-Runtime error (3d_texture_flags.pb, line 12): LoadTexture: sphere and cube maps (flags 64 and 128) are not supported
+sphere map 64
+Runtime error (3d_texture_flags.pb, line 14): LoadTexture: cube maps (flag 128) are not supported

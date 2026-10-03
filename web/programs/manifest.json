@@ -385,6 +385,18 @@
       ]
     },
     {
+      "id": "teapot",
+      "title": "Teapot",
+      "category": "blitz3d",
+      "file": "../examples/teapot.pb",
+      "description": "One of the Blitz3D samples, ported: a teapot turning in a spherical reflection map (TEX_SPHEREMAP), a picture of a mirror ball that each point of the teapot shows the part of, as the eye's ray is reflected by its surface. The teapot was a .x file, converted to glTF.",
+      "controls": "None: watch it turn",
+      "assets": [
+        "assets/blitz3d/teapot/teapot.glb",
+        "assets/blitz3d/teapot/spheremap.bmp"
+      ]
+    },
+    {
       "id": "gcuk-animation",
       "title": "Object Animation (GCUK tutorial)",
       "category": "blitz3d",

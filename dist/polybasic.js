@@ -3944,6 +3944,10 @@ var Texture = class {
   get masked() {
     return (this.flags & TEX_MASKED) !== 0;
   }
+  // TEX_SPHEREMAP: the picture is a mirror ball the surface reflects.
+  get sphere() {
+    return (this.flags & TEX_SPHEREMAP) !== 0;
+  }
   fill(r, g, b, a = 255) {
     const p = this.pixels;
     for (let i = 0; i < p.length; i += 4) {
@@ -10163,6 +10167,7 @@ var ENGINE_CONSTANTS = {
   TEX_MIPMAP,
   TEX_CLAMPU,
   TEX_CLAMPV,
+  TEX_SPHEREMAP,
   ...COLLIDE_CONSTANTS,
   ...PHYSICS_CONSTANTS,
   ...MODEL_CONSTANTS,
@@ -10170,7 +10175,7 @@ var ENGINE_CONSTANTS = {
   ...AUDIO_CONSTANTS
 };
 function textureFlags(flags, command) {
-  if (flags & (TEX_SPHEREMAP | TEX_CUBEMAP)) throw runtimeError(`${command}: sphere and cube maps (flags 64 and 128) are not supported`);
+  if (flags & TEX_CUBEMAP) throw runtimeError(`${command}: cube maps (flag 128) are not supported`);
   return flags;
 }
 function createEngineCommands(engine) {
@@ -39851,6 +39856,21 @@ var WebGLRenderer = class {
 
 // src/engine/render/three/three-backend.js
 var MIRRORED = [2, 6, 14, 8, 9, 11];
+function sphereMapped(material) {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace("#include <uv_vertex>", `#include <uv_vertex>
+#ifdef USE_MAP
+  {
+    vec3 sphereEye = normalize((modelViewMatrix * vec4(position, 1.0)).xyz);
+    vec3 sphereNormal = normalize(normalMatrix * normal);
+    vec3 sphereReflection = reflect(sphereEye, sphereNormal);
+    float sphereScale = 2.0 * length(vec3(sphereReflection.xy, sphereReflection.z + 1.0));
+    vMapUv = vec2(sphereReflection.x / sphereScale + 0.5, 0.5 - sphereReflection.y / sphereScale);
+  }
+#endif`);
+  };
+  material.customProgramCacheKey = () => "spheremap";
+}
 function ordered(material, on) {
   if (!!material.userData.ordered === on) return;
   material.userData.ordered = on;
@@ -40275,6 +40295,7 @@ uniform vec4 pbPushers[8];`).replace("#include <begin_vertex>", `#include <begin
         specular: new Color(s * 0.8, s * 0.8, s * 0.8)
       });
     }
+    if (tex && m.texture.sphere) sphereMapped(material);
     material.visible = m.alphaMode === "opaque" || m.alpha > 0;
     this.materials.set(m.id, { material, key });
     return material;
