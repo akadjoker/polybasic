@@ -123,6 +123,10 @@ sky box, sprites and sounds) are the ones its sample comes with; the terrain
 heightmap and ground texture are the driving sample's (the same files).
 The teapot (examples/assets/blitz3d/teapot: teapot.glb made from teapot.x with
 tools/x2gltf.mjs, and the sphere map picture) is the teapot sample's.
+The head (examples/assets/blitz3d/head: head.glb and eye.glb made from Head.x
+and Eye.x with tools/x2gltf.mjs, and the pictures) is the head sample's, by
+Adam Gore as its title says; its paths are the Head.bbm and EyeFocus.bbm keys
+written as Data lines in examples/head.pb.
 The dragon (examples/assets/blitz3d/dragon) is credited in its sample as
 "MD2 Dragon model courtesy of Polycount"; the gargoyle
 (examples/assets/blitz3d/gcuk) comes with Paul Gerfen's GCUK tutorials
