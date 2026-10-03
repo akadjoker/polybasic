@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mouse test</title>
+<style>
+  body { margin: 0; background: #111; color: #ddd; font: 14px/1.4 monospace; }
+  canvas { display: block; width: 100%; height: 40vh; background: #223; cursor: crosshair; touch-action: none; }
+  #state { padding: 8px 12px; background: #000; position: sticky; top: 0; }
+  #log { padding: 8px 12px; white-space: pre; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="state"></div>
+<div id="log"></div>
+<script>
+// Shows what the browser sends for the mouse: click on the blue area, move,
+// press the buttons (also together: hold the right one and click the left
+// one), then go full screen with F and try again.
+const canvas = document.getElementById('c');
+const state = document.getElementById('state');
+const logEl = document.getElementById('log');
+const counts = {};
+const lines = [];
+let lastMove = null;
+let wantLock = true;
+
+function note(type, e)
+{
+  counts[type] = (counts[type] || 0) + 1;
+  if (type === 'pointermove' || type === 'mousemove')
+  {
+    lastMove = `${type} buttons=${e.buttons} movement=${e.movementX},${e.movementY}`;
+    return;
+  }
+  const extra = e.button !== undefined ? ` button=${e.button} buttons=${e.buttons}` : '';
+  lines.push(`${(performance.now() / 1000).toFixed(2)} ${type}${extra} target=${e.target && e.target.tagName}`);
+  if (lines.length > 22) lines.shift();
+}
+
+for (const type of ['pointerdown', 'pointerup', 'pointercancel', 'pointermove', 'mousedown', 'mouseup', 'mousemove', 'click', 'contextmenu', 'lostpointercapture'])
+{
+  canvas.addEventListener(type, (e) =>
+  {
+    note(type, e);
+    if (type === 'contextmenu' || type === 'pointerdown') e.preventDefault();
+  });
+}
+canvas.addEventListener('pointerdown', (e) =>
+{
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) { lines.push(`setPointerCapture failed: ${err.name}`); }
+  if (wantLock) canvas.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => lines.push(`pointerlockchange locked=${document.pointerLockElement === canvas}`));
+document.addEventListener('pointerlockerror', () => lines.push('pointerlockerror'));
+document.addEventListener('fullscreenchange', () => lines.push(`fullscreenchange fullscreen=${!!document.fullscreenElement}`));
+window.addEventListener('keydown', (e) =>
+{
+  if (e.code === 'KeyF') (document.fullscreenElement ? document.exitFullscreen() : canvas.requestFullscreen());
+});
+
+function draw()
+{
+  state.textContent = `${navigator.userAgent}\nlocked=${document.pointerLockElement === canvas} fullscreen=${!!document.fullscreenElement}  (click: take the mouse, F: full screen)\n` +
+    Object.entries(counts).map(([k, v]) => `${k}=${v}`).join('  ') + `\nlast ${lastMove}`;
+  logEl.textContent = lines.join('\n');
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>
