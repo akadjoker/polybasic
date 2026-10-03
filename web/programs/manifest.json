@@ -374,7 +374,7 @@
       "category": "games",
       "file": "../examples/zombies.pb",
       "description": "A first-person zombie shooter: waves of Mixamo zombies (skinned, with animations that blend) climb out of a rolling field of grass, trees and rocks. Headshots count more; barrels blow up what stands near them and crates fly (physics). Models and sounds in assets/zombies; the gun and the bonfire are CC BY 4.0.",
-      "controls": "Click to take the mouse. WASD walk, Shift run, Space jump, click or F shoot, Z or right button look down the sights, R starts again",
+      "controls": "Click to start and take the mouse. WASD walk, mouse or arrows look, Shift run, Space jump, hold click or F to shoot, Z or right button look down the sights, R starts again. Walk into crates to push them, shoot barrels to blow them up",
       "assets": [
         "assets/zombies/barrel.glb",
         "assets/zombies/barrel_d.jpg",

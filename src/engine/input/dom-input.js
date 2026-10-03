@@ -56,7 +56,17 @@ export function attachDomInput(input, element, toLogical)
       if (touchId !== null) return;
       touchId = e.pointerId;
     }
-    element.setPointerCapture(e.pointerId);
+    // Capturing keeps the drag going outside the canvas, but a browser can
+    // refuse (the pointer is not active any more, as under a locked pointer
+    // or a synthetic event); the press must count all the same.
+    try
+    {
+      element.setPointerCapture(e.pointerId);
+    }
+    catch
+    {
+      // not captured: the press is still taken below
+    }
     const [x, y] = toLogical(e.clientX, e.clientY);
     // Jumping to the new spot is not movement: a finger landing somewhere
     // should not look like a fast swipe.
