@@ -5,16 +5,24 @@
 //
 // Read: frames with their matrices, meshes (faces of any size, fanned into
 // triangles), MeshNormals, MeshTextureCoords, MeshMaterialList with
-// Material colours and TextureFilename. Not read: animations, skin
+// Material colours and TextureFilename, and AnimationSets of frames moved
+// by position, rotation and scale keys. Not read: matrix keys, skin
 // weights, vertex colours, compressed (mszip) .x files.
+//
+// An animation's key times are frames, as Blitz3D plays them (one frame a
+// step at speed 1, and a step is 1/60 of a second): they are written as
+// frame / 60 seconds, so Animate at speed 1 plays one frame a step. A
+// frame an animation moves is written as translation, rotation and scale
+// (the glTF way) taken from its matrix; a channel the animation has no keys
+// for keeps the matrix's value.
 //
 // .x space is left-handed like PolyBasic's; glTF's is right-handed. The
 // file is written so that PolyBasic's glTF reader (which mirrors x) gives
 // back the .x coordinates: positions and normals x -> -x, matrices S M S,
 // two corners of every triangle swapped. UVs are the same in both.
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // ------------------------------------------------------------------ parse
@@ -121,7 +129,7 @@ export function parse(tokens)
   let i = 0;
   const block = () =>
   {
-    const node = { type: tokens[i++].w, name: '', values: [], children: [] };
+    const node = { type: tokens[i++].w, name: '', values: [], children: [], refs: [] };
     if (tokens[i].w) node.name = tokens[i++].w;
     if (tokens[i].p !== '{') throw new Error(`expected { after ${node.type}`);
     i++;
@@ -132,6 +140,7 @@ export function parse(tokens)
       else if (t.p === '{')
       {
         // A reference to a named block: { name }.
+        if (tokens[i + 1].w) node.refs.push(tokens[i + 1].w);
         i += 3;
       }
       else
@@ -162,7 +171,77 @@ export function parse(tokens)
 
 const srgbToLinear = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 
-function readMesh(node)
+// Translation, rotation (x y z w) and scale of a glTF matrix (16 numbers,
+// column by column).
+export function decompose(m)
+{
+  const scale = [Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6]), Math.hypot(m[8], m[9], m[10])];
+  // A mirrored matrix is told by its determinant: the sign goes to x.
+  const det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) + m[8] * (m[1] * m[6] - m[2] * m[5]);
+  if (det < 0) scale[0] = -scale[0];
+  // The rotation matrix r[row][column], from the columns made unit.
+  const r = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let col = 0; col < 3; col++) for (let row = 0; row < 3; row++) r[row][col] = m[col * 4 + row] / scale[col];
+  const trace = r[0][0] + r[1][1] + r[2][2];
+  let x;
+  let y;
+  let z;
+  let w;
+  if (trace > 0)
+  {
+    const t = Math.sqrt(trace + 1) * 2;
+    w = t / 4;
+    x = (r[2][1] - r[1][2]) / t;
+    y = (r[0][2] - r[2][0]) / t;
+    z = (r[1][0] - r[0][1]) / t;
+  }
+  else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
+  {
+    const t = Math.sqrt(1 + r[0][0] - r[1][1] - r[2][2]) * 2;
+    w = (r[2][1] - r[1][2]) / t;
+    x = t / 4;
+    y = (r[0][1] + r[1][0]) / t;
+    z = (r[0][2] + r[2][0]) / t;
+  }
+  else if (r[1][1] > r[2][2])
+  {
+    const t = Math.sqrt(1 + r[1][1] - r[0][0] - r[2][2]) * 2;
+    w = (r[0][2] - r[2][0]) / t;
+    x = (r[0][1] + r[1][0]) / t;
+    y = t / 4;
+    z = (r[1][2] + r[2][1]) / t;
+  }
+  else
+  {
+    const t = Math.sqrt(1 + r[2][2] - r[0][0] - r[1][1]) * 2;
+    w = (r[1][0] - r[0][1]) / t;
+    x = (r[0][2] + r[2][0]) / t;
+    y = (r[1][2] + r[2][1]) / t;
+    z = t / 4;
+  }
+  return { translation: [m[12], m[13], m[14]], rotation: [x, y, z, w], scale };
+}
+
+// The keys of an AnimationKey block: [{ time, values }].
+function readKeys(node)
+{
+  const v = node.values;
+  const keys = [];
+  let i = 2;
+  for (let n = 0; n < v[1]; n++)
+  {
+    const length = v[i + 1];
+    keys.push({ time: v[i], values: v.slice(i + 2, i + 2 + length) });
+    i += 2 + length;
+  }
+  return keys;
+}
+
+const FRAMES_PER_SECOND = 60;
+
+// `named`: the Material blocks of the file by name, for the lists that point
+// to them ({ name }) instead of holding them.
+function readMesh(node, named)
 {
   const v = node.values;
   let k = 0;
@@ -211,9 +290,11 @@ function readMesh(node)
       const list = w.slice(2, 2 + count);
       // Fewer indices than faces: the last goes on for the rest.
       faceMaterial = faces.map((_, f) => list[Math.min(f, list.length - 1)]);
-      materials = c.children.filter((m) => m.type === 'Material').map((m) =>
+      const blocks = c.children.filter((m) => m.type === 'Material').concat(c.refs.map((r) => named.get(r)));
+      if (blocks.some((m) => !m)) throw new Error(`mesh ${node.name} lists a material the file does not have`);
+      materials = blocks.map((m) =>
       {
-        const tex = m.children.find((t) => t.type === 'TextureFilename');
+        const tex = m.children.find((t) => t.type.toLowerCase() === 'texturefilename');
         return { colour: m.values.slice(0, 4), power: m.values[4], texture: tex ? tex.values[0] : null };
       });
     }
@@ -221,7 +302,12 @@ function readMesh(node)
   return { name: node.name, positions, faces, normals, normalFaces, uvs, materials, faceMaterial };
 }
 
-export function convert(roots, name)
+// `options.resolveTexture(file)`: the file name of a texture a material
+// names, as it is on disk (Windows does not tell capitals apart, the web
+// does), or null when it is not there: such a texture is left out, as
+// Blitz3D does, and the material keeps its colour (`options.missing` gets
+// its name).
+export function convert(roots, name, options = {})
 {
   const gltf = {
     asset: { version: '2.0', generator: 'PolyBasic tools/x2gltf.mjs' },
@@ -234,6 +320,13 @@ export function convert(roots, name)
     bufferViews: [],
     buffers: [{ byteLength: 0 }]
   };
+  const named = new Map();
+  const collect = (node) =>
+  {
+    if (node.type === 'Material' && node.name) named.set(node.name, node);
+    node.children.forEach(collect);
+  };
+  roots.forEach(collect);
   const images = [];
   const chunks = [];
   let offset = 0;
@@ -267,9 +360,14 @@ export function convert(roots, name)
       }
     };
     if (a < 1) out.alphaMode = 'BLEND';
-    if (m.texture)
+    const file = m.texture && options.resolveTexture ? options.resolveTexture(m.texture.replace(/\\+/g, '/')) : m.texture && m.texture.replace(/\\+/g, '/');
+    if (m.texture && !file)
     {
-      images.push({ uri: m.texture.replace(/\\+/g, '/') });
+      if (options.missing && !options.missing.includes(m.texture)) options.missing.push(m.texture);
+    }
+    else if (m.texture)
+    {
+      images.push({ uri: file });
       if (!gltf.textures) gltf.textures = [];
       gltf.textures.push({ source: images.length - 1 });
       out.pbrMetallicRoughness.baseColorTexture = { index: gltf.textures.length - 1 };
@@ -323,11 +421,13 @@ export function convert(roots, name)
   };
 
   // Frames become nodes; a mesh inside a frame becomes a child node.
+  const frameNodes = new Map();
   const nodeOf = (node) =>
   {
     const out = { name: node.name || node.type };
     gltf.nodes.push(out);
     const index = gltf.nodes.length - 1;
+    if (node.name) frameNodes.set(node.name, index);
     const children = [];
     for (const c of node.children)
     {
@@ -342,22 +442,88 @@ export function convert(roots, name)
       else if (c.type === 'Frame') children.push(nodeOf(c));
       else if (c.type === 'Mesh')
       {
-        gltf.nodes.push({ name: c.name, mesh: meshOf(readMesh(c)) });
+        gltf.nodes.push({ name: c.name, mesh: meshOf(readMesh(c, named)) });
         children.push(gltf.nodes.length - 1);
       }
     }
     if (children.length) out.children = children;
     return index;
   };
+  // An AnimationSet: each Animation names a frame ({ Frame }) and has keys
+  // for how it moves. A frame that moves is given its translation, rotation
+  // and scale (from its matrix), as glTF does not move a node that has a
+  // matrix.
+  const addAnimation = (set) =>
+  {
+    const animation = { name: set.name, samplers: [], channels: [] };
+    const asSeconds = (frames) => frames / FRAMES_PER_SECOND;
+    for (const a of set.children.filter((c) => c.type === 'Animation'))
+    {
+      const target = frameNodes.get(a.refs[0]);
+      if (target === undefined) throw new Error(`animation ${a.name} moves ${a.refs[0] || 'nothing'}, which is not a frame`);
+      const node = gltf.nodes[target];
+      if (node.matrix)
+      {
+        Object.assign(node, decompose(node.matrix));
+        delete node.matrix;
+      }
+      for (const k of a.children.filter((c) => c.type === 'AnimationKey'))
+      {
+        const type = k.values[0];
+        if (type !== 0 && type !== 1 && type !== 2) throw new Error(`animation ${a.name} has matrix keys, which are not read`);
+        const keys = readKeys(k);
+        const times = Float32Array.from(keys.map((key) => asSeconds(key.time)));
+        let path;
+        let size;
+        const out = [];
+        for (const key of keys)
+        {
+          const v = key.values;
+          if (type === 2)
+          {
+            path = 'translation';
+            size = 3;
+            out.push(-v[0], v[1], v[2]);
+          }
+          else if (type === 1)
+          {
+            path = 'scale';
+            size = 3;
+            out.push(v[0], v[1], v[2]);
+          }
+          else
+          {
+            // (w, x, y, z) in the .x, which turns the other way round; the
+            // mirror in x keeps x and flips y and z: here (x, y, z, w).
+            path = 'rotation';
+            size = 4;
+            out.push(-v[1], v[2], v[3], v[0]);
+          }
+        }
+        const accessor = (array, type2, extra) =>
+        {
+          gltf.accessors.push({ bufferView: addView(array), componentType: 5126, count: array.length / (type2 === 'SCALAR' ? 1 : size), type: type2, ...extra });
+          return gltf.accessors.length - 1;
+        };
+        const input = accessor(times, 'SCALAR', { min: [Math.min(...times)], max: [Math.max(...times)] });
+        const output = accessor(Float32Array.from(out), size === 3 ? 'VEC3' : 'VEC4', {});
+        animation.samplers.push({ input, output, interpolation: 'LINEAR' });
+        animation.channels.push({ sampler: animation.samplers.length - 1, target: { node: target, path } });
+      }
+    }
+    if (!gltf.animations) gltf.animations = [];
+    gltf.animations.push(animation);
+  };
   for (const r of roots)
   {
     if (r.type === 'Frame') gltf.scenes[0].nodes.push(nodeOf(r));
     else if (r.type === 'Mesh')
     {
-      gltf.nodes.push({ name: r.name, mesh: meshOf(readMesh(r)) });
+      gltf.nodes.push({ name: r.name, mesh: meshOf(readMesh(r, named)) });
       gltf.scenes[0].nodes.push(gltf.nodes.length - 1);
     }
   }
+  for (const set of roots.filter((r) => r.type === 'AnimationSet')) addAnimation(set);
   if (images.length) gltf.images = images;
   gltf.scenes[0].name = name;
 
@@ -394,13 +560,13 @@ function glb(json, bin)
 }
 
 // The .glb made from the bytes of a .x file.
-export function xToGlb(bytes, name)
+export function xToGlb(bytes, name, options = {})
 {
   const head = String.fromCharCode(...bytes.subarray(0, 16));
   if (!head.startsWith('xof ')) throw new Error(`${name} is not a .x file`);
   const format = head.slice(8, 12);
-  if (format === 'txt ') return convert(parse(tokenize(Buffer.from(bytes).toString('latin1').slice(16))), name);
-  if (format === 'bin ') return convert(parse(tokenizeBinary(bytes)), name);
+  if (format === 'txt ') return convert(parse(tokenize(Buffer.from(bytes).toString('latin1').slice(16))), name, options);
+  if (format === 'bin ') return convert(parse(tokenizeBinary(bytes)), name, options);
   throw new Error(`${name} is a ${format.trim()} .x file: only txt and bin are read`);
 }
 
@@ -412,6 +578,16 @@ if (process.argv[1] === fileURLToPath(import.meta.url))
     console.error('usage: node tools/x2gltf.mjs model.x model.glb');
     process.exit(1);
   }
-  writeFileSync(output, xToGlb(new Uint8Array(readFileSync(input)), basename(input)));
+  // A texture the .x names that is not beside it is left out.
+  const missing = [];
+  const resolveTexture = (file) =>
+  {
+    const folder = join(dirname(input), dirname(file));
+    if (!existsSync(folder)) return null;
+    const found = readdirSync(folder).find((f) => f.toLowerCase() === basename(file).toLowerCase());
+    return found ? join(dirname(file), found).replace(/^\.\//, '') : null;
+  };
+  writeFileSync(output, xToGlb(new Uint8Array(readFileSync(input)), basename(input), { resolveTexture, missing }));
   console.log(`${input} -> ${output}`);
+  if (missing.length) console.log(`left out, not found beside the .x: ${missing.join(', ')}`);
 }
