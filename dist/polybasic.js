@@ -40474,7 +40474,10 @@ function attachDomInput(input, element, toLogical) {
       if (touchId !== null) return;
       touchId = e.pointerId;
     }
-    element.setPointerCapture(e.pointerId);
+    try {
+      element.setPointerCapture(e.pointerId);
+    } catch {
+    }
     const [x, y] = toLogical(e.clientX, e.clientY);
     input.pointerMove(x, y, 0, 0);
     input.buttonDown(e.button === 2 ? 2 : e.button === 1 ? 3 : 1);

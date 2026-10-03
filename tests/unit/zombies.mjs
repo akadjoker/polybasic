@@ -86,4 +86,72 @@ test('a player who stands still is caught and killed by the zombies', async () =
   assert(/over wave 1 score 0/.test(out), `the zombies never got to the player:\n${out}`);
 });
 
+// The player walks straight into a lone crate: it must be pushed along.
+function withWalker()
+{
+  let source = readFileSync(FILE, 'utf8');
+  source = source.replace('Function Update()\n  dt# = DeltaTime()', 'Function GameUpdate()\n  dt# = DeltaTime()');
+  source = source.replace('If KeyDown(KEY_W) Then z = z + 1', 'If KeyDown(KEY_W) Or botWalk Then z = z + 1');
+  const scene = `
+Global botWalk, crate
+
+Function Update()
+  f = FrameCount()
+  If f = 2 Then NewGame
+  If f = 3
+    toSpawn = 0
+    For p.Prop = Each Prop
+      FreeEntity p\\e
+      Delete p
+    Next
+    AddProp 0, 0, 0, False
+    q.Prop = Last Prop
+    crate = q\\e
+    px = 0
+    pz = -5
+    yaw = 0
+  EndIf
+  botWalk = (f > 20 And f < 140)
+  GameUpdate
+  If f = 150
+    Print "crate " + EntityZ(crate, True)
+    End
+  EndIf
+End Function
+`;
+  const at = source.indexOf('Function Draw()');
+  return source.slice(0, at) + scene + '\n' + source.slice(at);
+}
+
+test('a crate is pushed along by the player walking into it (props have physics)', async () =>
+{
+  const out = await play(withWalker(), 200);
+  const m = /crate (-?[\d.]+)/.exec(out);
+  assert(m, `the walker never reported:\n${out}`);
+  assert(Number(m[1]) > 1.5, `the crate stayed at z ${m[1]}`);
+});
+
+// No rock corner may face the rock's middle, or the rock is drawn inside
+// out (the corner at the very bottom, where a ring shrinks to a point, has
+// no normal at all).
+test('the rocks face outwards (their corners point away from the centre)', async () =>
+{
+  let source = readFileSync(FILE, 'utf8');
+  const check = `
+Function Update()
+  s = GetSurface(rockMesh, 1)
+  bad = 0
+  For i = 0 To CountVertices(s) - 1
+    If VertexNX(s, i) * VertexX(s, i) + VertexNY(s, i) * VertexY(s, i) + VertexNZ(s, i) * VertexZ(s, i) < -0.001 Then bad = bad + 1
+  Next
+  Print "inward " + bad + " of " + CountVertices(s)
+  End
+End Function
+`;
+  const at = source.indexOf('Function Update()');
+  source = source.slice(0, at) + check + '\n' + source.slice(at).replace('Function Update()', 'Function GameUpdate()');
+  const out = await play(source, 2);
+  assert(/inward 0 of \d+/.test(out), `rock corners facing inwards: ${out}`);
+});
+
 export default unit;

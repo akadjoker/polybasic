@@ -1,7 +1,8 @@
 ; Dead Field - a first-person zombie shooter, made for PolyBasic.
 ;
 ; Click to take the mouse. WASD walk, Shift run, Space jump, left click
-; shoots (F too), Z or the right button looks down the sights, R starts
+; shoots (F too), the arrows turn the view when the mouse is not taken, Z
+; or the right button looks down the sights, R starts
 ; again once you are down. Shoot the barrels: they blow up what stands near
 ; them. Headshots count more.
 ;
@@ -44,6 +45,7 @@ Global health#, hurtFlash#, state, stateTimer#, wave, score, best, headshots, he
 Global alive, toSpawn, spawnTimer#, reload#, kick#, flashTicks, scope#, scoped, blastGlow#
 Global flicker#, stride#, fxCount
 Global notice$
+Global skipFire, pvx#, pvz#
 
 Type Prop
   Field e                       ; the entity
@@ -60,6 +62,7 @@ Type Zombie
   Field struck                  ; the blow of this attack has landed
   Field vx#, vy#, vz#           ; flying about after a blast
   Field head1, head2            ; the head's bones
+  Field side                    ; which way it goes round what is in its way: 1 or -1
 End Type
 
 ; A spark, a puff of smoke, a drop of blood: a sprite that moves, grows and
@@ -170,8 +173,8 @@ Function BuildRock()
       b = a + 1
       c = a + slices + 1
       d = c + 1
-      AddTriangle s, a, c, b
-      AddTriangle s, b, c, d
+      AddTriangle s, a, b, c
+      AddTriangle s, b, d, c
     Next
   Next
   UpdateNormals rockMesh
@@ -389,6 +392,7 @@ End Function
 
 PlaceProps(14)
 PlaySound sndWind
+LockPointer True            ; the first click takes the mouse
 
 ; --- Effects ---------------------------------------------------------------
 
@@ -494,13 +498,19 @@ Function FaceTowards(pivot, dx#, dz#)
   RotateEntity pivot, 0, ATan2(-dx, dz), 0
 End Function
 
-; How far from straight at the player to try next, when something is in the way.
+; How far from straight at the player to try next when something is in the
+; way: wider and wider to one side (a zombie keeps its side, so it goes round
+; a bonfire instead of shuffling in front of it), then the other side.
 Function TurnOffset#(n)
   Select n
-    Case 1 : Return 40
-    Case 2 : Return -40
-    Case 3 : Return 80
-    Case 4 : Return -80
+    Case 1 : Return 35
+    Case 2 : Return 70
+    Case 3 : Return 110
+    Case 4 : Return 150
+    Case 5 : Return -35
+    Case 6 : Return -70
+    Case 7 : Return -110
+    Case 8 : Return -150
   End Select
   Return 0
 End Function
@@ -516,6 +526,8 @@ End Function
 Function SpawnAt(x#, z#)
   e.Zombie = New Zombie
   e\hp = 3 + wave / 3
+  e\side = 1
+  If Rand(2) = 1 Then e\side = -1
   e\speed = Min(5.2, Rnd(2.6, 3.4) + 0.2 * wave)
   e\pivot = CreatePivot()
   PositionEntity e\pivot, x, GroundY(x, z), z
@@ -621,9 +633,9 @@ Function UpdateZombies(dt#)
         Else
           ; Walk at the player; round whatever stands in the way.
           moved = False
-          For turn = 0 To 4
+          For turn = 0 To 8
             If Not moved
-              a# = ATan2(-dx, dz) + TurnOffset(turn) * 40
+              a# = ATan2(-dx, dz) + TurnOffset(turn) * z\side
               ; a is a yaw: forward is (-sin a, cos a)
               mx# = x - Sin(a) * z\speed * dt
               mz# = zz + Cos(a) * z\speed * dt
@@ -631,6 +643,7 @@ Function UpdateZombies(dt#)
                 x = mx
                 zz = mz
                 moved = True
+                If turn >= 5 Then z\side = -z\side   ; that side is closed: keep to the other
                 RotateEntity z\pivot, 0, a, 0
               EndIf
             EndIf
@@ -647,6 +660,7 @@ Function UpdateZombies(dt#)
               EndIf
             EndIf
           Next
+          PushProps x, GroundY(x, zz), zz, 0.45, (x - EntityX(z\pivot, True)) / dt, (zz - EntityZ(z\pivot, True)) / dt
           PositionEntity z\pivot, x, GroundY(x, zz), zz, True
         EndIf
       Else
@@ -725,6 +739,22 @@ Function Explode(p.Prop)
   dz = pz - z
   reach# = Sqr(dx * dx + dz * dz)
   If reach < BLAST * 0.7 Then HurtPlayer 30 * (1 - reach / (BLAST * 0.7)) + 5
+End Function
+
+; What walks into a barrel or a crate shoves it along: the prop takes the
+; walker's own speed (a little more, so it goes ahead of them) and keeps its
+; own fall. Walking away from it, or jumping over it, pushes nothing.
+Function PushProps(x#, y#, z#, radius#, vx#, vz#)
+  If vx = 0 And vz = 0 Then Return
+  For p.Prop = Each Prop
+    ox# = EntityX(p\e, True) - x
+    oz# = EntityZ(p\e, True) - z
+    reach# = radius + 0.72
+    If p\barrel Then reach = radius + 0.5
+    If ox * ox + oz * oz < reach * reach And Abs(EntityY(p\e, True) - y - 0.5) < 1.2
+      If ox * vx + oz * vz > 0 Then SetVelocity p\e, vx * 1.1, BodyVY(p\e), vz * 1.1
+    EndIf
+  Next
 End Function
 
 Function UpdateProps(dt#)
@@ -875,10 +905,14 @@ End Function
 
 Function Update()
   dt# = DeltaTime()
-  ; Click to take the mouse for looking.
-  If MouseHit(MOUSE_LEFT) Then LockPointer True
+  ; The mouse is taken by a click (and taken again after Esc).
+  If Not PointerLocked() Then LockPointer True
+  skipFire = False
   If state = GAME_INTRO
-    If MouseHit(MOUSE_LEFT) Or KeyHit(KEY_ENTER) Then NewGame
+    If MouseHit(MOUSE_LEFT) Or KeyHit(KEY_ENTER)
+      NewGame
+      skipFire = True            ; the click that starts is not a shot
+    EndIf
   EndIf
   If state = GAME_OVER
     stateTimer = stateTimer - dt
@@ -893,18 +927,27 @@ Function Update()
   zoom# = 1 + 3 * Smooth(0, 1, scope)
   CameraFOV camera, 60 / zoom
 
-  If (PointerLocked() Or MouseDown(MOUSE_LEFT)) And state <> GAME_OVER
+  If PointerLocked() And state <> GAME_OVER
     yaw = yaw - MouseXSpeed() * 0.12 / zoom
     pitch = Max(-85, Min(85, pitch + MouseYSpeed() * 0.12 / zoom))
   EndIf
+  ; Without the mouse, the arrows turn the view.
+  If state <> GAME_OVER
+    If KeyDown(KEY_LEFT) Then yaw = yaw + 120 * dt / zoom
+    If KeyDown(KEY_RIGHT) Then yaw = yaw - 120 * dt / zoom
+    If KeyDown(KEY_UP) Then pitch = Max(-85, pitch - 80 * dt / zoom)
+    If KeyDown(KEY_DOWN) Then pitch = Min(85, pitch + 80 * dt / zoom)
+  EndIf
 
+  oldX# = px
+  oldZ# = pz
   x# = 0
   z# = 0
   If state <> GAME_OVER
-    If KeyDown(KEY_A) Or KeyDown(KEY_LEFT) Then x = x - 1
-    If KeyDown(KEY_D) Or KeyDown(KEY_RIGHT) Then x = x + 1
-    If KeyDown(KEY_W) Or KeyDown(KEY_UP) Then z = z + 1
-    If KeyDown(KEY_S) Or KeyDown(KEY_DOWN) Then z = z - 1
+    If KeyDown(KEY_A) Then x = x - 1
+    If KeyDown(KEY_D) Then x = x + 1
+    If KeyDown(KEY_W) Then z = z + 1
+    If KeyDown(KEY_S) Then z = z - 1
   EndIf
   moving = False
   If x <> 0 Or z <> 0
@@ -938,6 +981,7 @@ Function Update()
     px = px / edge * (ARENA - 1)
     pz = pz / edge * (ARENA - 1)
   EndIf
+  PushProps px, py, pz, PLAYER_R, (px - oldX) / dt, (pz - oldZ) / dt
 
   floorY# = GroundY(px, pz)
   If py <= floorY + 0.001 And fall <= 0
@@ -973,7 +1017,7 @@ Function Update()
   EndIf
 
   reload = reload - dt
-  If (KeyDown(KEY_F) Or (MouseDown(MOUSE_LEFT) And PointerLocked())) And reload <= 0 And (state = GAME_WAVE Or state = GAME_REST) Then Shoot
+  If (KeyDown(KEY_F) Or MouseDown(MOUSE_LEFT)) And reload <= 0 And (state = GAME_WAVE Or state = GAME_REST) And Not skipFire Then Shoot
 
   ; The game goes on.
   If state = GAME_WAVE
@@ -1053,6 +1097,12 @@ Function Draw()
   If state = GAME_WAVE Or state = GAME_REST
     Text 20, 16, "Wave " + wave + "   Zombies " + (alive + toSpawn)
     Text 20, 40, "Headshots " + headshots
+  EndIf
+
+  If Not PointerLocked() And (state = GAME_WAVE Or state = GAME_REST)
+    FontSize 16
+    Color 255, 255, 255
+    Text cx, h - 24, "Click to take the mouse (arrows turn the view, F or click shoots)", True, True
   EndIf
 
   If headline > 0 And state <> GAME_INTRO

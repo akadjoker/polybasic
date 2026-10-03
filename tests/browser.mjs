@@ -2356,6 +2356,23 @@ End Function
     console.log(`      ${before} entities in the field, ${info.entities} once the game started`);
   });
 
+  await check('zombies.pb: a click starts the game even when the browser refuses to capture the pointer', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/zombies.pb`, { width: 960, height: 600 });
+    await waitRunning(page);
+    const count = () => page.evaluate(() => window.polybasicPlayer.state.engine.world.entities.length);
+    const before = await count();
+    // A pointer that is not active: setPointerCapture throws for it.
+    await page.evaluate(() =>
+    {
+      const canvas = document.querySelector('canvas');
+      canvas.dispatchEvent(new PointerEvent('pointerdown', { pointerId: 987654, pointerType: 'mouse', button: 0, buttons: 1, clientX: 400, clientY: 300, bubbles: true }));
+    });
+    await page.waitForFunction((n) => window.polybasicPlayer.state.engine.world.entities.length > n + 15, before, { timeout: 40000 });
+    noConsoleErrors(page);
+    await page.close();
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });
