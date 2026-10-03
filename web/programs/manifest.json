@@ -340,6 +340,15 @@
       ]
     },
     {
+      "id": "tron",
+      "title": "Tron",
+      "category": "blitz3d",
+      "file": "../examples/tron.pb",
+      "description": "One of the Blitz3D samples, ported: a light bike leaves a wall of red light that is a mesh grown while it turns (AddVertex and AddTriangle at run time, the last corners following the bike), over a mirrored blue grid drawn in code, with a field of long cubes turning.",
+      "controls": "Left/Right steer, A/Z zoom the camera",
+      "assets": []
+    },
+    {
       "id": "gcuk-animation",
       "title": "Object Animation (GCUK tutorial)",
       "category": "blitz3d",
