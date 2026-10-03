@@ -2483,6 +2483,39 @@ End Function
     console.log(`      ${a.meshes} meshes, the wall went from ${a.corners} to ${b.corners} corners while steering`);
   });
 
+  await check('castle.pb: the runner moves and its animation plays, a shot flies, the castle, trees and sky are drawn, no errors', async () =>
+  {
+    const page = await openPage(browser, `${base}/web/player.html?src=../examples/castle.pb`, { width: 800, height: 600 });
+    await waitRunning(page);
+    const look = () => page.evaluate(() =>
+    {
+      const all = window.polybasicPlayer.state.engine.world.entities;
+      const sprites = all.filter((e) => e.sprite);
+      return {
+        entities: all.length,
+        trees: sprites.length,
+        textured: all.filter((e) => e.kind === 'mesh' && e.material && e.material.texture && e.material.texture.loaded).length,
+        frames: window.polybasicPlayer.state.engine.frames
+      };
+    });
+    await page.waitForTimeout(1000);
+    const a = await look();
+    await page.screenshot({ path: join(SHOTS, 'castle-start.png') });
+    await page.keyboard.down('a');
+    await page.waitForTimeout(1500);
+    await page.keyboard.up('a');
+    await page.keyboard.press('Control');
+    await page.waitForTimeout(500);
+    const b = await look();
+    await page.screenshot({ path: join(SHOTS, 'castle.png') });
+    assert(a.trees >= 100, `${a.trees} sprites: 100 trees and the template sprites`);
+    assert(a.textured >= 6, `${a.textured} textured meshes: the castle, the runner, the sky box`);
+    assert(b.entities > a.entities, `no shot in the air: ${a.entities} entities before, ${b.entities} after`);
+    noConsoleErrors(page);
+    await page.close();
+    console.log(`      ${a.entities} entities, ${a.trees} sprites; a shot made it ${b.entities}`);
+  });
+
   await check('gcuk-animation.pb: the gargoyle walks with frames 32 to 46, towards the camera', async () =>
   {
     const page = await openPage(browser, `${base}/web/player.html?src=../examples/gcuk-animation.pb`, { width: 800, height: 600 });
